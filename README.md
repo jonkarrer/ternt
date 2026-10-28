@@ -33,7 +33,8 @@ Arc-style, top to bottom:
 
 - **Favorites**: icon tiles shared by every space.
 - **Pinned**: per space, optionally grouped in folders.
-- **Today**: per space, newest first.
+- **Today**: per space, newest first, below a divider. Hover the divider for *Clear*, which
+  closes the space's Today web tabs (terminals stay; ⇧⌘T reopens).
 
 Drag tabs between sections, into folders, or to reorder. Closing a favorite or pinned tab
 unloads it (frees memory, keeps it in the sidebar). Right-click a tab, folder or space dot

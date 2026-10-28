@@ -389,7 +389,16 @@
             {/if}
           </div>
 
-          <div class="divider"></div>
+          <!-- Arc's separator between Pinned and Today, with "Clear" on hover. -->
+          <div class="divider">
+            <span class="line"></span>
+            {#if today.some((t) => t.kind === "web")}
+              <button class="clear" title="Close this space's Today tabs" onclick={() => browser.menuAction("clear-today")}>
+                <svg viewBox="0 0 16 16"><path d="M8 3.5v8m-3.5-3.5L8 11.5 11.5 8" /></svg>
+                Clear
+              </button>
+            {/if}
+          </div>
 
           <button class="row action" onclick={() => browser.openPalette("newTab")}>
             <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg>
@@ -701,9 +710,40 @@
   }
 
   .divider {
-    height: 1px;
+    height: 20px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     margin: 4px 10px;
-    background: var(--ring);
+  }
+  .divider .line {
+    flex: 1;
+    height: 1px;
+    background: var(--separator);
+  }
+  .divider .clear {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 4px;
+    border-radius: 5px;
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+  .divider .clear svg {
+    width: 11px;
+    height: 11px;
+  }
+  .divider:hover .clear,
+  .divider .clear:focus-visible {
+    opacity: 1;
+  }
+  .divider .clear:hover {
+    background: var(--fill-hover);
+    color: var(--text);
   }
 
   .spaces {

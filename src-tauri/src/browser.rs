@@ -562,6 +562,27 @@ pub fn close_active_tab(app: &AppHandle) -> tauri::Result<()> {
     }
 }
 
+/// Close the active space's Today web tabs (Arc's "Clear"). Terminals stay:
+/// closing one kills its shell, which ⇧⌘T can't bring back.
+pub fn clear_today(app: &AppHandle) -> tauri::Result<()> {
+    let (mut ids, active) = with(app, |s| {
+        let ids: Vec<u32> = s
+            .tabs
+            .iter()
+            .filter(|t| t.zone == Zone::Today && t.space == s.active_space && t.kind == TabKind::Web)
+            .map(|t| t.id)
+            .collect();
+        (ids, s.active)
+    });
+    // Close the active tab last, so focus never lands on (and lazily loads)
+    // a tab that is about to close.
+    ids.sort_by_key(|&id| Some(id) == active);
+    for id in ids {
+        close_tab_by_id(app, id)?;
+    }
+    Ok(())
+}
+
 /// Reopen the most recently closed tab, in the space it was closed from.
 pub fn reopen_closed_tab(app: &AppHandle) -> tauri::Result<()> {
     let Some(closed) = with(app, |s| {

@@ -130,6 +130,7 @@ pub fn run_action(app: &AppHandle, id: String) {
             "back" => browser::back_active(&app),
             "forward" => browser::forward_active(&app),
             "reopen-tab" => browser::reopen_closed_tab(&app),
+            "clear-today" => browser::clear_today(&app),
             "toggle-sidebar" => browser::toggle_sidebar(&app),
             "next-tab" => browser::cycle_tab(&app, 1),
             "previous-tab" => browser::cycle_tab(&app, -1),

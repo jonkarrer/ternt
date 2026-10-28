@@ -12,6 +12,7 @@
   --surface: #ffffff;
   --surface-raised: #ffffff;
   --ring: rgb(0 0 0 / 0.12);
+  --separator: rgb(0 0 0 / 0.16);
   --shadow: rgb(0 0 0 / 0.1);
   --accent: #3478f6;
   /* Sidebar tint over the native vibrancy. The hue comes from the active
@@ -40,6 +41,7 @@
     --surface: #232325;
     --surface-raised: #2e2e31;
     --ring: rgb(255 255 255 / 0.1);
+    --separator: rgb(255 255 255 / 0.18);
     --shadow: rgb(0 0 0 / 0.35);
     --tint-l1: 32%;
     --tint-a1: 0.38;
