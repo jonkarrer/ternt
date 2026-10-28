@@ -22,15 +22,15 @@ await t.until(() => S().active === S().tabs[1].id, "clicking a row activates it"
 const top = rows()[0];
 const y0 = top.getBoundingClientRect().top + 10;
 pointer(top, "pointerdown", y0);
-for (let dy = 0; dy <= 72; dy += 12) pointer(top, "pointermove", y0 + dy);
+for (let dy = 0; dy <= 88; dy += 11) pointer(top, "pointermove", y0 + dy);
 await t.sleep(50);
 await t.shot("sidebar-dragging");
-pointer(top, "pointerup", y0 + 72);
+pointer(top, "pointerup", y0 + 88);
 await t.until(() => titles() === "SPA,Fixture Page 2,Fixture Home", "dragging reorders tabs");
 
 // Pinned tabs render as tiles
-await t.invoke("pin_tab", { id: S().tabs.find((x) => x.title === "Fixture Page 2").id, pinned: true });
-await t.until(() => document.querySelectorAll(".pinned .pin").length === 1 && rows().length === 2, "pinned tab moves to the tile grid");
+await t.invoke("move_tab", { id: S().tabs.find((x) => x.title === "Fixture Page 2").id, zone: "favorite", folder: null, index: null });
+await t.until(() => document.querySelectorAll(".favorites .fav").length === 1 && rows().length === 2, "favorite moves to the tile grid");
 await t.sleep(300);
 await t.shot("sidebar-pinned");
 await t.quit();

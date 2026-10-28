@@ -1,12 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+export type Zone = "favorite" | "pinned" | "today";
+
 export interface Tab {
   id: number;
   kind: "web" | "terminal";
   url: string;
   title: string;
-  pinned: boolean;
+  zone: Zone;
+  /** Owning space (ignored for favorites, which every space shares). */
+  space: number;
+  /** Pinned tabs only. */
+  folder: number | null;
   /** Web tabs: whether the page is in memory (tabs load lazily). */
   loaded: boolean;
   loading: boolean;
@@ -14,10 +20,28 @@ export interface Tab {
   canGoForward: boolean;
 }
 
+export interface Space {
+  id: number;
+  name: string;
+  color: string;
+  /** Set when the space has its own cookie jar. */
+  profile: string | null;
+}
+
+export interface Folder {
+  id: number;
+  space: number;
+  name: string;
+  open: boolean;
+}
+
 export interface BrowserState {
-  /** Pinned tabs first, then the rest (newest first). */
+  /** Within each group (zone, space, folder), in sidebar order. */
   tabs: Tab[];
+  spaces: Space[];
+  folders: Folder[];
   active: number | null;
+  activeSpace: number;
   sidebarWidth: number;
   sidebarCollapsed: boolean;
 }
@@ -45,9 +69,18 @@ export const browser = {
   closeTab: (id: number) => invoke("close_tab", { id }),
   activateTab: (id: number) => invoke("activate_tab", { id }),
   /** `index` is the position in the full tab list after removing the tab. */
-  moveTab: (id: number, index: number) => invoke("move_tab", { id, index }),
-  pinTab: (id: number, pinned: boolean) => invoke("pin_tab", { id, pinned }),
+  moveTab: (id: number, zone: Zone, folder: number | null, index: number | null) =>
+    invoke("move_tab", { id, zone, folder, index }),
   tabContextMenu: (id: number) => invoke("tab_context_menu", { id }),
+
+  createSpace: () => invoke<number>("create_space"),
+  activateSpace: (id: number) => invoke("activate_space", { id }),
+  renameSpace: (id: number, name: string) => invoke("rename_space", { id, name }),
+  spaceContextMenu: (id: number) => invoke("space_context_menu", { id }),
+  createFolder: () => invoke<number | null>("create_folder"),
+  renameFolder: (id: number, name: string) => invoke("rename_folder", { id, name }),
+  setFolderOpen: (id: number, open: boolean) => invoke("set_folder_open", { id, open }),
+  folderContextMenu: (id: number) => invoke("folder_context_menu", { id }),
   navigate: (url: string) => invoke("navigate", { url }),
   goBack: () => invoke("go_back"),
   goForward: () => invoke("go_forward"),
@@ -65,6 +98,9 @@ export const browser = {
     listen<BrowserState>("browser:state", (e) => cb(e.payload)),
   onPaletteOpen: (cb: (request: PaletteRequest) => void): Promise<UnlistenFn> =>
     listen<PaletteRequest>("palette:open", (e) => cb(e.payload)),
+  /** Rust asks the sidebar to start inline-renaming a space or folder. */
+  onRename: (cb: (target: { kind: "space" | "folder"; id: number }) => void): Promise<UnlistenFn> =>
+    listen<{ kind: "space" | "folder"; id: number }>("browser:rename", (e) => cb(e.payload)),
 };
 
 export type ParsedInput = { kind: "url" | "search"; url: string };

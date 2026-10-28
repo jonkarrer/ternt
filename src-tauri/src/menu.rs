@@ -3,10 +3,14 @@
 
 use tauri::{
     AppHandle, Manager, Wry,
-    menu::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
 };
 
-use crate::{browser, palette};
+use crate::{
+    browser::{self, TabKind, Zone},
+    model::SPACE_COLORS,
+    palette,
+};
 
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let app_menu = Submenu::with_items(
@@ -92,7 +96,20 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         ],
     )?;
 
-    Menu::with_items(app, &[&app_menu, &file, &edit, &view, &tabs, &window])
+    let space_numbers = (1..=9)
+        .map(|n| MenuItem::with_id(app, format!("select-space-{n}"), format!("Space {n}"), true, Some(&format!("Ctrl+{n}"))))
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let new_space = MenuItem::with_id(app, "new-space", "New Space", true, None::<&str>)?;
+    let new_folder = MenuItem::with_id(app, "new-folder", "New Folder", true, None::<&str>)?;
+    let next_space = MenuItem::with_id(app, "next-space", "Next Space", true, Some("CmdOrCtrl+Alt+Right"))?;
+    let previous_space = MenuItem::with_id(app, "previous-space", "Previous Space", true, Some("CmdOrCtrl+Alt+Left"))?;
+    let space_separator = PredefinedMenuItem::separator(app)?;
+    let mut space_items: Vec<&dyn IsMenuItem<Wry>> =
+        vec![&new_space, &new_folder, &space_separator, &next_space, &previous_space, &separator];
+    space_items.extend(space_numbers.iter().map(|item| item as &dyn IsMenuItem<Wry>));
+    let spaces = Submenu::with_items(app, "Spaces", true, &space_items)?;
+
+    Menu::with_items(app, &[&app_menu, &file, &edit, &view, &tabs, &spaces, &window])
 }
 
 pub fn handle(app: &AppHandle, event: MenuEvent) {
@@ -116,14 +133,19 @@ pub fn run_action(app: &AppHandle, id: String) {
             "toggle-sidebar" => browser::toggle_sidebar(&app),
             "next-tab" => browser::cycle_tab(&app, 1),
             "previous-tab" => browser::cycle_tab(&app, -1),
+            "new-space" => browser::new_space(&app).map(|_| ()),
+            "new-folder" => browser::new_folder(&app).map_or(Ok(()), |id| browser::request_rename(&app, "folder", id)),
+            "next-space" => browser::cycle_space(&app, 1),
+            "previous-space" => browser::cycle_space(&app, -1),
+            id if id.starts_with("select-space-") => match id["select-space-".len()..].parse() {
+                Ok(n) => browser::select_space_number(&app, n),
+                Err(_) => Ok(()),
+            },
             id if id.starts_with("select-tab-") => match id["select-tab-".len()..].parse() {
                 Ok(n) => browser::select_tab_number(&app, n),
                 Err(_) => Ok(()),
             },
-            id if id.starts_with("ctx-") => match id.split_once(':').and_then(|(a, n)| Some((a, n.parse().ok()?))) {
-                Some((action, tab)) => run_tab_action(&app, action, tab),
-                None => Ok(()),
-            },
+            id if id.starts_with("ctx-") => run_context_action(&app, id),
             _ => Ok(()),
         };
         if let Err(err) = result {
@@ -139,43 +161,145 @@ pub fn menu_action(app: AppHandle, id: String) {
     run_action(&app, id);
 }
 
-/// Right-click menu for a tab in the sidebar. Item ids carry the tab id
-/// (`ctx-pin:12`) and are handled in `run_action`.
-#[tauri::command]
-pub async fn tab_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
-    let (kind, pinned, _) = browser::tab_info(&app, id).ok_or("no such tab")?;
-    let build = || -> tauri::Result<Menu<Wry>> {
-        let menu = Menu::new(&app)?;
-        if kind == browser::TabKind::Web {
-            let pin_label = if pinned { "Unpin Tab" } else { "Pin Tab" };
-            menu.append(&MenuItem::with_id(&app, format!("ctx-pin:{id}"), pin_label, true, None::<&str>)?)?;
-            menu.append(&MenuItem::with_id(&app, format!("ctx-duplicate:{id}"), "Duplicate Tab", true, None::<&str>)?)?;
-            menu.append(&MenuItem::with_id(&app, format!("ctx-copy-link:{id}"), "Copy Link", true, None::<&str>)?)?;
-            menu.append(&PredefinedMenuItem::separator(&app)?)?;
-        }
-        let close_label = if pinned { "Unload Tab" } else { "Close Tab" };
-        menu.append(&MenuItem::with_id(&app, format!("ctx-close:{id}"), close_label, true, None::<&str>)?)?;
-        Ok(menu)
-    };
-    let menu = build().map_err(|e| e.to_string())?;
+// --- Context menus -----------------------------------------------------------
+//
+// Item ids carry their target and argument: `ctx-<action>:<id>[:<arg>]`, and
+// are dispatched by `run_context_action` through the normal menu event path.
+
+fn item(app: &AppHandle, id: String, label: &str) -> tauri::Result<MenuItem<Wry>> {
+    MenuItem::with_id(app, id, label, true, None::<&str>)
+}
+
+fn popup(app: &AppHandle, menu: tauri::Result<Menu<Wry>>) -> Result<(), String> {
+    let menu = menu.map_err(|e| e.to_string())?;
     let window = app.get_window(browser::MAIN_WINDOW).ok_or("no window")?;
     window.popup_menu(&menu).map_err(|e| e.to_string())
 }
 
-fn run_tab_action(app: &AppHandle, action: &str, id: u32) -> tauri::Result<()> {
-    match action {
-        "ctx-pin" => {
-            let pinned = browser::tab_info(app, id).is_some_and(|(_, pinned, _)| pinned);
-            browser::set_pinned(app, id, !pinned);
+/// Right-click menu for a tab in the sidebar.
+#[tauri::command]
+pub async fn tab_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
+    let info = browser::tab_menu_info(&app, id).ok_or("no such tab")?;
+    let build = || -> tauri::Result<Menu<Wry>> {
+        let menu = Menu::new(&app)?;
+        if info.kind == TabKind::Web {
+            let (fav_action, fav_label) = match info.zone {
+                Zone::Favorite => ("ctx-today", "Remove from Favorites"),
+                _ => ("ctx-favorite", "Add to Favorites"),
+            };
+            menu.append(&item(&app, format!("{fav_action}:{id}"), fav_label)?)?;
+            let (pin_action, pin_label) = match info.zone {
+                Zone::Pinned => ("ctx-today", "Unpin Tab"),
+                _ => ("ctx-pin", "Pin Tab"),
+            };
+            menu.append(&item(&app, format!("{pin_action}:{id}"), pin_label)?)?;
+
+            let folders = Submenu::new(&app, "Move to Folder", true)?;
+            for (folder, name) in &info.folders {
+                let enabled = info.folder != Some(*folder);
+                folders.append(&MenuItem::with_id(&app, format!("ctx-move-folder:{id}:{folder}"), name, enabled, None::<&str>)?)?;
+            }
+            if !info.folders.is_empty() {
+                folders.append(&PredefinedMenuItem::separator(&app)?)?;
+            }
+            folders.append(&item(&app, format!("ctx-new-folder:{id}"), "New Folder")?)?;
+            menu.append(&folders)?;
+            if info.folder.is_some() {
+                menu.append(&item(&app, format!("ctx-pin:{id}"), "Remove from Folder")?)?;
+            }
+            menu.append(&PredefinedMenuItem::separator(&app)?)?;
+            menu.append(&item(&app, format!("ctx-duplicate:{id}"), "Duplicate Tab")?)?;
+            menu.append(&item(&app, format!("ctx-copy-link:{id}"), "Copy Link")?)?;
+            menu.append(&PredefinedMenuItem::separator(&app)?)?;
         }
-        "ctx-duplicate" => browser::duplicate_tab(app, id)?,
-        #[cfg(target_os = "macos")]
-        "ctx-copy-link" => {
-            if let Some((_, _, url)) = browser::tab_info(app, id) {
-                crate::native::copy_to_clipboard(app, url);
+        let close_label = if info.zone == Zone::Today { "Close Tab" } else { "Unload Tab" };
+        menu.append(&item(&app, format!("ctx-close:{id}"), close_label)?)?;
+        Ok(menu)
+    };
+    popup(&app, build())
+}
+
+/// Right-click menu for a space in the switcher.
+#[tauri::command]
+pub async fn space_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
+    let (color, isolated, deletable) = browser::space_menu_info(&app, id).ok_or("no such space")?;
+    let build = || -> tauri::Result<Menu<Wry>> {
+        let menu = Menu::new(&app)?;
+        menu.append(&item(&app, format!("ctx-rename-space:{id}"), "Rename Space…")?)?;
+        let colors = Submenu::new(&app, "Color", true)?;
+        for option in SPACE_COLORS {
+            let label = format!("{}{}", option[..1].to_uppercase(), &option[1..]);
+            colors.append(&CheckMenuItem::with_id(&app, format!("ctx-space-color:{id}:{option}"), label, true, option == color, None::<&str>)?)?;
+        }
+        menu.append(&colors)?;
+        menu.append(&CheckMenuItem::with_id(
+            &app,
+            format!("ctx-space-profile:{id}"),
+            "Separate Profile (own cookies and logins)",
+            true,
+            isolated,
+            None::<&str>,
+        )?)?;
+        menu.append(&PredefinedMenuItem::separator(&app)?)?;
+        menu.append(&MenuItem::with_id(&app, format!("ctx-delete-space:{id}"), "Delete Space", deletable, None::<&str>)?)?;
+        Ok(menu)
+    };
+    popup(&app, build())
+}
+
+/// Right-click menu for a pinned folder.
+#[tauri::command]
+pub async fn folder_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
+    let build = || -> tauri::Result<Menu<Wry>> {
+        let menu = Menu::new(&app)?;
+        menu.append(&item(&app, format!("ctx-rename-folder:{id}"), "Rename Folder…")?)?;
+        menu.append(&item(&app, format!("ctx-delete-folder:{id}"), "Delete Folder (keep tabs)")?)?;
+        Ok(menu)
+    };
+    popup(&app, build())
+}
+
+fn run_context_action(app: &AppHandle, id: &str) -> tauri::Result<()> {
+    let mut parts = id.split(':');
+    let action = parts.next().unwrap_or_default();
+    let Some(target) = parts.next().and_then(|n| n.parse::<u32>().ok()) else {
+        return Ok(());
+    };
+    let arg = parts.next();
+    match action {
+        // Tabs
+        "ctx-favorite" => browser::move_tab_to(app, target, Zone::Favorite, None, None),
+        "ctx-pin" => browser::move_tab_to(app, target, Zone::Pinned, None, None),
+        "ctx-today" => browser::move_tab_to(app, target, Zone::Today, None, None),
+        "ctx-move-folder" => {
+            let folder = arg.and_then(|f| f.parse().ok());
+            browser::move_tab_to(app, target, Zone::Pinned, folder, None);
+        }
+        "ctx-new-folder" => {
+            if let Some(folder) = browser::new_folder(app) {
+                browser::move_tab_to(app, target, Zone::Pinned, Some(folder), None);
+                browser::request_rename(app, "folder", folder)?;
             }
         }
-        "ctx-close" => browser::close_tab_by_id(app, id)?,
+        "ctx-duplicate" => browser::duplicate_tab(app, target)?,
+        #[cfg(target_os = "macos")]
+        "ctx-copy-link" => {
+            if let Some(info) = browser::tab_menu_info(app, target) {
+                crate::native::copy_to_clipboard(app, info.url);
+            }
+        }
+        "ctx-close" => browser::close_tab_by_id(app, target)?,
+        // Spaces
+        "ctx-rename-space" => browser::request_rename(app, "space", target)?,
+        "ctx-space-color" => browser::set_space_color(app, target, arg.unwrap_or_default()),
+        "ctx-space-profile" => {
+            let isolated = browser::space_menu_info(app, target).is_some_and(|(_, isolated, _)| isolated);
+            browser::set_space_profile(app, target, !isolated)?;
+        }
+        "ctx-delete-space" => browser::delete_space(app, target)?,
+        // Folders
+        "ctx-rename-folder" => browser::request_rename(app, "folder", target)?,
+        "ctx-delete-folder" => browser::delete_folder(app, target),
         _ => {}
     }
     Ok(())

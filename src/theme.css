@@ -14,8 +14,12 @@
   --ring: rgb(0 0 0 / 0.12);
   --shadow: rgb(0 0 0 / 0.1);
   --accent: #3478f6;
-  /* Laid over the native vibrancy for an Arc-style tinted sidebar. */
-  --tint: linear-gradient(165deg, rgb(190 205 255 / 0.45), rgb(225 210 255 / 0.35));
+  /* Sidebar tint over the native vibrancy. The hue comes from the active
+     space (--hue/--sat, set by App.svelte); these set its lightness. */
+  --tint-l1: 82%;
+  --tint-a1: 0.5;
+  --tint-l2: 86%;
+  --tint-a2: 0.38;
 
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   font-size: 13px;
@@ -37,7 +41,10 @@
     --surface-raised: #2e2e31;
     --ring: rgb(255 255 255 / 0.1);
     --shadow: rgb(0 0 0 / 0.35);
-    --tint: linear-gradient(165deg, rgb(70 80 140 / 0.35), rgb(90 60 120 / 0.3));
+    --tint-l1: 32%;
+    --tint-a1: 0.38;
+    --tint-l2: 26%;
+    --tint-a2: 0.32;
   }
 }
 

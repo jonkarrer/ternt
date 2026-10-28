@@ -2,6 +2,7 @@ mod browser;
 #[cfg(all(debug_assertions, target_os = "macos"))]
 mod debug;
 mod menu;
+mod model;
 #[cfg(target_os = "macos")]
 mod native;
 mod palette;
@@ -51,7 +52,16 @@ pub fn run() {
             browser::close_tab,
             browser::activate_tab,
             browser::move_tab,
-            browser::pin_tab,
+            browser::create_space,
+            browser::activate_space,
+            browser::rename_space,
+            browser::remove_space,
+            browser::space_color,
+            browser::space_profile,
+            browser::create_folder,
+            browser::rename_folder,
+            browser::set_folder_open,
+            browser::remove_folder,
             browser::set_tab_title,
             browser::navigate,
             browser::go_back,
@@ -60,6 +70,8 @@ pub fn run() {
             browser::set_sidebar_width,
             menu::menu_action,
             menu::tab_context_menu,
+            menu::space_context_menu,
+            menu::folder_context_menu,
             palette::palette_request,
             palette::open_palette,
             palette::close_palette,

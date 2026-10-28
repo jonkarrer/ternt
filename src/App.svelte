@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { flip } from "svelte/animate";
+  import { fly } from "svelte/transition";
   import Omnibox from "./lib/Omnibox.svelte";
   import TabIcon from "./lib/TabIcon.svelte";
+  import TabRow from "./lib/TabRow.svelte";
   import {
     browser,
     hostOf,
@@ -11,54 +12,76 @@
     MIN_SIDEBAR_WIDTH,
     type BrowserState,
     type Tab,
+    type Zone,
   } from "./lib/browser";
+  import { spaceStyle, spaceSwatch } from "./lib/spaces";
 
-  /** Row height + gap in the tab list; drag targets snap to this. */
-  const ROW_PITCH = 36;
+  /** Appends when dropped on a section rather than a row. */
+  const END = 1_000_000;
+  /** Horizontal trackpad travel that switches spaces. */
+  const SWIPE_DISTANCE = 120;
+
+  type Mark =
+    | { kind: "row"; tab: number; where: "before" | "after" }
+    | { kind: "folder"; id: number }
+    | { kind: "zone"; zone: Zone };
+  type DropTarget = { zone: Zone; folder: number | null; index: number; mark: Mark };
 
   let browserState = $state<BrowserState>({
     tabs: [],
+    spaces: [],
+    folders: [],
     active: null,
+    activeSpace: 0,
     sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
     sidebarCollapsed: false,
   });
   let sidebarWidth = $state(DEFAULT_SIDEBAR_WIDTH);
   let resizing = $state(false);
-  /** While a tab is being dragged: the optimistic order of the regular list. */
-  let drag = $state<{ id: number; order: number[] } | null>(null);
+  let drag = $state<{ id: number; target: DropTarget | null } | null>(null);
+  let renaming = $state<{ kind: "space" | "folder"; id: number } | null>(null);
+  /** Direction of the last space switch, for the slide-in. */
+  let slide = $state(1);
 
+  const activeSpace = $derived(browserState.activeSpace);
+  const space = $derived(browserState.spaces.find((s) => s.id === activeSpace));
   const activeTab = $derived(browserState.tabs.find((t) => t.id === browserState.active));
-  const pinned = $derived(browserState.tabs.filter((t) => t.pinned));
-  const regular = $derived.by(() => {
-    const tabs = browserState.tabs.filter((t) => !t.pinned);
-    if (!drag) return tabs;
-    const byId = new Map(tabs.map((t) => [t.id, t]));
-    return drag.order.map((id) => byId.get(id)).filter((t): t is Tab => t != null);
-  });
+  const favorites = $derived(browserState.tabs.filter((t) => t.zone === "favorite"));
+  const folders = $derived(browserState.folders.filter((f) => f.space === activeSpace));
+  const loosePinned = $derived(pinnedIn(null));
+  const today = $derived(browserState.tabs.filter((t) => t.zone === "today" && t.space === activeSpace));
   const collapsed = $derived(browserState.sidebarCollapsed);
 
+  function pinnedIn(folder: number | null) {
+    return browserState.tabs.filter((t) => t.zone === "pinned" && t.space === activeSpace && t.folder === folder);
+  }
+
   function applyState(s: BrowserState) {
+    const from = browserState.spaces.findIndex((x) => x.id === browserState.activeSpace);
+    const to = s.spaces.findIndex((x) => x.id === s.activeSpace);
+    if (from !== to && from >= 0) slide = to > from ? 1 : -1;
     browserState = s;
     // Rust owns the width; don't fight an in-progress drag.
     if (!resizing) sidebarWidth = s.sidebarWidth;
   }
 
   onMount(() => {
-    const unlisten = browser.onState(applyState);
+    const unlisten = [browser.onState(applyState), browser.onRename((target) => (renaming = target))];
     (async () => {
       // Subscribe before reading state, so no update can fall in between.
-      await unlisten;
+      await Promise.all(unlisten);
       applyState(await browser.getState());
       if (import.meta.env.DEV) {
         const { installTestHooks } = await import("./lib/debug");
         installTestHooks(() => browserState);
       }
     })();
-    return () => unlisten.then((off) => off());
+    return () => unlisten.forEach((p) => p.then((off) => off()));
   });
 
-  // Sidebar resize: the UI moves immediately; Rust is sent the latest width
-  // with at most one call in flight, so a fast drag never queues up IPC.
+  // --- Sidebar resize ------------------------------------------------------
+  // The UI moves immediately; Rust is sent the latest width with at most one
+  // call in flight, so a fast drag never queues up IPC.
   let pendingWidth: number | null = null;
   let inFlight = false;
 
@@ -98,61 +121,142 @@
     handle.addEventListener("pointercancel", end, { once: true });
   }
 
-  // Tab rows: click activates, drag reorders (after a few px of movement).
-  function onTabPointerDown(event: PointerEvent, tab: Tab) {
+  // --- Drag and drop -------------------------------------------------------
+  // Click activates; dragging (after a few px) shows a drop marker and moves
+  // the tab on release: between rows, into a folder, or into a section.
+
+  function sameGroup(a: Tab, zone: Zone, folder: number | null) {
+    return a.zone === zone && a.folder === folder && (zone === "favorite" || a.space === activeSpace);
+  }
+
+  function hitTest(x: number, y: number, tab: Tab): DropTarget | null {
+    const el = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop]");
+    if (!el) return null;
+    const kind = el.dataset.drop;
+    let target: DropTarget | null = null;
+
+    if (kind === "row") {
+      const id = Number(el.dataset.tab);
+      if (id === tab.id) return null;
+      const zone = el.dataset.zone as Zone;
+      const folder = el.dataset.folder ? Number(el.dataset.folder) : null;
+      const rect = el.getBoundingClientRect();
+      // Favorites are a grid: before/after by x. Rows: by y.
+      const after = zone === "favorite" ? x > rect.left + rect.width / 2 : y > rect.top + rect.height / 2;
+      let index = Number(el.dataset.index) + (after ? 1 : 0);
+      // Indexes count the group *without* the dragged tab.
+      if (sameGroup(tab, zone, folder)) {
+        const from = browserState.tabs.filter((t) => sameGroup(t, zone, folder)).indexOf(tab);
+        if (from < index) index -= 1;
+      }
+      target = { zone, folder, index, mark: { kind: "row", tab: id, where: after ? "after" : "before" } };
+    } else if (kind === "folder") {
+      const id = Number(el.dataset.folder);
+      target = { zone: "pinned", folder: id, index: END, mark: { kind: "folder", id } };
+    } else if (kind === "zone") {
+      const zone = el.dataset.zone as Zone;
+      target = { zone, folder: null, index: END, mark: { kind: "zone", zone } };
+    }
+    // Terminals only live in Today.
+    if (target && tab.kind === "terminal" && target.zone !== "today") return null;
+    return target;
+  }
+
+  function startDrag(event: PointerEvent, tab: Tab) {
     if (event.button !== 0) return;
-    const row = event.currentTarget as HTMLElement;
+    const el = event.currentTarget as HTMLElement;
+    const startX = event.clientX;
     const startY = event.clientY;
-    const ids = regular.map((t) => t.id);
-    const from = ids.indexOf(tab.id);
     let dragging = false;
     try {
-      row.setPointerCapture(event.pointerId);
+      el.setPointerCapture(event.pointerId);
     } catch {
       // Synthetic pointers (tests) can't be captured; moves still bubble here.
     }
 
     const move = (e: PointerEvent) => {
-      const dy = e.clientY - startY;
-      if (!dragging && Math.abs(dy) < 4) return;
+      if (!dragging && Math.hypot(e.clientX - startX, e.clientY - startY) < 4) return;
       dragging = true;
-      const to = Math.max(0, Math.min(ids.length - 1, from + Math.round(dy / ROW_PITCH)));
-      const order = ids.filter((id) => id !== tab.id);
-      order.splice(to, 0, tab.id);
-      drag = { id: tab.id, order };
+      drag = { id: tab.id, target: hitTest(e.clientX, e.clientY, tab) };
     };
     const up = async () => {
-      row.removeEventListener("pointermove", move);
-      if (!dragging || !drag) {
-        drag = null;
-        browser.activateTab(tab.id);
-        return;
-      }
-      const to = drag.order.indexOf(tab.id);
-      await browser.moveTab(tab.id, pinned.length + to);
+      el.removeEventListener("pointermove", move);
+      const target = drag?.target;
       drag = null;
+      if (!dragging) {
+        browser.activateTab(tab.id);
+      } else if (target) {
+        await browser.moveTab(tab.id, target.zone, target.folder, target.index);
+      }
     };
-    row.addEventListener("pointermove", move);
-    row.addEventListener("pointerup", up, { once: true });
-    row.addEventListener("pointercancel", () => (drag = null), { once: true });
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up, { once: true });
+    el.addEventListener("pointercancel", () => (drag = null), { once: true });
   }
 
-  function onTabKey(event: KeyboardEvent, id: number) {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      browser.activateTab(id);
+  function markFor(tab: Tab): "before" | "after" | null {
+    const mark = drag?.target?.mark;
+    return mark?.kind === "row" && mark.tab === tab.id ? mark.where : null;
+  }
+
+  function isDropInto(kind: "folder" | "zone", key: number | Zone) {
+    const mark = drag?.target?.mark;
+    if (!mark) return false;
+    return kind === "folder" ? mark.kind === "folder" && mark.id === key : mark.kind === "zone" && mark.zone === key;
+  }
+
+  // --- Spaces --------------------------------------------------------------
+
+  // Two-finger horizontal swipe over the sidebar switches spaces.
+  let swipe = 0;
+  let swipeLocked = false;
+  let swipeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function onwheel(event: WheelEvent) {
+    if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+    clearTimeout(swipeTimer);
+    // One switch per gesture: unlock once the wheel events stop.
+    swipeTimer = setTimeout(() => {
+      swipe = 0;
+      swipeLocked = false;
+    }, 200);
+    if (swipeLocked) return;
+    swipe += event.deltaX;
+    if (Math.abs(swipe) > SWIPE_DISTANCE) {
+      browser.menuAction(swipe > 0 ? "next-space" : "previous-space");
+      swipeLocked = true;
     }
   }
 
-  function contextMenu(event: MouseEvent, id: number) {
-    event.preventDefault();
-    browser.tabContextMenu(id);
+  function focusSelect(node: HTMLInputElement) {
+    node.focus();
+    node.select();
+  }
+
+  function commitRename(event: Event) {
+    const name = (event.currentTarget as HTMLInputElement).value;
+    const target = renaming;
+    renaming = null;
+    if (!target) return;
+    if (target.kind === "space") browser.renameSpace(target.id, name);
+    else browser.renameFolder(target.id, name);
+  }
+
+  function renameKeys(event: KeyboardEvent) {
+    if (event.key === "Enter") commitRename(event);
+    if (event.key === "Escape") renaming = null;
   }
 </script>
 
-<div class="app" class:resizing style:--sidebar="{collapsed ? 0 : sidebarWidth}px">
+<div
+  class="app"
+  class:resizing
+  class:dragging={drag != null}
+  style:--sidebar="{collapsed ? 0 : sidebarWidth}px"
+  style={spaceStyle(space?.color ?? "blue")}
+>
   {#if !collapsed}
-    <aside class="sidebar">
+    <aside class="sidebar" {onwheel}>
       <header class="titlebar" data-tauri-drag-region>
         <button class="icon" aria-label="Hide sidebar (⌘S)" onclick={() => browser.menuAction("toggle-sidebar")}>
           <svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M6.5 3v10" /></svg>
@@ -172,60 +276,167 @@
 
       <Omnibox tab={activeTab} />
 
-      {#if pinned.length}
-        <div class="pinned">
-          {#each pinned as tab (tab.id)}
+      <!-- Favorites: shared by every space. While dragging, an empty
+           favorites area appears as a drop target. -->
+      {#if favorites.length || drag}
+        <div class="favorites" class:drop-into={isDropInto("zone", "favorite")} data-drop="zone" data-zone="favorite">
+          {#each favorites as tab, i (tab.id)}
             <button
-              class="pin"
+              class="fav"
               class:active={tab.id === browserState.active}
+              class:dragging={drag?.id === tab.id}
+              class:before={markFor(tab) === "before"}
+              class:after={markFor(tab) === "after"}
               title={tab.title || hostOf(tab.url)}
-              onclick={() => browser.activateTab(tab.id)}
-              oncontextmenu={(e) => contextMenu(e, tab.id)}
+              data-drop="row"
+              data-tab={tab.id}
+              data-zone="favorite"
+              data-folder=""
+              data-index={i}
+              onpointerdown={(e) => startDrag(e, tab)}
+              oncontextmenu={(e) => {
+                e.preventDefault();
+                browser.tabContextMenu(tab.id);
+              }}
             >
               <TabIcon {tab} />
             </button>
+          {:else}
+            <span class="hint">Drop to add to Favorites</span>
           {/each}
         </div>
       {/if}
 
-      <button class="row action first" onclick={() => browser.openPalette("newTab")}>
-        <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg>
-        <span>New Tab</span>
-      </button>
-      <button class="row action" onclick={() => browser.newTerminal()}>
-        <svg viewBox="0 0 16 16"><path d="m4 5 3 3-3 3M9 11.5h3.5" /></svg>
-        <span>New Terminal</span>
-      </button>
-
-      <nav class="tabs">
-        {#each regular as tab (tab.id)}
-          <div
-            class="row tab"
-            class:active={tab.id === browserState.active}
-            class:dragging={drag?.id === tab.id}
-            role="button"
-            tabindex="0"
-            title={tab.kind === "web" ? tab.url : tab.title}
-            animate:flip={{ duration: 150 }}
-            onpointerdown={(e) => onTabPointerDown(e, tab)}
-            onauxclick={(e) => e.button === 1 && browser.closeTab(tab.id)}
-            oncontextmenu={(e) => contextMenu(e, tab.id)}
-            onkeydown={(e) => onTabKey(e, tab.id)}
-          >
-            <TabIcon {tab} />
-            <span class="title">{tab.title || hostOf(tab.url)}</span>
-            <button
-              class="icon close"
-              aria-label="Close tab"
-              onpointerdown={(e) => e.stopPropagation()}
-              onclick={() => browser.closeTab(tab.id)}
-            >
-              <svg viewBox="0 0 16 16"><path d="m4.5 4.5 7 7m0-7-7 7" /></svg>
+      {#key activeSpace}
+        <div class="space-body" in:fly={{ x: 24 * slide, duration: 160 }}>
+          <div class="space-header">
+            {#if renaming?.kind === "space" && renaming.id === space?.id}
+              <input class="rename" value={space?.name} use:focusSelect onblur={commitRename} onkeydown={renameKeys} />
+            {:else}
+              <span
+                class="space-name"
+                role="heading"
+                aria-level="2"
+                ondblclick={() => space && (renaming = { kind: "space", id: space.id })}
+              >
+                {space?.name}
+              </span>
+              {#if space?.profile}
+                <span class="profile" title="This space has its own cookies and logins">Profile</span>
+              {/if}
+            {/if}
+            <button class="icon small" aria-label="New folder" title="New folder" onclick={() => browser.menuAction("new-folder")}>
+              <svg viewBox="0 0 16 16"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11zM8 8v3M6.5 9.5h3" /></svg>
             </button>
           </div>
+
+          <!-- Pinned: this space's folders, then loose pinned tabs. -->
+          <div class="pinned-list" class:drop-into={isDropInto("zone", "pinned")} data-drop="zone" data-zone="pinned">
+            {#each folders as folder (folder.id)}
+              <div
+                class="row folder"
+                class:drop-into={isDropInto("folder", folder.id)}
+                role="button"
+                tabindex="0"
+                data-drop="folder"
+                data-folder={folder.id}
+                onclick={(e) => !(e.target as Element).closest(".rename") && browser.setFolderOpen(folder.id, !folder.open)}
+                onkeydown={(e) => e.target === e.currentTarget && e.key === "Enter" && browser.setFolderOpen(folder.id, !folder.open)}
+                oncontextmenu={(e) => {
+                  e.preventDefault();
+                  browser.folderContextMenu(folder.id);
+                }}
+              >
+                <svg class="chevron" class:open={folder.open} viewBox="0 0 16 16"><path d="m6 4 4 4-4 4" /></svg>
+                <svg viewBox="0 0 16 16"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11z" /></svg>
+                {#if renaming?.kind === "folder" && renaming.id === folder.id}
+                  <input class="rename" value={folder.name} use:focusSelect onblur={commitRename} onkeydown={renameKeys} />
+                {:else}
+                  <span class="title" role="none" ondblclick={() => (renaming = { kind: "folder", id: folder.id })}>
+                    {folder.name}
+                  </span>
+                {/if}
+              </div>
+              {#if folder.open}
+                {#each pinnedIn(folder.id) as tab, i (tab.id)}
+                  <TabRow
+                    {tab}
+                    indent
+                    zone="pinned"
+                    folder={folder.id}
+                    index={i}
+                    active={tab.id === browserState.active}
+                    dragging={drag?.id === tab.id}
+                    mark={markFor(tab)}
+                    onpointerdown={(e) => startDrag(e, tab)}
+                  />
+                {/each}
+              {/if}
+            {/each}
+            {#each loosePinned as tab, i (tab.id)}
+              <TabRow
+                {tab}
+                zone="pinned"
+                index={i}
+                active={tab.id === browserState.active}
+                dragging={drag?.id === tab.id}
+                mark={markFor(tab)}
+                onpointerdown={(e) => startDrag(e, tab)}
+              />
+            {/each}
+            {#if drag && !folders.length && !loosePinned.length}
+              <span class="hint">Drop to pin to {space?.name}</span>
+            {/if}
+          </div>
+
+          <div class="divider"></div>
+
+          <button class="row action" onclick={() => browser.openPalette("newTab")}>
+            <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg>
+            <span>New Tab</span>
+          </button>
+          <button class="row action" onclick={() => browser.newTerminal()}>
+            <svg viewBox="0 0 16 16"><path d="m4 5 3 3-3 3M9 11.5h3.5" /></svg>
+            <span>New Terminal</span>
+          </button>
+
+          <nav class="tabs" class:drop-into={isDropInto("zone", "today")} data-drop="zone" data-zone="today">
+            {#each today as tab, i (tab.id)}
+              <TabRow
+                {tab}
+                zone="today"
+                index={i}
+                active={tab.id === browserState.active}
+                dragging={drag?.id === tab.id}
+                mark={markFor(tab)}
+                onpointerdown={(e) => startDrag(e, tab)}
+              />
+            {/each}
+          </nav>
+        </div>
+      {/key}
+
+      <footer class="spaces">
+        {#each browserState.spaces as s (s.id)}
+          <button
+            class="space-dot"
+            class:active={s.id === activeSpace}
+            style:--swatch={spaceSwatch(s.color)}
+            title="{s.name}{s.profile ? ' (separate profile)' : ''}"
+            aria-label="Switch to {s.name}"
+            onclick={() => browser.activateSpace(s.id)}
+            oncontextmenu={(e) => {
+              e.preventDefault();
+              browser.spaceContextMenu(s.id);
+            }}
+          >
+            {#if s.profile}<span class="ring"></span>{/if}
+          </button>
         {/each}
-      </nav>
-      <div class="fill" data-tauri-drag-region></div>
+        <button class="icon small" aria-label="New space" title="New space" onclick={() => browser.createSpace()}>
+          <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg>
+        </button>
+      </footer>
     </aside>
 
     <div
@@ -238,9 +449,9 @@
   {/if}
 
   <!-- Sits exactly under the active content view: draws its shadow, and the
-       empty state when no tab is open. -->
+       empty state when nothing is open. -->
   <main class="content">
-    {#if browserState.tabs.length === 0}
+    {#if browserState.active == null}
       <p class="empty">Press <kbd>⌘T</kbd> to open a tab</p>
     {/if}
   </main>
@@ -250,10 +461,18 @@
   .app {
     position: fixed;
     inset: 0;
-    background: var(--tint);
+    background: linear-gradient(
+      165deg,
+      hsl(var(--hue) var(--sat) var(--tint-l1) / var(--tint-a1)),
+      hsl(calc(var(--hue) + 25) var(--sat) var(--tint-l2) / var(--tint-a2))
+    );
+    transition: background 200ms ease;
   }
   .app.resizing {
     cursor: col-resize;
+  }
+  .app.dragging {
+    cursor: grabbing;
   }
 
   .sidebar {
@@ -291,6 +510,10 @@
     border-radius: 6px;
     color: var(--text-muted);
   }
+  .icon.small {
+    width: 22px;
+    height: 22px;
+  }
   .icon:hover:not(:disabled) {
     background: var(--fill-hover);
     color: var(--text);
@@ -301,6 +524,7 @@
   svg {
     width: 16px;
     height: 16px;
+    flex: none;
     fill: none;
     stroke: currentColor;
     stroke-width: 1.6;
@@ -308,26 +532,134 @@
     stroke-linejoin: round;
   }
 
-  /* Arc-style favorites: a grid of icon tiles. */
-  .pinned {
+  /* Drop targets highlight while a tab is dragged over them. */
+  .drop-into {
+    background: var(--fill-hover);
+    box-shadow: inset 0 0 0 1.5px var(--accent);
+    border-radius: 10px;
+  }
+  .hint {
+    padding: 8px 10px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  /* Favorites: a grid of icon tiles, shared by all spaces. */
+  .favorites {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
     gap: 6px;
     margin-top: 2px;
+    min-height: 42px;
   }
-  .pin {
+  .favorites .hint {
+    grid-column: 1 / -1;
+    text-align: center;
+  }
+  .fav {
+    position: relative;
     height: 42px;
     display: grid;
     place-items: center;
     border-radius: 10px;
     background: var(--fill);
   }
-  .pin:hover {
+  .fav:hover {
     background: var(--fill-hover);
   }
-  .pin.active {
+  .fav.active {
     background: var(--tab-active);
     box-shadow: 0 1px 2px var(--shadow);
+  }
+  .fav.dragging {
+    opacity: 0.5;
+  }
+  .fav.before::before,
+  .fav.after::after {
+    content: "";
+    position: absolute;
+    top: 6px;
+    bottom: 6px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--accent);
+  }
+  .fav.before::before {
+    left: -4px;
+  }
+  .fav.after::after {
+    right: -4px;
+  }
+
+  .space-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .space-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    padding: 0 4px 0 10px;
+    margin-top: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .space-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .profile {
+    padding: 1px 6px;
+    border-radius: 5px;
+    background: var(--fill-strong);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .space-header .icon {
+    visibility: hidden;
+  }
+  .space-header:hover .icon {
+    visibility: visible;
+  }
+  .rename {
+    flex: 1;
+    min-width: 0;
+    height: 24px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 6px;
+    outline: 0;
+    background: var(--surface);
+    box-shadow: 0 0 0 1.5px var(--accent);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 400;
+  }
+
+  .pinned-list,
+  .tabs {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .pinned-list {
+    flex: none;
+  }
+  .tabs {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   .row {
@@ -347,48 +679,64 @@
   .action {
     color: var(--text-muted);
   }
-  .action.first {
-    margin-top: 4px;
+  .folder {
+    gap: 6px;
+    padding-left: 4px;
   }
-
-  .tabs {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    overflow-y: auto;
-    min-height: 0;
-  }
-  .tab {
-    cursor: default;
-  }
-  .tab.active {
-    background: var(--tab-active);
-    box-shadow: 0 1px 2px var(--shadow);
-  }
-  .tab.dragging {
-    background: var(--tab-active);
-    box-shadow: 0 4px 12px var(--shadow);
-    z-index: 1;
-  }
-  .title {
+  .folder .title {
     flex: 1;
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
   }
-  .close {
-    width: 22px;
-    height: 22px;
-    visibility: hidden;
+  .chevron {
+    width: 12px;
+    height: 12px;
+    color: var(--text-muted);
+    transition: rotate 120ms ease;
   }
-  .tab:hover .close,
-  .tab.active .close {
-    visibility: visible;
+  .chevron.open {
+    rotate: 90deg;
   }
 
-  .fill {
-    flex: 1;
+  .divider {
+    height: 1px;
+    margin: 4px 10px;
+    background: var(--ring);
+  }
+
+  .spaces {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding-top: 6px;
+  }
+  .space-dot {
+    position: relative;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--swatch);
+    opacity: 0.5;
+    transition:
+      opacity 120ms ease,
+      scale 120ms ease;
+  }
+  .space-dot:hover {
+    opacity: 0.8;
+  }
+  .space-dot.active {
+    opacity: 1;
+    scale: 1.3;
+  }
+  /* A ring marks spaces with their own profile. */
+  .ring {
+    position: absolute;
+    inset: -3px;
+    border-radius: 50%;
+    border: 1.5px solid var(--swatch);
   }
 
   /* Lives in the sidebar's right padding: the content view covers anything

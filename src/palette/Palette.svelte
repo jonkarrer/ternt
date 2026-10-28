@@ -17,6 +17,11 @@
   /** Actions offered by name. Ids are menu action ids (see src-tauri/src/menu.rs). */
   const COMMANDS = [
     { id: "new-terminal", label: "New Terminal" },
+    { id: "new-space", label: "New Space" },
+    { id: "next-space", label: "Next Space" },
+    { id: "previous-space", label: "Previous Space" },
+    { id: "new-folder", label: "New Folder" },
+    { id: "toggle-sidebar", label: "Toggle Sidebar" },
     { id: "reload", label: "Reload Page" },
     { id: "back", label: "Go Back" },
     { id: "forward", label: "Go Forward" },

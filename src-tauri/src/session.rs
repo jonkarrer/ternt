@@ -1,4 +1,5 @@
-//! Session persistence: tabs and sidebar layout survive relaunches.
+//! Session persistence: spaces, tabs and sidebar layout survive relaunches.
+//! The format lives in `model.rs` (`Saved`).
 //!
 //! Saves are debounced (state changes in bursts while pages load) and written
 //! atomically; a final save runs on exit.
@@ -9,31 +10,11 @@ use std::{
     time::Duration,
 };
 
-use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-use crate::browser::{self, TabKind};
+use crate::{browser, model::Saved};
 
 const SAVE_DELAY: Duration = Duration::from_millis(750);
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SavedTab {
-    pub kind: TabKind,
-    pub url: String,
-    pub title: String,
-    pub pinned: bool,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Session {
-    pub tabs: Vec<SavedTab>,
-    /// Index into `tabs`.
-    pub active: Option<usize>,
-    pub sidebar_width: f64,
-    pub sidebar_collapsed: bool,
-}
 
 static SAVE_PENDING: AtomicBool = AtomicBool::new(false);
 
@@ -46,7 +27,7 @@ fn path(app: &AppHandle) -> Option<PathBuf> {
     Some(app.path().app_data_dir().ok()?.join("session.json"))
 }
 
-pub fn load(app: &AppHandle) -> Option<Session> {
+pub fn load(app: &AppHandle) -> Option<Saved> {
     let data = std::fs::read(path(app)?).ok()?;
     match serde_json::from_slice(&data) {
         Ok(session) => Some(session),

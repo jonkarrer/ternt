@@ -10,6 +10,7 @@ bun tauri dev              # run the app
 bun tauri build            # release bundle (judge performance here, not in dev)
 bun run check              # type-check Svelte/TS
 e2e/run.sh                 # end-to-end tests (macOS); e2e/run.sh <name> for one
+(cd src-tauri && cargo test)  # model unit tests
 ```
 
 `moove <url>...` opens URLs as tabs (`bun tauri dev -- -- https://example.com`).
@@ -24,8 +25,22 @@ e2e/run.sh                 # end-to-end tests (macOS); e2e/run.sh <name> for one
 | ⌃Tab / ⌃⇧Tab, ⌘1–⌘9 | Switch tabs |
 | ⌘[ / ⌘] / ⌘R | Back / forward / reload |
 | ⌘S | Toggle sidebar |
+| ⌃1–⌃9, ⌘⌥← / ⌘⌥→ | Switch spaces (or swipe two fingers across the sidebar) |
 
-Right-click a tab to pin, duplicate, copy its link or close it. Drag tabs to reorder.
+## Sidebar
+
+Arc-style, top to bottom:
+
+- **Favorites**: icon tiles shared by every space.
+- **Pinned**: per space, optionally grouped in folders.
+- **Today**: per space, newest first.
+
+Drag tabs between sections, into folders, or to reorder. Closing a favorite or pinned tab
+unloads it (frees memory, keeps it in the sidebar). Right-click a tab, folder or space dot
+for more. Double-click a space or folder name to rename it.
+
+**Spaces** share cookies and logins by default. Right-click a space dot → *Separate Profile*
+to give it its own cookie jar (macOS 14+); turning it off deletes that profile's data.
 
 ## Architecture
 
@@ -38,7 +53,8 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
 | `term` | `term.html` → `src/term/` | All terminal tabs (xterm.js), created on first use |
 | `palette` | `palette.html` → `src/palette/` | Command bar overlay, pre-created hidden |
 
-- **Rust owns state and layout.** Tab state lives in `Browser`; webviews mirror it via
+- **Rust owns state and layout.** The model (spaces, zones, folders, ordering) is plain data in
+  `src-tauri/src/model.rs`, unit-tested with `cargo test`; webviews mirror it via
   `browser:state` events. Content views use native AppKit autoresizing, so window resizes
   never wait on IPC.
 - **Tabs load lazily.** A web tab's webview is created when first shown; restoring a large

@@ -1,0 +1,11 @@
+<!doctype html><title>cookie</title><body style="font:20px system-ui;padding:40px"><h1 id="h">cookie</h1>
+<script>
+  // ?set=x stores a cookie, ?clear removes it; the title reports what this
+  // page's cookie jar holds.
+  const params = new URLSearchParams(location.search);
+  if (params.has("set")) document.cookie = `who=${params.get("set")}; path=/; max-age=300`;
+  if (params.has("clear")) document.cookie = "who=; path=/; max-age=0";
+  const who = document.cookie.match(/who=([^;]*)/)?.[1] ?? "none";
+  document.title = "cookie:" + who;
+  document.getElementById("h").textContent = document.title;
+</script></body>
