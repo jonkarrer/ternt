@@ -3,6 +3,7 @@ mod browser;
 mod debug;
 mod menu;
 mod palette;
+mod pty;
 #[cfg(target_os = "macos")]
 mod native;
 
@@ -14,6 +15,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(Browser::default())
         .manage(palette::Palette::default())
+        .manage(pty::Terminals::default())
         .setup(|app| {
             browser::create_main_window(app.handle())?;
             app.set_menu(menu::build(app.handle())?)?;
@@ -40,6 +42,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             browser::get_state,
             browser::new_tab,
+            browser::new_terminal,
+            browser::set_tab_title,
             browser::close_tab,
             browser::activate_tab,
             browser::navigate,
@@ -51,6 +55,10 @@ pub fn run() {
             palette::palette_request,
             palette::open_palette,
             palette::close_palette,
+            pty::pty_spawn,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_ack,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_ready,
             #[cfg(all(debug_assertions, target_os = "macos"))]
@@ -66,6 +74,10 @@ pub fn run() {
             debug::debug_allow_popups,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_windows,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_set,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_get,
             debug::debug_quit,
         ])
         .run(tauri::generate_context!())

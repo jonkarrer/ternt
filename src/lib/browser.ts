@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export interface Tab {
   id: number;
+  kind: "web" | "terminal";
   url: string;
   title: string;
   loading: boolean;
@@ -32,6 +33,7 @@ const SEARCH_URL = "https://www.google.com/search?q=";
 export const browser = {
   getState: () => invoke<BrowserState>("get_state"),
   newTab: (url: string) => invoke<number>("new_tab", { url }),
+  newTerminal: () => invoke<number>("new_terminal"),
   closeTab: (id: number) => invoke("close_tab", { id }),
   activateTab: (id: number) => invoke("activate_tab", { id }),
   navigate: (url: string) => invoke("navigate", { url }),

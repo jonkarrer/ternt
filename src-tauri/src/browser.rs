@@ -1,8 +1,9 @@
 //! Window layout and tab management.
 //!
 //! One window holds a transparent UI webview (the sidebar, full-window, at the
-//! bottom) plus one native child webview per tab, stacked over the content
-//! area. Rust owns the layout so page webviews never wait on the UI to resize.
+//! bottom) plus native child webviews stacked over the content area: one per
+//! web tab, and one shared webview that renders every terminal tab. Rust owns
+//! the layout so content never waits on the UI to resize.
 //!
 //! Locking rule: never hold `Browser::state` across a webview call. Webview
 //! calls block on the main thread, and main-thread callbacks (navigation
@@ -26,9 +27,10 @@ use tauri::{
 
 pub const MAIN_WINDOW: &str = "main";
 pub const UI_WEBVIEW: &str = "ui";
+pub const TERM_WEBVIEW: &str = "term";
 
 /// Gap between the content card and the window edges, in logical px.
-/// Mirrored in `src/app.css`.
+/// Mirrored in `src/theme.css`.
 const INSET: f64 = 8.0;
 const CONTENT_RADIUS: f64 = 10.0;
 const DEFAULT_SIDEBAR_WIDTH: f64 = 240.0;
@@ -41,15 +43,37 @@ const MAX_CLOSED_TABS: usize = 25;
 #[cfg(target_os = "macos")]
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 
+#[derive(Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TabKind {
+    Web,
+    Terminal,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Tab {
     id: u32,
+    kind: TabKind,
     url: String,
     title: String,
     loading: bool,
     can_go_back: bool,
     can_go_forward: bool,
+}
+
+impl Tab {
+    fn new(id: u32, kind: TabKind, url: String, title: String) -> Self {
+        Self {
+            id,
+            kind,
+            loading: kind == TabKind::Web,
+            url,
+            title,
+            can_go_back: false,
+            can_go_forward: false,
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -67,12 +91,23 @@ pub struct NativeState {
     pub can_go_forward: bool,
 }
 
+enum ClosedTab {
+    Web(String),
+    Terminal,
+}
+
 struct State {
     tabs: Vec<Tab>,
     active: Option<u32>,
     sidebar_width: f64,
-    /// URLs of recently closed tabs, most recent last.
-    closed: Vec<String>,
+    /// Recently closed tabs, most recent last.
+    closed: Vec<ClosedTab>,
+}
+
+impl State {
+    fn tab(&self, id: u32) -> Option<&Tab> {
+        self.tabs.iter().find(|t| t.id == id)
+    }
 }
 
 pub struct Browser {
@@ -112,6 +147,10 @@ impl Browser {
     fn update_tab(&self, id: u32, f: impl FnOnce(&mut Tab)) -> bool {
         self.with(|s| s.tabs.iter_mut().find(|t| t.id == id).map(f).is_some())
     }
+
+    fn kind(&self, id: u32) -> Option<TabKind> {
+        self.with(|s| s.tab(id).map(|t| t.kind))
+    }
 }
 
 fn tab_label(id: u32) -> String {
@@ -122,27 +161,46 @@ fn main_window(app: &AppHandle) -> tauri::Result<Window> {
     app.get_window(MAIN_WINDOW).ok_or(tauri::Error::WindowNotFound)
 }
 
-fn tab_webview(app: &AppHandle, id: u32) -> Option<Webview> {
+/// The webview that displays a tab: its own for web tabs, the shared
+/// terminal webview for terminals.
+fn view_for(app: &AppHandle, id: u32) -> Option<Webview> {
+    match app.state::<Browser>().kind(id)? {
+        TabKind::Web => app.get_webview(&tab_label(id)),
+        TabKind::Terminal => app.get_webview(TERM_WEBVIEW),
+    }
+}
+
+/// The active tab's view, of either kind (for focus).
+pub fn active_view(app: &AppHandle) -> Option<Webview> {
+    let id = app.state::<Browser>().with(|s| s.active)?;
+    view_for(app, id)
+}
+
+/// The active tab's webview if it's a web page (for navigation).
+pub fn active_webview(app: &AppHandle) -> Option<Webview> {
+    let id = app.state::<Browser>().with(|s| s.active)?;
     app.get_webview(&tab_label(id))
 }
 
-pub fn active_webview(app: &AppHandle) -> Option<Webview> {
-    let id = app.state::<Browser>().with(|s| s.active)?;
-    tab_webview(app, id)
-}
-
+/// The active web tab's URL; `None` for terminals or no tab.
 pub fn active_tab_url(app: &AppHandle) -> Option<String> {
     app.state::<Browser>().with(|s| {
-        let id = s.active?;
-        s.tabs.iter().find(|t| t.id == id).map(|t| t.url.clone())
+        let tab = s.tab(s.active?)?;
+        (tab.kind == TabKind::Web).then(|| tab.url.clone())
     })
 }
 
-/// Push the full tab state to the UI. Used directly after user actions so the
-/// sidebar reacts in the same frame.
+pub fn is_terminal_tab(app: &AppHandle, id: u32) -> bool {
+    app.state::<Browser>().kind(id) == Some(TabKind::Terminal)
+}
+
+/// Push the full tab state to the app webviews. Used directly after user
+/// actions so the sidebar reacts in the same frame.
 fn emit_state(app: &AppHandle) {
     let snapshot = app.state::<Browser>().snapshot();
-    let _ = app.emit_to(EventTarget::webview(UI_WEBVIEW), "browser:state", snapshot);
+    for label in [UI_WEBVIEW, TERM_WEBVIEW] {
+        let _ = app.emit_to(EventTarget::webview(label), "browser:state", snapshot.clone());
+    }
 }
 
 /// Coalesce bursts of page-driven changes (a navigation fires URL, title,
@@ -188,8 +246,8 @@ fn content_bounds(window: &Window, sidebar_width: f64) -> tauri::Result<Rect> {
     })
 }
 
-/// Apply the current content bounds to every tab (hidden ones too, so
-/// switching tabs never shows a stale size).
+/// Apply the current content bounds to every content view (hidden ones too,
+/// so switching tabs never shows a stale size).
 fn layout_tabs(app: &AppHandle) -> tauri::Result<()> {
     let browser = app.state::<Browser>();
     let (ids, sidebar_width) = browser.with(|s| {
@@ -199,10 +257,12 @@ fn layout_tabs(app: &AppHandle) -> tauri::Result<()> {
         )
     });
     let bounds = content_bounds(&main_window(app)?, sidebar_width)?;
-    for id in ids {
-        if let Some(webview) = tab_webview(app, id) {
-            webview.set_bounds(bounds)?;
-        }
+    let views = ids
+        .into_iter()
+        .filter_map(|id| app.get_webview(&tab_label(id)))
+        .chain(app.get_webview(TERM_WEBVIEW));
+    for webview in views {
+        webview.set_bounds(bounds)?;
     }
     Ok(())
 }
@@ -241,7 +301,7 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
 
     crate::palette::create(&window)?;
 
-    // macOS resizes page webviews natively (see `native::style_content`).
+    // macOS resizes content webviews natively (see `native::style_content`).
     #[cfg(not(target_os = "macos"))]
     {
         let app = app.clone();
@@ -301,16 +361,7 @@ pub fn open_tab(app: &AppHandle, url: Url) -> tauri::Result<u32> {
     let bounds = content_bounds(&window, browser.with(|s| s.sidebar_width))?;
 
     // Register before creating the webview so its first load events find the tab.
-    browser.with(|s| {
-        s.tabs.push(Tab {
-            id,
-            url: url.to_string(),
-            title: String::new(),
-            loading: true,
-            can_go_back: false,
-            can_go_forward: false,
-        })
-    });
+    browser.with(|s| s.tabs.push(Tab::new(id, TabKind::Web, url.to_string(), String::new())));
 
     let popup_app = app.clone();
     let builder = WebviewBuilder::new(tab_label(id), WebviewUrl::External(url))
@@ -352,7 +403,7 @@ pub fn open_tab(app: &AppHandle, url: Url) -> tauri::Result<u32> {
 
     #[cfg(target_os = "macos")]
     {
-        crate::native::style_content(&webview, CONTENT_RADIUS);
+        crate::native::style_content(&webview, CONTENT_RADIUS, true);
         crate::native::observe(&webview, id, app.clone());
     }
 
@@ -360,25 +411,49 @@ pub fn open_tab(app: &AppHandle, url: Url) -> tauri::Result<u32> {
     Ok(id)
 }
 
+/// Must not be called from the main thread (it blocks on it).
+pub fn open_terminal(app: &AppHandle) -> tauri::Result<u32> {
+    ensure_term_webview(app)?;
+    let browser = app.state::<Browser>();
+    let id = browser.next_id.fetch_add(1, Ordering::Relaxed);
+    browser.with(|s| s.tabs.push(Tab::new(id, TabKind::Terminal, String::new(), "Terminal".into())));
+    // The terminal webview starts the shell when it sees the new tab.
+    activate(app, id)?;
+    Ok(id)
+}
+
+/// The terminal webview is created on first use: no cost until then.
+fn ensure_term_webview(app: &AppHandle) -> tauri::Result<()> {
+    if app.get_webview(TERM_WEBVIEW).is_some() {
+        return Ok(());
+    }
+    let window = main_window(app)?;
+    let bounds = content_bounds(&window, app.state::<Browser>().with(|s| s.sidebar_width))?;
+    let builder = WebviewBuilder::new(TERM_WEBVIEW, WebviewUrl::App("term.html".into())).focused(false);
+    let webview = window.add_child(builder, bounds.position, bounds.size)?;
+    webview.hide()?;
+    #[cfg(target_os = "macos")]
+    crate::native::style_content(&webview, CONTENT_RADIUS, false);
+    Ok(())
+}
+
 fn activate(app: &AppHandle, id: u32) -> tauri::Result<()> {
     let browser = app.state::<Browser>();
-    let Some(previous) = browser.with(|s| {
-        s.tabs
-            .iter()
-            .any(|t| t.id == id)
-            .then(|| s.active.replace(id))
-    }) else {
+    let Some(previous) = browser.with(|s| s.tab(id).is_some().then(|| s.active.replace(id))) else {
         return Ok(());
     };
 
-    // Show the new tab before hiding the old one so there's no empty frame.
-    if let Some(webview) = tab_webview(app, id) {
+    // Show the new view before hiding the old one so there's no empty frame.
+    // Terminals share a view, so terminal-to-terminal switches hide nothing.
+    let next_view = view_for(app, id);
+    if let Some(webview) = &next_view {
         webview.show()?;
         webview.set_focus()?;
     }
     if let Some(webview) = previous
         .filter(|&p| p != id)
-        .and_then(|p| tab_webview(app, p))
+        .and_then(|p| view_for(app, p))
+        .filter(|prev| Some(prev.label()) != next_view.as_ref().map(|n| n.label()))
     {
         webview.hide()?;
     }
@@ -386,32 +461,54 @@ fn activate(app: &AppHandle, id: u32) -> tauri::Result<()> {
     Ok(())
 }
 
-fn close(app: &AppHandle, id: u32) -> tauri::Result<()> {
+pub fn close_tab_by_id(app: &AppHandle, id: u32) -> tauri::Result<()> {
     let browser = app.state::<Browser>();
-    let next = browser.with(|s| {
+    let Some((kind, was_active, next)) = browser.with(|s| {
         let index = s.tabs.iter().position(|t| t.id == id)?;
         let tab = s.tabs.remove(index);
-        s.closed.push(tab.url);
+        s.closed.push(match tab.kind {
+            TabKind::Web => ClosedTab::Web(tab.url),
+            TabKind::Terminal => ClosedTab::Terminal,
+        });
         if s.closed.len() > MAX_CLOSED_TABS {
             s.closed.remove(0);
         }
-        if s.active != Some(id) {
-            return Some(None);
+        let was_active = s.active == Some(id);
+        if was_active {
+            s.active = None;
         }
-        s.active = None;
         // Prefer the tab that slid into this slot, else the one above it.
         let next = s.tabs.get(index).or_else(|| s.tabs.last()).map(|t| t.id);
-        Some(next)
-    });
-    let Some(next) = next else { return Ok(()) };
+        Some((tab.kind, was_active, next))
+    }) else {
+        return Ok(());
+    };
 
+    // `activate` hides the previously active view, but this tab is already
+    // gone from state, so its view is handled here.
+    let next = next.filter(|_| was_active);
     if let Some(next) = next {
         activate(app, next)?;
     }
-    if let Some(webview) = tab_webview(app, id) {
-        #[cfg(target_os = "macos")]
-        crate::native::unobserve(&webview, id);
-        webview.close()?;
+    match kind {
+        TabKind::Web => {
+            if let Some(webview) = app.get_webview(&tab_label(id)) {
+                #[cfg(target_os = "macos")]
+                crate::native::unobserve(&webview, id);
+                webview.close()?;
+            }
+        }
+        TabKind::Terminal => {
+            crate::pty::kill(app, id);
+            // The shared terminal view stays up only if a terminal is now showing.
+            let showing_terminal = next.is_some_and(|n| is_terminal_tab(app, n));
+            if let Some(webview) = app
+                .get_webview(TERM_WEBVIEW)
+                .filter(|_| was_active && !showing_terminal)
+            {
+                webview.hide()?;
+            }
+        }
     }
     if next.is_none() {
         emit_state(app);
@@ -421,18 +518,19 @@ fn close(app: &AppHandle, id: u32) -> tauri::Result<()> {
 
 pub fn close_active_tab(app: &AppHandle) -> tauri::Result<()> {
     match app.state::<Browser>().with(|s| s.active) {
-        Some(id) => close(app, id),
+        Some(id) => close_tab_by_id(app, id),
         None => Ok(()),
     }
 }
 
 pub fn reopen_closed_tab(app: &AppHandle) -> tauri::Result<()> {
-    let Some(url) = app.state::<Browser>().with(|s| s.closed.pop()) else {
-        return Ok(());
-    };
-    match Url::parse(&url) {
-        Ok(url) => open_tab(app, url).map(|_| ()),
-        Err(_) => Ok(()),
+    match app.state::<Browser>().with(|s| s.closed.pop()) {
+        Some(ClosedTab::Web(url)) => match Url::parse(&url) {
+            Ok(url) => open_tab(app, url).map(|_| ()),
+            Err(_) => Ok(()),
+        },
+        Some(ClosedTab::Terminal) => open_terminal(app).map(|_| ()),
+        None => Ok(()),
     }
 }
 
@@ -507,8 +605,13 @@ pub async fn new_tab(app: AppHandle, url: String) -> Result<u32, String> {
 }
 
 #[tauri::command]
+pub async fn new_terminal(app: AppHandle) -> Result<u32, String> {
+    open_terminal(&app).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn close_tab(app: AppHandle, id: u32) -> Result<(), String> {
-    close(&app, id).map_err(|e| e.to_string())
+    close_tab_by_id(&app, id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -516,7 +619,15 @@ pub async fn activate_tab(app: AppHandle, id: u32) -> Result<(), String> {
     activate(&app, id).map_err(|e| e.to_string())
 }
 
-/// Navigate the active tab, or open a new one if there is none.
+/// Terminals set their title from the shell (OSC 0/2 escape sequences).
+#[tauri::command]
+pub async fn set_tab_title(app: AppHandle, id: u32, title: String) {
+    if is_terminal_tab(&app, id) && app.state::<Browser>().update_tab(id, |t| t.title = title) {
+        schedule_emit(&app);
+    }
+}
+
+/// Navigate the active web tab, or open a new one if there is none.
 #[tauri::command]
 pub async fn navigate(app: AppHandle, url: String) -> Result<(), String> {
     let url = parse_url(&url)?;

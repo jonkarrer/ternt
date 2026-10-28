@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import Favicon from "./lib/Favicon.svelte";
+  import TabIcon from "./lib/TabIcon.svelte";
   import Omnibox from "./lib/Omnibox.svelte";
   import {
     browser,
@@ -114,6 +114,10 @@
       <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg>
       <span>New Tab</span>
     </button>
+    <button class="row new-tab" onclick={() => browser.newTerminal()}>
+      <svg viewBox="0 0 16 16"><path d="m4 5 3 3-3 3M9 11.5h3.5" /></svg>
+      <span>New Terminal</span>
+    </button>
 
     <nav class="tabs">
       {#each browserState.tabs as tab (tab.id)}
@@ -127,7 +131,7 @@
           onauxclick={(e) => e.button === 1 && browser.closeTab(tab.id)}
           onkeydown={(e) => onTabKey(e, tab.id)}
         >
-          <Favicon url={tab.url} loading={tab.loading} />
+          <TabIcon {tab} />
           <span class="title">{tab.title || hostOf(tab.url)}</span>
           <button
             class="icon close"
@@ -240,6 +244,8 @@
   }
   .new-tab {
     color: var(--text-muted);
+  }
+  .new-tab:first-of-type {
     margin-top: 4px;
   }
 

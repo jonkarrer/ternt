@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "App UI webviews only. Page webviews (tab-*) and popups get no IPC access.",
-  "webviews": ["ui", "palette"],
+  "webviews": ["ui", "palette", "term"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

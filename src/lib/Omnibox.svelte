@@ -7,7 +7,9 @@
 <!-- Arc-style: the sidebar shows the host; clicking opens the command bar
      prefilled with the full URL. -->
 <button class="omnibox" onclick={() => browser.openPalette("edit")}>
-  {#if tab}
+  {#if tab?.kind === "terminal"}
+    <span class="host">{tab.title}</span>
+  {:else if tab}
     <span class="host">{hostOf(tab.url)}</span>
   {:else}
     <span class="placeholder">Search or enter URL…</span>

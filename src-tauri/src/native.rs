@@ -22,9 +22,9 @@ pub fn track_window_size(webview: &Webview) {
     });
 }
 
-/// Page webviews: track window size, round the corners to sit inside the
-/// sidebar chrome, and enable trackpad swipe back/forward.
-pub fn style_content(webview: &Webview, corner_radius: f64) {
+/// Content webviews: track window size and round the corners to sit inside
+/// the sidebar chrome. `swipe` enables trackpad swipe back/forward (pages).
+pub fn style_content(webview: &Webview, corner_radius: f64, swipe: bool) {
     let _ = webview.with_webview(move |platform| unsafe {
         let view = view(platform.inner());
         pin_to_superview(view);
@@ -33,7 +33,7 @@ pub fn style_content(webview: &Webview, corner_radius: f64) {
             layer.setCornerRadius(corner_radius);
             layer.setMasksToBounds(true);
         }
-        let _: () = msg_send![view, setAllowsBackForwardNavigationGestures: true];
+        let _: () = msg_send![view, setAllowsBackForwardNavigationGestures: swipe];
     });
 }
 

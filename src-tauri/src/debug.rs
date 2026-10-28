@@ -21,7 +21,7 @@ pub async fn debug_ready(app: AppHandle) -> Result<(), String> {
     crate::palette::close(&app).map_err(|e| e.to_string())?;
     let ui = app.get_webview(UI_WEBVIEW).ok_or("no ui webview")?;
     ui.eval(format!(
-        "(async () => {{ const t = window.__moove; try {{ {script}\n }} catch (e) {{ await t.log('FAIL ' + (e?.stack ?? e)); }} finally {{ await t.log('TEST DONE'); }} }})()"
+        "(async () => {{ const t = window.__moove; try {{ {script}\n }} catch (e) {{ await t.log('FAIL ' + (e?.message ?? e) + '\\n' + (e?.stack ?? '')); }} finally {{ await t.log('TEST DONE'); }} }})()"
     ))
     .map_err(|e| e.to_string())
 }
@@ -90,4 +90,20 @@ pub fn debug_windows(app: AppHandle) -> Vec<String> {
 #[tauri::command]
 pub fn debug_quit(app: AppHandle) {
     app.exit(0);
+}
+
+/// Scratch values other webviews hand back to the test script (it can only
+/// eval into them, not read results).
+static VALUES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+#[tauri::command]
+pub fn debug_set(key: String, value: String) {
+    let mut values = VALUES.lock().unwrap();
+    values.retain(|(k, _)| *k != key);
+    values.push((key, value));
+}
+
+#[tauri::command]
+pub fn debug_get(key: String) -> Option<String> {
+    VALUES.lock().unwrap().iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone())
 }

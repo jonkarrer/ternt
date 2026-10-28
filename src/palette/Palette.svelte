@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import Favicon from "../lib/Favicon.svelte";
+  import TabIcon from "../lib/TabIcon.svelte";
   import { browser, hostOf, parseInput, type PaletteRequest, type Tab } from "../lib/browser";
 
   type Item = {
@@ -9,11 +10,13 @@
     label: string;
     detail?: string;
     url?: string;
+    tab?: Tab;
     run: () => Promise<unknown>;
   };
 
   /** Actions offered by name. Ids are menu action ids (see src-tauri/src/menu.rs). */
   const COMMANDS = [
+    { id: "new-terminal", label: "New Terminal" },
     { id: "reload", label: "Reload Page" },
     { id: "back", label: "Go Back" },
     { id: "forward", label: "Go Forward" },
@@ -76,6 +79,7 @@
       label: t.title || hostOf(t.url),
       detail: "Switch to tab",
       url: t.url,
+      tab: t,
       run: () => browser.activateTab(t.id),
     });
 
@@ -174,6 +178,8 @@
               <span class="icon">
                 {#if item.kind === "search"}
                   <svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
+                {:else if item.tab}
+                  <TabIcon tab={item.tab} />
                 {:else if item.kind === "command"}
                   <svg viewBox="0 0 16 16"><path d="m6 4 4 4-4 4" /></svg>
                 {:else}

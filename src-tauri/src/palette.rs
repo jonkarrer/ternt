@@ -79,7 +79,7 @@ pub fn close(app: &AppHandle) -> tauri::Result<()> {
         webview.hide()?;
     }
     // Hand keyboard focus back to the page, or the sidebar if there is none.
-    match browser::active_webview(app).or_else(|| app.get_webview(UI_WEBVIEW)) {
+    match browser::active_view(app).or_else(|| app.get_webview(UI_WEBVIEW)) {
         Some(webview) => webview.set_focus(),
         None => Ok(()),
     }

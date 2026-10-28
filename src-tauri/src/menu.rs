@@ -30,6 +30,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         true,
         &[
             &MenuItem::with_id(app, "new-tab", "New Tab", true, Some("CmdOrCtrl+T"))?,
+            &MenuItem::with_id(app, "new-terminal", "New Terminal Tab", true, Some("CmdOrCtrl+Alt+T"))?,
             &MenuItem::with_id(app, "open-location", "Open Location…", true, Some("CmdOrCtrl+L"))?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "close-tab", "Close Tab", true, Some("CmdOrCtrl+W"))?,
@@ -104,6 +105,7 @@ pub fn run_action(app: &AppHandle, id: String) {
         let result = match id.as_str() {
             "new-tab" => palette::open(&app, palette::Mode::NewTab),
             "open-location" => palette::open(&app, palette::Mode::Edit),
+            "new-terminal" => browser::open_terminal(&app).map(|_| ()),
             "close-tab" => browser::close_active_tab(&app),
             "reload" => browser::reload_active(&app),
             "back" => browser::back_active(&app),

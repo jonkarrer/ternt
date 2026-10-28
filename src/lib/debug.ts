@@ -13,6 +13,20 @@ export function installTestHooks(getState: () => unknown) {
     eval: (label: string, js: string) => invoke("debug_eval", { label, js }),
     resize: (width: number, height: number) => invoke("debug_resize", { width, height }),
     shot: (name: string) => invoke<string>("debug_screenshot", { name }),
+    /** Evaluate `expr` in another webview and return its (string) result. */
+    async read(label: string, expr: string): Promise<string> {
+      const key = `read-${Math.random()}`;
+      await invoke("debug_eval", {
+        label,
+        js: `Promise.resolve(${expr}).then((v) => window.__TAURI_INTERNALS__.invoke("debug_set", { key: ${JSON.stringify(key)}, value: String(v) }))`,
+      });
+      for (let i = 0; i < 100; i++) {
+        const value = await invoke<string | null>("debug_get", { key });
+        if (value != null) return value;
+        await sleep(50);
+      }
+      throw new Error(`timed out reading ${expr} from ${label}`);
+    },
     quit: async () => {
       await invoke("debug_log", { message: "TEST DONE" });
       await invoke("debug_quit");
