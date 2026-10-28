@@ -62,4 +62,22 @@ await openPalette("new-tab");
 await type("tauri multiwebview");
 await key("Enter");
 await t.until(() => tab()?.url.startsWith("https://www.google.com/search?q=tauri"), "plain text searches");
+// The bar centers over the content pane, with or without the sidebar
+const centered = async (label) => {
+  const r = JSON.parse(
+    await t.read("palette", `JSON.stringify((() => { const p = document.querySelector(".panel").getBoundingClientRect(); return { mid: p.left + p.width / 2, vw: innerWidth }; })())`),
+  );
+  const left = S().sidebarCollapsed ? 8 : S().sidebarWidth;
+  const expected = left + (r.vw - left - 8) / 2;
+  await t.assert(Math.abs(r.mid - expected) < 2, `${label}: centered on content pane (${Math.round(r.mid)} vs ${Math.round(expected)})`);
+};
+await openPalette("new-tab");
+await centered("sidebar shown");
+await t.shot("palette-centered");
+await key("Escape");
+await t.invoke("menu_action", { id: "toggle-sidebar" });
+await t.until(() => S().sidebarCollapsed, "sidebar collapsed");
+await openPalette("new-tab");
+await centered("sidebar hidden");
+await key("Escape");
 await t.quit();

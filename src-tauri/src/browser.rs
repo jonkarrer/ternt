@@ -280,11 +280,15 @@ pub fn on_native_change(app: &AppHandle, id: u32, native: NativeState) {
     }
 }
 
+/// Left edge of the content pane, in logical px (overlays center on it).
+pub fn content_left(app: &AppHandle) -> f64 {
+    app.state::<Browser>().with(|s| s.effective_sidebar_width()).max(INSET)
+}
+
 fn content_bounds(app: &AppHandle) -> tauri::Result<Rect> {
     let window = main_window(app)?;
-    let sidebar_width = app.state::<Browser>().with(|s| s.effective_sidebar_width());
     let size = window.inner_size()?.to_logical::<f64>(window.scale_factor()?);
-    let left = sidebar_width.max(INSET);
+    let left = content_left(app);
     Ok(Rect {
         position: LogicalPosition::new(left, INSET).into(),
         size: LogicalSize::new(

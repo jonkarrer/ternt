@@ -150,7 +150,11 @@
 
 {#if request}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="backdrop" onclick={(e) => e.target === e.currentTarget && close()}>
+  <div
+    class="backdrop"
+    style:--content-left="{request.contentLeft}px"
+    onclick={(e) => e.target === e.currentTarget && close()}
+  >
     <div class="panel" role="dialog" aria-label="Command bar">
       <input
         bind:this={input}
@@ -207,8 +211,9 @@
   .panel {
     position: absolute;
     top: 16vh;
-    left: 50%;
-    width: min(680px, calc(100vw - 48px));
+    /* Centered over the content pane (right of the sidebar), not the window. */
+    left: calc(var(--content-left) + (100vw - var(--content-left) - var(--inset)) / 2);
+    width: min(680px, calc(100vw - var(--content-left) - var(--inset) - 48px));
     translate: -50% 0;
     border-radius: 14px;
     background: var(--surface-raised);

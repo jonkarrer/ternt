@@ -27,9 +27,13 @@ pub enum Mode {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Request {
     mode: Mode,
     url: Option<String>,
+    /// Where the content pane starts, so the bar centers over the page
+    /// rather than the whole window.
+    content_left: f64,
 }
 
 /// The open request, if the palette is showing. Read by the palette on load
@@ -57,6 +61,7 @@ pub fn open(app: &AppHandle, mode: Mode) -> tauri::Result<()> {
     let request = Request {
         mode,
         url: if mode == Mode::Edit { url } else { None },
+        content_left: browser::content_left(app),
     };
     *app.state::<Palette>().0.lock().unwrap() = Some(request.clone());
 

@@ -27,6 +27,8 @@ export type PaletteMode = "newTab" | "edit";
 export interface PaletteRequest {
   mode: PaletteMode;
   url: string | null;
+  /** Left edge of the content pane (logical px). */
+  contentLeft: number;
 }
 
 /** Mirror the sidebar constants in src-tauri/src/browser.rs. */
