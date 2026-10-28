@@ -2,6 +2,7 @@ mod browser;
 #[cfg(all(debug_assertions, target_os = "macos"))]
 mod debug;
 mod menu;
+mod palette;
 #[cfg(target_os = "macos")]
 mod native;
 
@@ -12,6 +13,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(Browser::default())
+        .manage(palette::Palette::default())
         .setup(|app| {
             browser::create_main_window(app.handle())?;
             app.set_menu(menu::build(app.handle())?)?;
@@ -21,6 +23,9 @@ pub fn run() {
                 .skip(1)
                 .filter_map(|arg| tauri::Url::parse(&arg).ok())
                 .collect();
+            if urls.is_empty() {
+                palette::open(app.handle(), palette::Mode::NewTab)?;
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 for url in urls {
@@ -42,6 +47,10 @@ pub fn run() {
             browser::go_forward,
             browser::reload,
             browser::set_sidebar_width,
+            menu::menu_action,
+            palette::palette_request,
+            palette::open_palette,
+            palette::close_palette,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_ready,
             #[cfg(all(debug_assertions, target_os = "macos"))]
@@ -57,8 +66,6 @@ pub fn run() {
             debug::debug_allow_popups,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_windows,
-            #[cfg(all(debug_assertions, target_os = "macos"))]
-            debug::debug_menu,
             debug::debug_quit,
         ])
         .run(tauri::generate_context!())

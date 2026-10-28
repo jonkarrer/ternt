@@ -10,8 +10,10 @@
   --fill-strong: rgb(0 0 0 / 0.1);
   --tab-active: rgb(255 255 255 / 0.8);
   --surface: #ffffff;
+  --surface-raised: #ffffff;
   --ring: rgb(0 0 0 / 0.12);
   --shadow: rgb(0 0 0 / 0.1);
+  --accent: #3478f6;
   /* Laid over the native vibrancy for an Arc-style tinted sidebar. */
   --tint: linear-gradient(165deg, rgb(190 205 255 / 0.45), rgb(225 210 255 / 0.35));
 
@@ -32,6 +34,7 @@
     --fill-strong: rgb(255 255 255 / 0.14);
     --tab-active: rgb(255 255 255 / 0.14);
     --surface: #232325;
+    --surface-raised: #2e2e31;
     --ring: rgb(255 255 255 / 0.1);
     --shadow: rgb(0 0 0 / 0.35);
     --tint: linear-gradient(165deg, rgb(70 80 140 / 0.35), rgb(90 60 120 / 0.3));

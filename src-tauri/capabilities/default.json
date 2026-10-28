@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Sidebar UI only. Page webviews (tab-*) get no IPC access.",
-  "webviews": ["ui"],
+  "description": "App UI webviews only. Page webviews (tab-*) and popups get no IPC access.",
+  "webviews": ["ui", "palette"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

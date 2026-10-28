@@ -17,6 +17,8 @@ pub async fn debug_ready(app: AppHandle) -> Result<(), String> {
         return Ok(());
     };
     let script = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
+    // Start from a clean slate: no command bar over the window.
+    crate::palette::close(&app).map_err(|e| e.to_string())?;
     let ui = app.get_webview(UI_WEBVIEW).ok_or("no ui webview")?;
     ui.eval(format!(
         "(async () => {{ const t = window.__moove; try {{ {script}\n }} catch (e) {{ await t.log('FAIL ' + (e?.stack ?? e)); }} finally {{ await t.log('TEST DONE'); }} }})()"
@@ -88,10 +90,4 @@ pub fn debug_windows(app: AppHandle) -> Vec<String> {
 #[tauri::command]
 pub fn debug_quit(app: AppHandle) {
     app.exit(0);
-}
-
-/// Trigger a menu action by id, as if its shortcut were pressed.
-#[tauri::command]
-pub fn debug_menu(app: AppHandle, id: String) {
-    crate::menu::run_action(&app, id);
 }

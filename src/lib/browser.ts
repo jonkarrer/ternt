@@ -15,6 +15,13 @@ export interface BrowserState {
   active: number | null;
 }
 
+export type PaletteMode = "newTab" | "edit";
+
+export interface PaletteRequest {
+  mode: PaletteMode;
+  url: string | null;
+}
+
 /** Mirror the sidebar constants in src-tauri/src/browser.rs. */
 export const DEFAULT_SIDEBAR_WIDTH = 240;
 export const MIN_SIDEBAR_WIDTH = 180;
@@ -33,22 +40,33 @@ export const browser = {
   reload: () => invoke("reload"),
   /** Returns the width after Rust clamps it. */
   setSidebarWidth: (width: number) => invoke<number>("set_sidebar_width", { width }),
+  /** Run a menu action by id (same code path as its keyboard shortcut). */
+  menuAction: (id: string) => invoke("menu_action", { id }),
+
+  openPalette: (mode: PaletteMode) => invoke("open_palette", { mode }),
+  closePalette: () => invoke("close_palette"),
+  paletteRequest: () => invoke<PaletteRequest | null>("palette_request"),
 
   onState: (cb: (state: BrowserState) => void): Promise<UnlistenFn> =>
     listen<BrowserState>("browser:state", (e) => cb(e.payload)),
-  /** Payload is true for "new tab", false for "edit current URL". */
-  onOmnibox: (cb: (newTab: boolean) => void): Promise<UnlistenFn> =>
-    listen<boolean>("browser:omnibox", (e) => cb(e.payload)),
+  onPaletteOpen: (cb: (request: PaletteRequest) => void): Promise<UnlistenFn> =>
+    listen<PaletteRequest>("palette:open", (e) => cb(e.payload)),
 };
 
-/** Turn omnibox input into a URL: explicit URL, bare host, or search. */
-export function toUrl(raw: string): string | null {
+export type ParsedInput = { kind: "url" | "search"; url: string };
+
+/** Interpret address-bar input: explicit URL, bare host, or a search. */
+export function parseInput(raw: string): ParsedInput | null {
   const input = raw.trim();
   if (!input) return null;
-  if (/^(https?|file|about|data):/i.test(input)) return input;
-  if (/^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?(\/\S*)?$/i.test(input)) return `http://${input}`;
-  if (/^[^\s/]+\.[a-z]{2,}(:\d+)?(\/\S*)?$/i.test(input)) return `https://${input}`;
-  return SEARCH_URL + encodeURIComponent(input);
+  if (/^(https?|file|about|data):/i.test(input)) return { kind: "url", url: input };
+  if (/^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?(\/\S*)?$/i.test(input)) {
+    return { kind: "url", url: `http://${input}` };
+  }
+  if (/^[^\s/]+\.[a-z]{2,}(:\d+)?(\/\S*)?$/i.test(input)) {
+    return { kind: "url", url: `https://${input}` };
+  }
+  return { kind: "search", url: SEARCH_URL + encodeURIComponent(input) };
 }
 
 export function hostOf(url: string): string {

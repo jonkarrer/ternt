@@ -7,7 +7,7 @@ use objc2::{
     rc::Retained,
     runtime::{AnyObject, NSObject},
 };
-use objc2_app_kit::{NSAutoresizingMaskOptions, NSView};
+use objc2_app_kit::{NSAutoresizingMaskOptions, NSView, NSWindowOrderingMode};
 use objc2_foundation::{NSKeyValueObservingOptions, NSObjectNSKeyValueObserverRegistration, NSString, NSURL};
 use tauri::{AppHandle, Webview};
 
@@ -34,6 +34,17 @@ pub fn style_content(webview: &Webview, corner_radius: f64) {
             layer.setMasksToBounds(true);
         }
         let _: () = msg_send![view, setAllowsBackForwardNavigationGestures: true];
+    });
+}
+
+/// Raise the view above its siblings (later-created tab webviews would
+/// otherwise sit on top of it).
+pub fn bring_to_front(webview: &Webview) {
+    let _ = webview.with_webview(|platform| unsafe {
+        let view = view(platform.inner());
+        if let Some(superview) = view.superview() {
+            superview.addSubview_positioned_relativeTo(view, NSWindowOrderingMode::Above, None);
+        }
     });
 }
 

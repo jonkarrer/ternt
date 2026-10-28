@@ -6,7 +6,7 @@ use tauri::{
     menu::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
 };
 
-use crate::browser;
+use crate::{browser, palette};
 
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let app_menu = Submenu::with_items(
@@ -102,8 +102,8 @@ pub fn run_action(app: &AppHandle, id: String) {
     // so run them from a worker.
     tauri::async_runtime::spawn(async move {
         let result = match id.as_str() {
-            "new-tab" => browser::focus_omnibox(&app, true),
-            "open-location" => browser::focus_omnibox(&app, false),
+            "new-tab" => palette::open(&app, palette::Mode::NewTab),
+            "open-location" => palette::open(&app, palette::Mode::Edit),
             "close-tab" => browser::close_active_tab(&app),
             "reload" => browser::reload_active(&app),
             "back" => browser::back_active(&app),
@@ -121,4 +121,11 @@ pub fn run_action(app: &AppHandle, id: String) {
             eprintln!("menu action {id} failed: {err}");
         }
     });
+}
+
+/// Run a menu action from the UI (sidebar buttons, command bar entries), so
+/// every action has one implementation whether clicked, typed or pressed.
+#[tauri::command]
+pub fn menu_action(app: AppHandle, id: String) {
+    run_action(&app, id);
 }

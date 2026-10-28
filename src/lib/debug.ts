@@ -22,10 +22,10 @@ export function installTestHooks(getState: () => unknown) {
       return hooks.log(`ok - ${message}`);
     },
     /** Poll until `fn` returns truthy or time out. */
-    async until<T>(fn: () => T, message: string, timeout = 8000): Promise<T> {
+    async until<T>(fn: () => T | Promise<T>, message: string, timeout = 8000): Promise<T> {
       const start = performance.now();
       for (;;) {
-        const value = fn();
+        const value = await fn();
         if (value) {
           await hooks.log(`ok - ${message}`);
           return value;

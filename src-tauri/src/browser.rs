@@ -126,9 +126,16 @@ fn tab_webview(app: &AppHandle, id: u32) -> Option<Webview> {
     app.get_webview(&tab_label(id))
 }
 
-fn active_webview(app: &AppHandle) -> Option<Webview> {
+pub fn active_webview(app: &AppHandle) -> Option<Webview> {
     let id = app.state::<Browser>().with(|s| s.active)?;
     tab_webview(app, id)
+}
+
+pub fn active_tab_url(app: &AppHandle) -> Option<String> {
+    app.state::<Browser>().with(|s| {
+        let id = s.active?;
+        s.tabs.iter().find(|t| t.id == id).map(|t| t.url.clone())
+    })
 }
 
 /// Push the full tab state to the UI. Used directly after user actions so the
@@ -231,6 +238,8 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
 
     #[cfg(target_os = "macos")]
     crate::native::track_window_size(&_ui);
+
+    crate::palette::create(&window)?;
 
     // macOS resizes page webviews natively (see `native::style_content`).
     #[cfg(not(target_os = "macos"))]
@@ -479,14 +488,6 @@ pub fn forward_active(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(not(target_os = "macos"))]
     webview.eval("history.forward()")?;
     Ok(())
-}
-
-/// Move keyboard focus to the sidebar's address field.
-pub fn focus_omnibox(app: &AppHandle, new_tab: bool) -> tauri::Result<()> {
-    if let Some(ui) = app.get_webview(UI_WEBVIEW) {
-        ui.set_focus()?;
-    }
-    app.emit_to(EventTarget::webview(UI_WEBVIEW), "browser:omnibox", new_tab)
 }
 
 fn parse_url(url: &str) -> Result<Url, String> {

@@ -16,19 +16,14 @@
   let browserState = $state<BrowserState>({ tabs: [], active: null });
   let sidebarWidth = $state(DEFAULT_SIDEBAR_WIDTH);
   let resizing = $state(false);
-  let omnibox = $state<Omnibox>();
 
   const activeTab = $derived(browserState.tabs.find((t) => t.id === browserState.active));
 
   onMount(() => {
-    const unlisten = [
-      browser.onState((s) => (browserState = s)),
-      browser.onOmnibox((newTab) => omnibox?.begin(newTab)),
-    ];
+    const unlisten = [browser.onState((s) => (browserState = s))];
     (async () => {
       browserState = await browser.getState();
       sidebarWidth = await browser.setSidebarWidth(savedWidth());
-      if (browserState.tabs.length === 0) omnibox?.begin(true);
       if (import.meta.env.DEV) {
         const { installTestHooks } = await import("./lib/debug");
         installTestHooks(() => browserState);
@@ -113,9 +108,9 @@
       </div>
     </header>
 
-    <Omnibox bind:this={omnibox} tab={activeTab} />
+    <Omnibox tab={activeTab} />
 
-    <button class="row new-tab" onclick={() => omnibox?.begin(true)}>
+    <button class="row new-tab" onclick={() => browser.openPalette("newTab")}>
       <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg>
       <span>New Tab</span>
     </button>
