@@ -13,6 +13,10 @@
   --surface-raised: #ffffff;
   --ring: rgb(0 0 0 / 0.12);
   --separator: rgb(0 0 0 / 0.16);
+  /* Terminal rows in the sidebar sit darker than web tabs. */
+  --term-row: rgb(0 0 0 / 0.13);
+  --term-row-hover: rgb(0 0 0 / 0.17);
+  --term-row-active: rgb(0 0 0 / 0.24);
   --shadow: rgb(0 0 0 / 0.1);
   --accent: #3478f6;
   /* Sidebar tint over the native vibrancy. The hue comes from the active
@@ -42,6 +46,9 @@
     --surface-raised: #2e2e31;
     --ring: rgb(255 255 255 / 0.1);
     --separator: rgb(255 255 255 / 0.18);
+    --term-row: rgb(0 0 0 / 0.26);
+    --term-row-hover: rgb(0 0 0 / 0.32);
+    --term-row-active: rgb(0 0 0 / 0.46);
     --shadow: rgb(0 0 0 / 0.35);
     --tint-l1: 32%;
     --tint-a1: 0.38;

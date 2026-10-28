@@ -710,19 +710,27 @@
   }
 
   .divider {
+    position: relative;
     height: 20px;
     flex: none;
     display: flex;
     align-items: center;
-    gap: 8px;
     margin: 4px 10px;
   }
   .divider .line {
     flex: 1;
     height: 1px;
     background: var(--separator);
+    transition: margin-right 120ms ease;
+  }
+  /* Full-width line; it only makes room for Clear on hover. */
+  .divider:hover .line,
+  .divider:focus-within .line {
+    margin-right: 60px;
   }
   .divider .clear {
+    position: absolute;
+    right: 0;
     display: flex;
     align-items: center;
     gap: 3px;

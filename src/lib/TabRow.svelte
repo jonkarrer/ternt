@@ -39,6 +39,7 @@
   class:active
   class:dragging
   class:indent
+  class:terminal={tab.kind === "terminal"}
   class:before={mark === "before"}
   class:after={mark === "after"}
   role="button"
@@ -98,6 +99,18 @@
   }
   .active:hover {
     background: var(--tab-active);
+  }
+  .terminal {
+    background: var(--term-row);
+  }
+  .terminal:hover {
+    background: var(--term-row-hover);
+  }
+  .terminal.active {
+    background: var(--term-row-active);
+    box-shadow:
+      inset 0 0 0 1px var(--fill-strong),
+      0 1px 2px var(--shadow);
   }
   .dragging {
     opacity: 0.5;
