@@ -36,8 +36,9 @@
 
   onMount(() => {
     const unlisten = browser.onPaletteOpen(show);
-    // A request made before this page loaded is waiting in Rust.
-    browser.paletteRequest().then((pending) => pending && show(pending));
+    // A request made before this page loaded is waiting in Rust; subscribe
+    // first so none can slip in between.
+    unlisten.then(() => browser.paletteRequest()).then((pending) => pending && show(pending));
     return () => unlisten.then((off) => off());
   });
 

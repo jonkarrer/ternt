@@ -159,3 +159,31 @@ pub fn unobserve(webview: &Webview, tab: u32) {
         }
     });
 }
+
+/// Hide or show the close/minimize/zoom buttons (hidden while the sidebar is
+/// collapsed, where they'd overlap the page).
+pub fn set_traffic_lights_hidden(window: &tauri::Window, hidden: bool) {
+    let Ok(ns_window) = window.ns_window() else { return };
+    let ns_window = ns_window as usize; // raw pointers aren't Send
+    let _ = window.run_on_main_thread(move || unsafe {
+        let ns_window = &*(ns_window as *const AnyObject);
+        // NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton
+        for kind in 0usize..3 {
+            let button: *mut AnyObject = msg_send![ns_window, standardWindowButton: kind];
+            if let Some(button) = button.as_ref() {
+                let _: () = msg_send![button, setHidden: hidden];
+            }
+        }
+    });
+}
+
+pub fn copy_to_clipboard(app: &AppHandle, text: String) {
+    let _ = app.run_on_main_thread(move || unsafe {
+        let pasteboard: *mut AnyObject = msg_send![objc2::class!(NSPasteboard), generalPasteboard];
+        let Some(pasteboard) = pasteboard.as_ref() else { return };
+        let _: isize = msg_send![pasteboard, clearContents];
+        let text = NSString::from_str(&text);
+        let kind = NSString::from_str("public.utf8-plain-text");
+        let _: bool = msg_send![pasteboard, setString: &*text, forType: &*kind];
+    });
+}

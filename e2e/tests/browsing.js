@@ -22,22 +22,24 @@ await t.eval(`tab-${S().active}`, `go("/spa/route-2")`);
 await t.until(() => tab()?.url.endsWith("/spa/route-2"), "pushState URL tracked");
 await t.assert(tab().canGoBack, "pushState adds history entry");
 
-// Tab switching shortcuts
-await t.invoke("menu_action", { id: "next-tab" });
-await t.until(() => S().active === S().tabs[0].id, "ctrl+tab wraps to first tab");
+// Tab switching shortcuts (new tabs go on top, like Arc)
+await t.assert(S().tabs[0].id === S().active, "new tab is inserted at the top");
 await t.invoke("menu_action", { id: "previous-tab" });
 await t.until(() => S().active === S().tabs.at(-1).id, "ctrl+shift+tab wraps to last");
-await t.invoke("menu_action", { id: "select-tab-1" });
-await t.until(() => S().active === S().tabs[0].id, "cmd+1");
+await t.invoke("menu_action", { id: "next-tab" });
+await t.until(() => S().active === S().tabs[0].id, "ctrl+tab wraps to first");
 await t.invoke("menu_action", { id: "select-tab-9" });
 await t.until(() => S().active === S().tabs.at(-1).id, "cmd+9 selects last");
+await t.invoke("menu_action", { id: "select-tab-1" });
+await t.until(() => S().active === S().tabs[0].id, "cmd+1 selects first");
 
 // Close + reopen
 const before = S().tabs.length;
+const closedUrl = tab().url;
 await t.invoke("menu_action", { id: "close-tab" });
 await t.until(() => S().tabs.length === before - 1, "cmd+w closes tab");
 await t.invoke("menu_action", { id: "reopen-tab" });
-await t.until(() => S().tabs.length === before && tab()?.url.includes("/spa/route-2"), "cmd+shift+t reopens");
+await t.until(() => S().tabs.length === before && tab()?.url === closedUrl, "cmd+shift+t reopens");
 
 // Popups: sized window.open -> real window with working opener; _blank -> tab
 await t.invoke("new_tab", { url: `${F}/popup.html` });

@@ -22,9 +22,15 @@ failed=0
 for name in $tests; do
   echo "== $name"
   rm -f $OUT/$name-*.png
-  MOOVE_TEST=$E2E/tests/$name.js MOOVE_SHOTS=$OUT $ROOT/src-tauri/target/debug/moove > $OUT/$name.log 2>&1 &
+  # Tests share a session file by prefix (`session-1` saves, `session-2`
+  # restores); the first test of a group starts from scratch.
+  key=${name%%-*}
+  [[ $name == $key || $name == *-1 ]] && rm -f $OUT/$key.session.json
+  MOOVE_TEST=$E2E/tests/$name.js MOOVE_SHOTS=$OUT MOOVE_SESSION_FILE=$OUT/$key.session.json $ROOT/src-tauri/target/debug/moove > $OUT/$name.log 2>&1 &
   pid=$!
   for i in {1..400}; do grep -q "TEST DONE" $OUT/$name.log && break; kill -0 $pid 2>/dev/null || break; sleep 0.25; done
+  # Give the app a moment to exit on its own (it saves its session on exit).
+  for i in {1..20}; do kill -0 $pid 2>/dev/null || break; sleep 0.1; done
   kill $pid 2>/dev/null; wait $pid 2>/dev/null
   grep -E "^\[test\]|panicked" $OUT/$name.log | grep -v "TEST DONE"
   if grep -qE "\[test\] FAIL|panicked" $OUT/$name.log || ! grep -q "TEST DONE" $OUT/$name.log; then

@@ -6,14 +6,20 @@ export interface Tab {
   kind: "web" | "terminal";
   url: string;
   title: string;
+  pinned: boolean;
+  /** Web tabs: whether the page is in memory (tabs load lazily). */
+  loaded: boolean;
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
 }
 
 export interface BrowserState {
+  /** Pinned tabs first, then the rest (newest first). */
   tabs: Tab[];
   active: number | null;
+  sidebarWidth: number;
+  sidebarCollapsed: boolean;
 }
 
 export type PaletteMode = "newTab" | "edit";
@@ -36,6 +42,10 @@ export const browser = {
   newTerminal: () => invoke<number>("new_terminal"),
   closeTab: (id: number) => invoke("close_tab", { id }),
   activateTab: (id: number) => invoke("activate_tab", { id }),
+  /** `index` is the position in the full tab list after removing the tab. */
+  moveTab: (id: number, index: number) => invoke("move_tab", { id, index }),
+  pinTab: (id: number, pinned: boolean) => invoke("pin_tab", { id, pinned }),
+  tabContextMenu: (id: number) => invoke("tab_context_menu", { id }),
   navigate: (url: string) => invoke("navigate", { url }),
   goBack: () => invoke("go_back"),
   goForward: () => invoke("go_forward"),

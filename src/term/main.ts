@@ -176,8 +176,8 @@ dark.addEventListener("change", () => {
   for (const s of sessions.values()) s.term.options.theme = theme();
 });
 
-browser.onState(reconcile);
-browser.getState().then(reconcile);
+// Subscribe before reading state, so no update can fall in between.
+browser.onState(reconcile).then(() => browser.getState().then(reconcile));
 
 if (import.meta.env.DEV) {
   // Lets e2e tests read what a terminal is showing.

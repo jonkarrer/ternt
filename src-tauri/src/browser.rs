@@ -2,8 +2,12 @@
 //!
 //! One window holds a transparent UI webview (the sidebar, full-window, at the
 //! bottom) plus native child webviews stacked over the content area: one per
-//! web tab, and one shared webview that renders every terminal tab. Rust owns
-//! the layout so content never waits on the UI to resize.
+//! loaded web tab, and one shared webview that renders every terminal tab.
+//! Rust owns the layout so content never waits on the UI to resize.
+//!
+//! Web tabs load lazily: a tab's webview is created the first time it's
+//! shown, so restoring a large session costs about as much as one tab, and
+//! unloading (closing a pinned tab) frees the page but keeps the tab.
 //!
 //! Locking rule: never hold `Browser::state` across a webview call. Webview
 //! calls block on the main thread, and main-thread callbacks (navigation
@@ -17,13 +21,15 @@ use std::{
     time::Duration,
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, Emitter, EventTarget, LogicalPosition, LogicalSize, Manager, Rect, Url, Webview,
     WebviewUrl, WebviewWindowBuilder, Window,
     webview::{NewWindowFeatures, NewWindowResponse, WebviewBuilder},
     window::WindowBuilder,
 };
+
+use crate::session::{self, SavedTab, Session};
 
 pub const MAIN_WINDOW: &str = "main";
 pub const UI_WEBVIEW: &str = "ui";
@@ -43,7 +49,7 @@ const MAX_CLOSED_TABS: usize = 25;
 #[cfg(target_os = "macos")]
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 
-#[derive(Clone, Copy, PartialEq, Serialize)]
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TabKind {
     Web,
@@ -57,6 +63,9 @@ pub struct Tab {
     kind: TabKind,
     url: String,
     title: String,
+    pinned: bool,
+    /// Web tabs: whether a webview currently exists for this tab.
+    loaded: bool,
     loading: bool,
     can_go_back: bool,
     can_go_forward: bool,
@@ -67,9 +76,11 @@ impl Tab {
         Self {
             id,
             kind,
-            loading: kind == TabKind::Web,
             url,
             title,
+            pinned: false,
+            loaded: false,
+            loading: false,
             can_go_back: false,
             can_go_forward: false,
         }
@@ -77,9 +88,12 @@ impl Tab {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     tabs: Vec<Tab>,
     active: Option<u32>,
+    sidebar_width: f64,
+    sidebar_collapsed: bool,
 }
 
 /// Navigation state read from a native webview.
@@ -97,9 +111,11 @@ enum ClosedTab {
 }
 
 struct State {
+    /// Pinned tabs first, then the rest (newest at the top, like Arc).
     tabs: Vec<Tab>,
     active: Option<u32>,
     sidebar_width: f64,
+    sidebar_collapsed: bool,
     /// Recently closed tabs, most recent last.
     closed: Vec<ClosedTab>,
 }
@@ -107,6 +123,24 @@ struct State {
 impl State {
     fn tab(&self, id: u32) -> Option<&Tab> {
         self.tabs.iter().find(|t| t.id == id)
+    }
+
+    fn tab_mut(&mut self, id: u32) -> Option<&mut Tab> {
+        self.tabs.iter_mut().find(|t| t.id == id)
+    }
+
+    fn pinned_count(&self) -> usize {
+        self.tabs.iter().take_while(|t| t.pinned).count()
+    }
+
+    fn effective_sidebar_width(&self) -> f64 {
+        if self.sidebar_collapsed { 0.0 } else { self.sidebar_width }
+    }
+
+    /// New tabs go at the top of the unpinned list.
+    fn insert_new(&mut self, tab: Tab) {
+        let at = self.pinned_count();
+        self.tabs.insert(at, tab);
     }
 }
 
@@ -123,6 +157,7 @@ impl Default for Browser {
                 tabs: Vec::new(),
                 active: None,
                 sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+                sidebar_collapsed: false,
                 closed: Vec::new(),
             }),
             next_id: AtomicU32::new(1),
@@ -140,16 +175,22 @@ impl Browser {
         self.with(|s| Snapshot {
             tabs: s.tabs.clone(),
             active: s.active,
+            sidebar_width: s.sidebar_width,
+            sidebar_collapsed: s.sidebar_collapsed,
         })
     }
 
     /// Returns false if the tab no longer exists.
     fn update_tab(&self, id: u32, f: impl FnOnce(&mut Tab)) -> bool {
-        self.with(|s| s.tabs.iter_mut().find(|t| t.id == id).map(f).is_some())
+        self.with(|s| s.tab_mut(id).map(f).is_some())
     }
 
     fn kind(&self, id: u32) -> Option<TabKind> {
         self.with(|s| s.tab(id).map(|t| t.kind))
+    }
+
+    fn next_id(&self) -> u32 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -176,7 +217,7 @@ pub fn active_view(app: &AppHandle) -> Option<Webview> {
     view_for(app, id)
 }
 
-/// The active tab's webview if it's a web page (for navigation).
+/// The active tab's webview if it's a loaded web page (for navigation).
 pub fn active_webview(app: &AppHandle) -> Option<Webview> {
     let id = app.state::<Browser>().with(|s| s.active)?;
     app.get_webview(&tab_label(id))
@@ -194,6 +235,11 @@ pub fn is_terminal_tab(app: &AppHandle, id: u32) -> bool {
     app.state::<Browser>().kind(id) == Some(TabKind::Terminal)
 }
 
+/// `(kind, pinned, url)` for the tab context menu.
+pub fn tab_info(app: &AppHandle, id: u32) -> Option<(TabKind, bool, String)> {
+    app.state::<Browser>().with(|s| s.tab(id).map(|t| (t.kind, t.pinned, t.url.clone())))
+}
+
 /// Push the full tab state to the app webviews. Used directly after user
 /// actions so the sidebar reacts in the same frame.
 fn emit_state(app: &AppHandle) {
@@ -201,6 +247,7 @@ fn emit_state(app: &AppHandle) {
     for label in [UI_WEBVIEW, TERM_WEBVIEW] {
         let _ = app.emit_to(EventTarget::webview(label), "browser:state", snapshot.clone());
     }
+    session::schedule_save(app);
 }
 
 /// Coalesce bursts of page-driven changes (a navigation fires URL, title,
@@ -233,7 +280,9 @@ pub fn on_native_change(app: &AppHandle, id: u32, native: NativeState) {
     }
 }
 
-fn content_bounds(window: &Window, sidebar_width: f64) -> tauri::Result<Rect> {
+fn content_bounds(app: &AppHandle) -> tauri::Result<Rect> {
+    let window = main_window(app)?;
+    let sidebar_width = app.state::<Browser>().with(|s| s.effective_sidebar_width());
     let size = window.inner_size()?.to_logical::<f64>(window.scale_factor()?);
     let left = sidebar_width.max(INSET);
     Ok(Rect {
@@ -249,14 +298,10 @@ fn content_bounds(window: &Window, sidebar_width: f64) -> tauri::Result<Rect> {
 /// Apply the current content bounds to every content view (hidden ones too,
 /// so switching tabs never shows a stale size).
 fn layout_tabs(app: &AppHandle) -> tauri::Result<()> {
-    let browser = app.state::<Browser>();
-    let (ids, sidebar_width) = browser.with(|s| {
-        (
-            s.tabs.iter().map(|t| t.id).collect::<Vec<_>>(),
-            s.sidebar_width,
-        )
-    });
-    let bounds = content_bounds(&main_window(app)?, sidebar_width)?;
+    let ids = app
+        .state::<Browser>()
+        .with(|s| s.tabs.iter().map(|t| t.id).collect::<Vec<_>>());
+    let bounds = content_bounds(app)?;
     let views = ids
         .into_iter()
         .filter_map(|id| app.get_webview(&tab_label(id)))
@@ -353,15 +398,12 @@ fn open_popup(
     builder.build()
 }
 
-/// Must not be called from the main thread (it blocks on it).
-pub fn open_tab(app: &AppHandle, url: Url) -> tauri::Result<u32> {
+/// Create the webview for a web tab at its current URL. Must not be called
+/// from the main thread (it blocks on it).
+fn load_tab(app: &AppHandle, id: u32) -> tauri::Result<Webview> {
     let browser = app.state::<Browser>();
-    let id = browser.next_id.fetch_add(1, Ordering::Relaxed);
-    let window = main_window(app)?;
-    let bounds = content_bounds(&window, browser.with(|s| s.sidebar_width))?;
-
-    // Register before creating the webview so its first load events find the tab.
-    browser.with(|s| s.tabs.push(Tab::new(id, TabKind::Web, url.to_string(), String::new())));
+    let url = browser.with(|s| s.tab(id).map(|t| t.url.clone())).unwrap_or_default();
+    let url = Url::parse(&url).unwrap_or_else(|_| "about:blank".parse().unwrap());
 
     let popup_app = app.clone();
     let builder = WebviewBuilder::new(tab_label(id), WebviewUrl::External(url))
@@ -393,67 +435,94 @@ pub fn open_tab(app: &AppHandle, url: Url) -> tauri::Result<u32> {
             }
         });
 
-    let webview = match window.add_child(builder, bounds.position, bounds.size) {
-        Ok(webview) => webview,
-        Err(err) => {
-            browser.with(|s| s.tabs.retain(|t| t.id != id));
-            return Err(err);
-        }
-    };
+    let bounds = content_bounds(app)?;
+    let webview = main_window(app)?.add_child(builder, bounds.position, bounds.size)?;
+    browser.update_tab(id, |t| {
+        t.loaded = true;
+        t.loading = true;
+    });
 
     #[cfg(target_os = "macos")]
     {
         crate::native::style_content(&webview, CONTENT_RADIUS, true);
         crate::native::observe(&webview, id, app.clone());
     }
+    Ok(webview)
+}
 
-    activate(app, id)?;
+/// Destroy a web tab's webview but keep the tab (it reloads when shown).
+fn unload_tab(app: &AppHandle, id: u32) -> tauri::Result<()> {
+    if let Some(webview) = app.get_webview(&tab_label(id)) {
+        #[cfg(target_os = "macos")]
+        crate::native::unobserve(&webview, id);
+        webview.close()?;
+    }
+    app.state::<Browser>().update_tab(id, |t| {
+        t.loaded = false;
+        t.loading = false;
+    });
+    Ok(())
+}
+
+/// Open a web tab at the top of the list and show it. Must not be called
+/// from the main thread (it blocks on it).
+pub fn open_tab(app: &AppHandle, url: Url) -> tauri::Result<u32> {
+    let browser = app.state::<Browser>();
+    let id = browser.next_id();
+    browser.with(|s| s.insert_new(Tab::new(id, TabKind::Web, url.to_string(), String::new())));
+    if let Err(err) = activate(app, id) {
+        browser.with(|s| s.tabs.retain(|t| t.id != id));
+        emit_state(app);
+        return Err(err);
+    }
     Ok(id)
 }
 
 /// Must not be called from the main thread (it blocks on it).
 pub fn open_terminal(app: &AppHandle) -> tauri::Result<u32> {
-    ensure_term_webview(app)?;
     let browser = app.state::<Browser>();
-    let id = browser.next_id.fetch_add(1, Ordering::Relaxed);
-    browser.with(|s| s.tabs.push(Tab::new(id, TabKind::Terminal, String::new(), "Terminal".into())));
-    // The terminal webview starts the shell when it sees the new tab.
+    let id = browser.next_id();
+    browser.with(|s| s.insert_new(Tab::new(id, TabKind::Terminal, String::new(), "Terminal".into())));
+    // The terminal webview starts the shell when it first shows the tab.
     activate(app, id)?;
     Ok(id)
 }
 
 /// The terminal webview is created on first use: no cost until then.
-fn ensure_term_webview(app: &AppHandle) -> tauri::Result<()> {
-    if app.get_webview(TERM_WEBVIEW).is_some() {
-        return Ok(());
+fn ensure_term_webview(app: &AppHandle) -> tauri::Result<Webview> {
+    if let Some(webview) = app.get_webview(TERM_WEBVIEW) {
+        return Ok(webview);
     }
-    let window = main_window(app)?;
-    let bounds = content_bounds(&window, app.state::<Browser>().with(|s| s.sidebar_width))?;
+    let bounds = content_bounds(app)?;
     let builder = WebviewBuilder::new(TERM_WEBVIEW, WebviewUrl::App("term.html".into())).focused(false);
-    let webview = window.add_child(builder, bounds.position, bounds.size)?;
-    webview.hide()?;
+    let webview = main_window(app)?.add_child(builder, bounds.position, bounds.size)?;
     #[cfg(target_os = "macos")]
     crate::native::style_content(&webview, CONTENT_RADIUS, false);
-    Ok(())
+    Ok(webview)
 }
 
 fn activate(app: &AppHandle, id: u32) -> tauri::Result<()> {
     let browser = app.state::<Browser>();
-    let Some(previous) = browser.with(|s| s.tab(id).is_some().then(|| s.active.replace(id))) else {
+    let Some((kind, loaded)) = browser.with(|s| s.tab(id).map(|t| (t.kind, t.loaded))) else {
         return Ok(());
     };
 
+    // Lazily create the view before switching to it.
+    let next_view = match kind {
+        TabKind::Web if !loaded => load_tab(app, id)?,
+        TabKind::Web => app.get_webview(&tab_label(id)).map_or_else(|| load_tab(app, id), Ok)?,
+        TabKind::Terminal => ensure_term_webview(app)?,
+    };
+    let previous = browser.with(|s| s.active.replace(id));
+
     // Show the new view before hiding the old one so there's no empty frame.
     // Terminals share a view, so terminal-to-terminal switches hide nothing.
-    let next_view = view_for(app, id);
-    if let Some(webview) = &next_view {
-        webview.show()?;
-        webview.set_focus()?;
-    }
+    next_view.show()?;
+    next_view.set_focus()?;
     if let Some(webview) = previous
         .filter(|&p| p != id)
         .and_then(|p| view_for(app, p))
-        .filter(|prev| Some(prev.label()) != next_view.as_ref().map(|n| n.label()))
+        .filter(|prev| prev.label() != next_view.label())
     {
         webview.hide()?;
     }
@@ -463,36 +532,55 @@ fn activate(app: &AppHandle, id: u32) -> tauri::Result<()> {
 
 pub fn close_tab_by_id(app: &AppHandle, id: u32) -> tauri::Result<()> {
     let browser = app.state::<Browser>();
+    // Closing a pinned tab unloads it instead (Arc behavior): it stays in
+    // the sidebar and reloads its URL when next opened.
+    let Some(pinned) = browser.with(|s| s.tab(id).map(|t| t.pinned)) else {
+        return Ok(());
+    };
     let Some((kind, was_active, next)) = browser.with(|s| {
         let index = s.tabs.iter().position(|t| t.id == id)?;
-        let tab = s.tabs.remove(index);
-        s.closed.push(match tab.kind {
-            TabKind::Web => ClosedTab::Web(tab.url),
-            TabKind::Terminal => ClosedTab::Terminal,
-        });
-        if s.closed.len() > MAX_CLOSED_TABS {
-            s.closed.remove(0);
-        }
         let was_active = s.active == Some(id);
         if was_active {
             s.active = None;
         }
+        let tab = if pinned {
+            s.tabs[index].clone()
+        } else {
+            let tab = s.tabs.remove(index);
+            s.closed.push(match tab.kind {
+                TabKind::Web => ClosedTab::Web(tab.url.clone()),
+                TabKind::Terminal => ClosedTab::Terminal,
+            });
+            if s.closed.len() > MAX_CLOSED_TABS {
+                s.closed.remove(0);
+            }
+            tab
+        };
         // Prefer the tab that slid into this slot, else the one above it.
-        let next = s.tabs.get(index).or_else(|| s.tabs.last()).map(|t| t.id);
+        let next = s
+            .tabs
+            .iter()
+            .skip(index)
+            .chain(s.tabs.iter().take(index).rev())
+            .find(|t| t.id != id)
+            .map(|t| t.id);
         Some((tab.kind, was_active, next))
     }) else {
         return Ok(());
     };
 
-    // `activate` hides the previously active view, but this tab is already
-    // gone from state, so its view is handled here.
+    // `activate` hides the previously active view, but this tab is no longer
+    // active, so its view is handled here.
     let next = next.filter(|_| was_active);
     if let Some(next) = next {
         activate(app, next)?;
     }
     match kind {
         TabKind::Web => {
-            if let Some(webview) = app.get_webview(&tab_label(id)) {
+            if pinned {
+                unload_tab(app, id)?;
+                emit_state(app);
+            } else if let Some(webview) = app.get_webview(&tab_label(id)) {
                 #[cfg(target_os = "macos")]
                 crate::native::unobserve(&webview, id);
                 webview.close()?;
@@ -531,6 +619,52 @@ pub fn reopen_closed_tab(app: &AppHandle) -> tauri::Result<()> {
         },
         Some(ClosedTab::Terminal) => open_terminal(app).map(|_| ()),
         None => Ok(()),
+    }
+}
+
+pub fn duplicate_tab(app: &AppHandle, id: u32) -> tauri::Result<()> {
+    match tab_info(app, id) {
+        Some((TabKind::Web, _, url)) => match Url::parse(&url) {
+            Ok(url) => open_tab(app, url).map(|_| ()),
+            Err(_) => Ok(()),
+        },
+        Some((TabKind::Terminal, ..)) => open_terminal(app).map(|_| ()),
+        None => Ok(()),
+    }
+}
+
+/// Pin moves a web tab to the end of the pinned group; unpin moves it to the
+/// top of the regular list.
+pub fn set_pinned(app: &AppHandle, id: u32, pinned: bool) {
+    let changed = app.state::<Browser>().with(|s| {
+        let index = s.tabs.iter().position(|t| t.id == id && t.kind == TabKind::Web)?;
+        if s.tabs[index].pinned == pinned {
+            return None;
+        }
+        let mut tab = s.tabs.remove(index);
+        tab.pinned = pinned;
+        let at = s.pinned_count();
+        s.tabs.insert(at, tab);
+        Some(())
+    });
+    if changed.is_some() {
+        emit_state(app);
+    }
+}
+
+/// Move a tab to `index`, kept within its group (pinned or not).
+fn move_to(app: &AppHandle, id: u32, index: usize) {
+    let moved = app.state::<Browser>().with(|s| {
+        let from = s.tabs.iter().position(|t| t.id == id)?;
+        let tab = s.tabs.remove(from);
+        let pinned = s.pinned_count();
+        let range = if tab.pinned { 0..=pinned } else { pinned..=s.tabs.len() };
+        let to = index.clamp(*range.start(), *range.end());
+        s.tabs.insert(to, tab);
+        Some(from != to)
+    });
+    if moved == Some(true) {
+        emit_state(app);
     }
 }
 
@@ -588,6 +722,77 @@ pub fn forward_active(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+pub fn toggle_sidebar(app: &AppHandle) -> tauri::Result<()> {
+    let collapsed = app.state::<Browser>().with(|s| {
+        s.sidebar_collapsed = !s.sidebar_collapsed;
+        s.sidebar_collapsed
+    });
+    layout_tabs(app)?;
+    // With the sidebar gone, the traffic lights would sit on top of the page.
+    #[cfg(target_os = "macos")]
+    crate::native::set_traffic_lights_hidden(&main_window(app)?, collapsed);
+    #[cfg(not(target_os = "macos"))]
+    let _ = collapsed;
+    emit_state(app);
+    Ok(())
+}
+
+// --- Session -------------------------------------------------------------
+
+pub fn session(app: &AppHandle) -> Session {
+    app.state::<Browser>().with(|s| Session {
+        tabs: s
+            .tabs
+            .iter()
+            .map(|t| SavedTab {
+                kind: t.kind,
+                url: t.url.clone(),
+                title: t.title.clone(),
+                pinned: t.pinned,
+            })
+            .collect(),
+        active: s.active.and_then(|id| s.tabs.iter().position(|t| t.id == id)),
+        sidebar_width: s.sidebar_width,
+        sidebar_collapsed: s.sidebar_collapsed,
+    })
+}
+
+/// Recreate saved tabs, unloaded, then show the active one. Must not be
+/// called from the main thread.
+pub fn restore(app: &AppHandle, saved: Session) -> tauri::Result<()> {
+    let browser = app.state::<Browser>();
+    let active = browser.with(|s| {
+        s.sidebar_width = saved.sidebar_width.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+        s.sidebar_collapsed = saved.sidebar_collapsed;
+        let mut tabs: Vec<Tab> = saved
+            .tabs
+            .into_iter()
+            .map(|t| {
+                let mut tab = Tab::new(browser.next_id(), t.kind, t.url, t.title);
+                tab.pinned = t.pinned && t.kind == TabKind::Web;
+                tab
+            })
+            .collect();
+        // Keep the pinned-first invariant even if the file was edited by hand.
+        tabs.sort_by_key(|t| !t.pinned);
+        let active = saved.active.and_then(|i| tabs.get(i)).map(|t| t.id);
+        s.tabs = tabs;
+        active.or_else(|| s.tabs.first().map(|t| t.id))
+    });
+    layout_tabs(app)?;
+    #[cfg(target_os = "macos")]
+    if saved.sidebar_collapsed {
+        crate::native::set_traffic_lights_hidden(&main_window(app)?, true);
+    }
+    match active {
+        Some(id) => activate(app, id),
+        None => {
+            emit_state(app);
+            Ok(())
+        }
+    }
+}
+
 fn parse_url(url: &str) -> Result<Url, String> {
     Url::parse(url).map_err(|e| format!("invalid url {url:?}: {e}"))
 }
@@ -617,6 +822,16 @@ pub async fn close_tab(app: AppHandle, id: u32) -> Result<(), String> {
 #[tauri::command]
 pub async fn activate_tab(app: AppHandle, id: u32) -> Result<(), String> {
     activate(&app, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn move_tab(app: AppHandle, id: u32, index: usize) {
+    move_to(&app, id, index);
+}
+
+#[tauri::command]
+pub async fn pin_tab(app: AppHandle, id: u32, pinned: bool) {
+    set_pinned(&app, id, pinned);
 }
 
 /// Terminals set their title from the shell (OSC 0/2 escape sequences).
@@ -653,16 +868,12 @@ pub async fn reload(app: AppHandle) -> Result<(), String> {
     reload_active(&app).map_err(|e| e.to_string())
 }
 
-/// Called continuously while the user drags the sidebar edge. A width of 0
-/// collapses the sidebar.
+/// Called continuously while the user drags the sidebar edge.
 #[tauri::command]
 pub async fn set_sidebar_width(app: AppHandle, width: f64) -> Result<f64, String> {
-    let width = if width <= 0.0 {
-        0.0
-    } else {
-        width.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH)
-    };
+    let width = width.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
     app.state::<Browser>().with(|s| s.sidebar_width = width);
     layout_tabs(&app).map_err(|e| e.to_string())?;
+    session::schedule_save(&app);
     Ok(width)
 }
