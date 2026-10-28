@@ -29,6 +29,10 @@
       browserState = await browser.getState();
       sidebarWidth = await browser.setSidebarWidth(savedWidth());
       if (browserState.tabs.length === 0) omnibox?.begin(true);
+      if (import.meta.env.DEV) {
+        const { installTestHooks } = await import("./lib/debug");
+        installTestHooks(() => browserState);
+      }
     })();
     return () => unlisten.forEach((p) => p.then((off) => off()));
   });
@@ -97,10 +101,10 @@
   <aside class="sidebar">
     <header class="titlebar" data-tauri-drag-region>
       <div class="nav">
-        <button class="icon" aria-label="Back" onclick={browser.goBack} disabled={!activeTab}>
+        <button class="icon" aria-label="Back" onclick={browser.goBack} disabled={!activeTab?.canGoBack}>
           <svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" /></svg>
         </button>
-        <button class="icon" aria-label="Forward" onclick={browser.goForward} disabled={!activeTab}>
+        <button class="icon" aria-label="Forward" onclick={browser.goForward} disabled={!activeTab?.canGoForward}>
           <svg viewBox="0 0 16 16"><path d="m6 3 5 5-5 5" /></svg>
         </button>
         <button class="icon" aria-label="Reload" onclick={browser.reload} disabled={!activeTab}>

@@ -5,19 +5,22 @@
 //! area. Rust owns the layout so page webviews never wait on the UI to resize.
 //!
 //! Locking rule: never hold `Browser::state` across a webview call. Webview
-//! calls block on the main thread, and main-thread callbacks (page load,
-//! title change) take the lock, so holding it would deadlock.
+//! calls block on the main thread, and main-thread callbacks (navigation
+//! state changes) take the lock, so holding it would deadlock.
 
-use std::sync::{
-    Mutex,
-    atomic::{AtomicU32, Ordering},
+use std::{
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicU32, Ordering},
+    },
+    time::Duration,
 };
 
 use serde::Serialize;
 use tauri::{
     AppHandle, Emitter, EventTarget, LogicalPosition, LogicalSize, Manager, Rect, Url, Webview,
-    WebviewUrl, Window,
-    webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder},
+    WebviewUrl, WebviewWindowBuilder, Window,
+    webview::{NewWindowFeatures, NewWindowResponse, WebviewBuilder},
     window::WindowBuilder,
 };
 
@@ -25,12 +28,13 @@ pub const MAIN_WINDOW: &str = "main";
 pub const UI_WEBVIEW: &str = "ui";
 
 /// Gap between the content card and the window edges, in logical px.
-/// Mirrored in `src/lib/browser.ts`.
+/// Mirrored in `src/app.css`.
 const INSET: f64 = 8.0;
 const CONTENT_RADIUS: f64 = 10.0;
 const DEFAULT_SIDEBAR_WIDTH: f64 = 240.0;
 const MIN_SIDEBAR_WIDTH: f64 = 180.0;
 const MAX_SIDEBAR_WIDTH: f64 = 480.0;
+const MAX_CLOSED_TABS: usize = 25;
 
 /// WKWebView's default UA omits the Safari version token, which makes some
 /// sites (Google, notably) serve degraded pages.
@@ -44,6 +48,8 @@ pub struct Tab {
     url: String,
     title: String,
     loading: bool,
+    can_go_back: bool,
+    can_go_forward: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -52,15 +58,27 @@ pub struct Snapshot {
     active: Option<u32>,
 }
 
+/// Navigation state read from a native webview.
+pub struct NativeState {
+    pub url: Option<String>,
+    pub title: String,
+    pub loading: bool,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+}
+
 struct State {
     tabs: Vec<Tab>,
     active: Option<u32>,
     sidebar_width: f64,
+    /// URLs of recently closed tabs, most recent last.
+    closed: Vec<String>,
 }
 
 pub struct Browser {
     state: Mutex<State>,
     next_id: AtomicU32,
+    emit_pending: AtomicBool,
 }
 
 impl Default for Browser {
@@ -70,8 +88,10 @@ impl Default for Browser {
                 tabs: Vec::new(),
                 active: None,
                 sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+                closed: Vec::new(),
             }),
             next_id: AtomicU32::new(1),
+            emit_pending: AtomicBool::new(false),
         }
     }
 }
@@ -111,9 +131,41 @@ fn active_webview(app: &AppHandle) -> Option<Webview> {
     tab_webview(app, id)
 }
 
+/// Push the full tab state to the UI. Used directly after user actions so the
+/// sidebar reacts in the same frame.
 fn emit_state(app: &AppHandle) {
     let snapshot = app.state::<Browser>().snapshot();
     let _ = app.emit_to(EventTarget::webview(UI_WEBVIEW), "browser:state", snapshot);
+}
+
+/// Coalesce bursts of page-driven changes (a navigation fires URL, title,
+/// loading and history updates back to back) into one emit per frame.
+fn schedule_emit(app: &AppHandle) {
+    if app.state::<Browser>().emit_pending.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(16));
+        app.state::<Browser>().emit_pending.store(false, Ordering::Release);
+        emit_state(&app);
+    });
+}
+
+/// Called on the main thread whenever a tab's native navigation state changes.
+pub fn on_native_change(app: &AppHandle, id: u32, native: NativeState) {
+    let changed = app.state::<Browser>().update_tab(id, |t| {
+        if let Some(url) = native.url {
+            t.url = url;
+        }
+        t.title = native.title;
+        t.loading = native.loading;
+        t.can_go_back = native.can_go_back;
+        t.can_go_forward = native.can_go_forward;
+    });
+    if changed {
+        schedule_emit(app);
+    }
 }
 
 fn content_bounds(window: &Window, sidebar_width: f64) -> tauri::Result<Rect> {
@@ -194,6 +246,44 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Handle `window.open()` / `target=_blank`. Scripted popups that ask for a
+/// size (OAuth sign-in, payment flows) get a real window that shares the
+/// opener's configuration, so `window.opener` messaging works. Everything
+/// else opens as a tab.
+fn on_new_window(app: &AppHandle, url: Url, features: NewWindowFeatures) -> NewWindowResponse<tauri::Wry> {
+    if features.size().is_some() {
+        match open_popup(app, &url, features) {
+            Ok(window) => return NewWindowResponse::Create { window },
+            Err(err) => eprintln!("failed to open popup for {url}: {err}"),
+        }
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let _ = open_tab(&app, url);
+    });
+    NewWindowResponse::Deny
+}
+
+fn open_popup(
+    app: &AppHandle,
+    url: &Url,
+    features: NewWindowFeatures,
+) -> tauri::Result<tauri::WebviewWindow> {
+    static NEXT_POPUP: AtomicU32 = AtomicU32::new(1);
+    let label = format!("popup-{}", NEXT_POPUP.fetch_add(1, Ordering::Relaxed));
+    let popup_app = app.clone();
+    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External("about:blank".parse().unwrap()))
+        .window_features(features)
+        .title(url.host_str().unwrap_or("moove"))
+        .on_document_title_changed(|window, title| {
+            let _ = window.set_title(&title);
+        })
+        .on_new_window(move |url, features| on_new_window(&popup_app, url, features));
+    #[cfg(target_os = "macos")]
+    let builder = builder.user_agent(USER_AGENT);
+    builder.build()
+}
+
 /// Must not be called from the main thread (it blocks on it).
 pub fn open_tab(app: &AppHandle, url: Url) -> tauri::Result<u32> {
     let browser = app.state::<Browser>();
@@ -208,51 +298,40 @@ pub fn open_tab(app: &AppHandle, url: Url) -> tauri::Result<u32> {
             url: url.to_string(),
             title: String::new(),
             loading: true,
+            can_go_back: false,
+            can_go_forward: false,
         })
     });
 
     let popup_app = app.clone();
     let builder = WebviewBuilder::new(tab_label(id), WebviewUrl::External(url))
         .zoom_hotkeys_enabled(true)
+        .on_new_window(move |url, features| on_new_window(&popup_app, url, features));
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.user_agent(USER_AGENT);
+
+    // macOS reads navigation state via KVO (see `native::observe`); elsewhere
+    // fall back to load/title callbacks.
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder
         .on_page_load(move |webview, payload| {
+            let loading = matches!(payload.event(), tauri::webview::PageLoadEvent::Started);
             let url = payload.url().to_string();
-            let loading = matches!(payload.event(), PageLoadEvent::Started);
             let app = webview.app_handle();
             if app.state::<Browser>().update_tab(id, |t| {
                 t.url = url;
                 t.loading = loading;
             }) {
-                emit_state(app);
+                schedule_emit(app);
             }
         })
         .on_document_title_changed(move |webview, title| {
-            let app = webview.app_handle().clone();
-            // Title changes are the cheapest signal that an SPA route changed,
-            // so refresh the URL too. `url()` blocks on the main thread, which
-            // is where we are, so read it from a worker.
-            tauri::async_runtime::spawn(async move {
-                let url = webview.url().ok().map(|u| u.to_string());
-                if app.state::<Browser>().update_tab(id, |t| {
-                    t.title = title;
-                    if let Some(url) = url {
-                        t.url = url;
-                    }
-                }) {
-                    emit_state(&app);
-                }
-            });
-        })
-        // target=_blank and window.open() open as a new tab.
-        .on_new_window(move |url, _features| {
-            let app = popup_app.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = open_tab(&app, url);
-            });
-            NewWindowResponse::Deny
+            let app = webview.app_handle();
+            if app.state::<Browser>().update_tab(id, |t| t.title = title) {
+                schedule_emit(app);
+            }
         });
-
-    #[cfg(target_os = "macos")]
-    let builder = builder.user_agent(USER_AGENT);
 
     let webview = match window.add_child(builder, bounds.position, bounds.size) {
         Ok(webview) => webview,
@@ -263,7 +342,10 @@ pub fn open_tab(app: &AppHandle, url: Url) -> tauri::Result<u32> {
     };
 
     #[cfg(target_os = "macos")]
-    crate::native::style_content(&webview, CONTENT_RADIUS);
+    {
+        crate::native::style_content(&webview, CONTENT_RADIUS);
+        crate::native::observe(&webview, id, app.clone());
+    }
 
     activate(app, id)?;
     Ok(id)
@@ -299,7 +381,11 @@ fn close(app: &AppHandle, id: u32) -> tauri::Result<()> {
     let browser = app.state::<Browser>();
     let next = browser.with(|s| {
         let index = s.tabs.iter().position(|t| t.id == id)?;
-        s.tabs.remove(index);
+        let tab = s.tabs.remove(index);
+        s.closed.push(tab.url);
+        if s.closed.len() > MAX_CLOSED_TABS {
+            s.closed.remove(0);
+        }
         if s.active != Some(id) {
             return Some(None);
         }
@@ -314,6 +400,8 @@ fn close(app: &AppHandle, id: u32) -> tauri::Result<()> {
         activate(app, next)?;
     }
     if let Some(webview) = tab_webview(app, id) {
+        #[cfg(target_os = "macos")]
+        crate::native::unobserve(&webview, id);
         webview.close()?;
     }
     if next.is_none() {
@@ -329,6 +417,45 @@ pub fn close_active_tab(app: &AppHandle) -> tauri::Result<()> {
     }
 }
 
+pub fn reopen_closed_tab(app: &AppHandle) -> tauri::Result<()> {
+    let Some(url) = app.state::<Browser>().with(|s| s.closed.pop()) else {
+        return Ok(());
+    };
+    match Url::parse(&url) {
+        Ok(url) => open_tab(app, url).map(|_| ()),
+        Err(_) => Ok(()),
+    }
+}
+
+/// Activate the tab `delta` positions away from the active one, wrapping.
+pub fn cycle_tab(app: &AppHandle, delta: isize) -> tauri::Result<()> {
+    let target = app.state::<Browser>().with(|s| {
+        let len = s.tabs.len() as isize;
+        let current = s.tabs.iter().position(|t| Some(t.id) == s.active)? as isize;
+        Some(s.tabs[(current + delta).rem_euclid(len) as usize].id)
+    });
+    match target {
+        Some(id) => activate(app, id),
+        None => Ok(()),
+    }
+}
+
+/// ⌘1–⌘8 select by position; ⌘9 always selects the last tab.
+pub fn select_tab_number(app: &AppHandle, number: usize) -> tauri::Result<()> {
+    let target = app.state::<Browser>().with(|s| {
+        let tab = if number == 9 {
+            s.tabs.last()
+        } else {
+            s.tabs.get(number.checked_sub(1)?)
+        };
+        tab.map(|t| t.id)
+    });
+    match target {
+        Some(id) => activate(app, id),
+        None => Ok(()),
+    }
+}
+
 pub fn reload_active(app: &AppHandle) -> tauri::Result<()> {
     match active_webview(app) {
         Some(webview) => webview.reload(),
@@ -336,11 +463,22 @@ pub fn reload_active(app: &AppHandle) -> tauri::Result<()> {
     }
 }
 
-pub fn eval_active(app: &AppHandle, js: &str) -> tauri::Result<()> {
-    match active_webview(app) {
-        Some(webview) => webview.eval(js),
-        None => Ok(()),
-    }
+pub fn back_active(app: &AppHandle) -> tauri::Result<()> {
+    let Some(webview) = active_webview(app) else { return Ok(()) };
+    #[cfg(target_os = "macos")]
+    crate::native::go_back(&webview);
+    #[cfg(not(target_os = "macos"))]
+    webview.eval("history.back()")?;
+    Ok(())
+}
+
+pub fn forward_active(app: &AppHandle) -> tauri::Result<()> {
+    let Some(webview) = active_webview(app) else { return Ok(()) };
+    #[cfg(target_os = "macos")]
+    crate::native::go_forward(&webview);
+    #[cfg(not(target_os = "macos"))]
+    webview.eval("history.forward()")?;
+    Ok(())
 }
 
 /// Move keyboard focus to the sidebar's address field.
@@ -390,12 +528,12 @@ pub async fn navigate(app: AppHandle, url: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn go_back(app: AppHandle) -> Result<(), String> {
-    eval_active(&app, "history.back()").map_err(|e| e.to_string())
+    back_active(&app).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn go_forward(app: AppHandle) -> Result<(), String> {
-    eval_active(&app, "history.forward()").map_err(|e| e.to_string())
+    forward_active(&app).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

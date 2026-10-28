@@ -1,4 +1,6 @@
 mod browser;
+#[cfg(all(debug_assertions, target_os = "macos"))]
+mod debug;
 mod menu;
 #[cfg(target_os = "macos")]
 mod native;
@@ -40,6 +42,24 @@ pub fn run() {
             browser::go_forward,
             browser::reload,
             browser::set_sidebar_width,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_ready,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_log,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_eval,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_resize,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_screenshot,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_allow_popups,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_windows,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_menu,
+            debug::debug_quit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,0 +1,6 @@
+<!doctype html><title>Opener</title><body style="font:20px system-ui;padding:40px"><h1 id="h">Opener</h1>
+<script>
+  window.addEventListener("message", (e) => { document.title = "got:" + e.data; });
+  window.openPopup = () => window.open("/child.html", "auth", "width=420,height=520");
+  window.openTab = () => window.open("/page2.html", "_blank");
+</script></body>

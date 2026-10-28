@@ -1,0 +1,97 @@
+//! Debug-build-only test harness.
+//!
+//! `MOOVE_TEST=path/to/script.js` runs the script inside the UI webview once
+//! it has mounted. The script drives the app through the same commands the UI
+//! uses (`window.__moove`, see src/lib/debug.ts) plus the helpers here.
+
+use std::process::Command;
+
+use tauri::{AppHandle, LogicalSize, Manager};
+
+use crate::browser::{MAIN_WINDOW, UI_WEBVIEW};
+
+/// Called by the UI on mount; evaluates the test script if one was given.
+#[tauri::command]
+pub async fn debug_ready(app: AppHandle) -> Result<(), String> {
+    let Ok(path) = std::env::var("MOOVE_TEST") else {
+        return Ok(());
+    };
+    let script = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
+    let ui = app.get_webview(UI_WEBVIEW).ok_or("no ui webview")?;
+    ui.eval(format!(
+        "(async () => {{ const t = window.__moove; try {{ {script}\n }} catch (e) {{ await t.log('FAIL ' + (e?.stack ?? e)); }} finally {{ await t.log('TEST DONE'); }} }})()"
+    ))
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn debug_log(message: String) {
+    println!("[test] {message}");
+}
+
+/// Evaluate JS in another webview (palette, terminal, a tab).
+#[tauri::command]
+pub async fn debug_eval(app: AppHandle, label: String, js: String) -> Result<(), String> {
+    app.get_webview(&label)
+        .ok_or_else(|| format!("no webview {label}"))?
+        .eval(js)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn debug_resize(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
+    app.get_window(MAIN_WINDOW)
+        .ok_or("no window")?
+        .set_size(LogicalSize::new(width, height))
+        .map_err(|e| e.to_string())
+}
+
+/// Capture just the main window to `$MOOVE_SHOTS/<name>.png`.
+#[tauri::command]
+pub async fn debug_screenshot(app: AppHandle, name: String) -> Result<String, String> {
+    let window = app.get_window(MAIN_WINDOW).ok_or("no window")?;
+    let ns_window = window.ns_window().map_err(|e| e.to_string())? as *const objc2::runtime::AnyObject;
+    let number: isize = unsafe { objc2::msg_send![&*ns_window, windowNumber] };
+    let dir = std::env::var("MOOVE_SHOTS").unwrap_or_else(|_| std::env::temp_dir().display().to_string());
+    let path = format!("{dir}/{name}.png");
+    let status = Command::new("screencapture")
+        .args(["-x", "-o", "-l", &number.to_string(), &path])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err(format!("screencapture exited with {status}"));
+    }
+    Ok(path)
+}
+
+/// Let scripts open windows without a user gesture, so tests can exercise
+/// the popup path (WebKit blocks gesture-less `window.open` by default).
+#[tauri::command]
+pub async fn debug_allow_popups(app: AppHandle, label: String) -> Result<(), String> {
+    let webview = app.get_webview(&label).ok_or_else(|| format!("no webview {label}"))?;
+    webview
+        .with_webview(|platform| unsafe {
+            let view = &*(platform.inner() as *const objc2::runtime::AnyObject);
+            let config: *mut objc2::runtime::AnyObject = objc2::msg_send![view, configuration];
+            let prefs: *mut objc2::runtime::AnyObject = objc2::msg_send![&*config, preferences];
+            let _: () = objc2::msg_send![&*prefs, setJavaScriptCanOpenWindowsAutomatically: true];
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// Labels of all open windows, to verify popups.
+#[tauri::command]
+pub fn debug_windows(app: AppHandle) -> Vec<String> {
+    app.webview_windows().into_keys().collect()
+}
+
+#[tauri::command]
+pub fn debug_quit(app: AppHandle) {
+    app.exit(0);
+}
+
+/// Trigger a menu action by id, as if its shortcut were pressed.
+#[tauri::command]
+pub fn debug_menu(app: AppHandle, id: String) {
+    crate::menu::run_action(&app, id);
+}

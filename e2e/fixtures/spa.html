@@ -1,0 +1,5 @@
+<!doctype html><title>SPA</title><body style="font:20px system-ui;padding:40px"><h1 id="h">SPA</h1>
+<script>
+  // Route change via pushState with an unchanged title.
+  window.go = (p) => { history.pushState({}, "", p); document.getElementById("h").textContent = p; };
+</script></body>
