@@ -26,9 +26,31 @@ pub async fn debug_ready(app: AppHandle) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+/// Test settings can arrive as `--ternt-test-env=<file>` (lines of
+/// `KEY=VALUE`) instead of the environment: relaunching after an update goes
+/// through LaunchServices, which keeps arguments but not the environment.
+pub fn load_env_from_args() {
+    let Some(path) = std::env::args().find_map(|a| a.strip_prefix("--ternt-test-env=").map(String::from)) else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    for (key, value) in text.lines().filter_map(|line| line.split_once('=')) {
+        // SAFETY: called first thing in `run`, before any other thread exists.
+        unsafe { std::env::set_var(key.trim(), value.trim()) };
+    }
+}
+
+/// Prints `[test] …`, and appends it to `$TERNT_TEST_LOG` if set (a relaunched
+/// app's stdout goes nowhere).
 #[tauri::command]
 pub fn debug_log(message: String) {
     println!("[test] {message}");
+    if let Some(path) = std::env::var_os("TERNT_TEST_LOG") {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(file, "[test] {message}");
+        }
+    }
 }
 
 /// Evaluate JS in another webview (palette, terminal, a tab).

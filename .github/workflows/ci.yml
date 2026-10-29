@@ -1,0 +1,24 @@
+# Fast checks on every push and pull request: TypeScript and Rust unit tests,
+# type check, clippy. (The end-to-end suites need a desktop session; run them
+# locally with e2e/run.sh and e2e/update.sh.)
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: bun install --frozen-lockfile
+      - run: bun run test:unit

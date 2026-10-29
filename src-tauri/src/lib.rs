@@ -9,21 +9,27 @@ mod native;
 mod palette;
 mod pty;
 mod session;
+mod updater;
 
 use browser::Browser;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    debug::load_env_from_args();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Browser::default())
         .manage(palette::Palette::default())
         .manage(pty::Terminals::default())
         .manage(history::Store::default())
+        .manage(updater::Updates::default())
         .setup(|app| {
             browser::create_main_window(app.handle())?;
             app.set_menu(menu::build(app.handle())?)?;
             history::load(app.handle());
+            updater::start(app.handle());
 
             // Restore the last session, then open any `ternt <url>...` args.
             let saved = session::load(app.handle());
@@ -85,6 +91,10 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_ack,
             history::history_search,
+            updater::update_status,
+            updater::check_for_updates,
+            updater::install_update,
+            updater::app_version,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_ready,
             #[cfg(all(debug_assertions, target_os = "macos"))]

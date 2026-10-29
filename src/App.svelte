@@ -4,6 +4,7 @@
   import Omnibox from "./lib/Omnibox.svelte";
   import TabIcon from "./lib/TabIcon.svelte";
   import TabRow from "./lib/TabRow.svelte";
+  import UpdateButton from "./lib/UpdateButton.svelte";
   import {
     browser,
     hostOf,
@@ -94,7 +95,8 @@
       // Subscribe before reading state, so no update can fall in between.
       await Promise.all(unlisten);
       applyState(await browser.getState());
-      if (import.meta.env.DEV) {
+      // Test hooks: dev builds, and bundles built for the update test (e2e/update.sh).
+      if (import.meta.env.DEV || import.meta.env.VITE_TERNT_TEST) {
         const { installTestHooks } = await import("./lib/debug");
         installTestHooks(() => browserState);
       }
@@ -524,6 +526,7 @@
       {/if}
 
       <footer class="spaces">
+        <div class="update-slot"><UpdateButton /></div>
         {#each browserState.spaces as s (s.id)}
           <button
             class="space-dot"
@@ -885,8 +888,15 @@
     margin-left: -2px;
   }
 
+  /* The update button sits bottom left, the space switcher centered. */
+  .update-slot {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+  }
   .spaces {
     display: flex;
+    position: relative;
     align-items: center;
     justify-content: center;
     gap: 10px;

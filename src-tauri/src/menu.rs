@@ -19,6 +19,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         true,
         &[
             &PredefinedMenuItem::about(app, None, None)?,
+            &MenuItem::with_id(app, "check-updates", "Check for Updates…", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::hide(app, None)?,
             &PredefinedMenuItem::hide_others(app, None)?,
@@ -132,6 +133,12 @@ pub fn run_action(app: &AppHandle, id: String) {
             "forward" => browser::forward_active(&app),
             "reopen-tab" => browser::reopen_closed_tab(&app),
             "clear-today" => browser::clear_today(&app),
+            "check-updates" => {
+                if let Err(err) = crate::updater::check(&app, true).await {
+                    eprintln!("update check failed: {err}");
+                }
+                Ok(())
+            }
             "clear-history" => {
                 crate::history::clear(&app, browser::active_profile(&app).as_deref());
                 Ok(())

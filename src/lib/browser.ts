@@ -53,6 +53,15 @@ export interface HistoryHit {
   title: string;
 }
 
+/** Self-update state (see src-tauri/src/updater.rs). */
+export type UpdateStatus =
+  | { state: "idle" }
+  | { state: "upToDate" }
+  | { state: "available"; version: string }
+  | { state: "downloading"; version: string; progress: number | null }
+  | { state: "installing"; version: string }
+  | { state: "failed"; message: string };
+
 export type PaletteMode = "newTab" | "edit";
 
 export interface PaletteRequest {
@@ -110,6 +119,12 @@ export const browser = {
     listen<BrowserState>("browser:state", (e) => cb(e.payload)),
   onPaletteOpen: (cb: (request: PaletteRequest) => void): Promise<UnlistenFn> =>
     listen<PaletteRequest>("palette:open", (e) => cb(e.payload)),
+  updateStatus: () => invoke<UpdateStatus>("update_status"),
+  /** Download, install and relaunch. */
+  installUpdate: () => invoke("install_update"),
+  checkForUpdates: () => invoke("check_for_updates"),
+  onUpdate: (cb: (status: UpdateStatus) => void): Promise<UnlistenFn> =>
+    listen<UpdateStatus>("update:status", (e) => cb(e.payload)),
   /** Explore mode (⌘F) started or ended. */
   onExplore: (cb: (on: boolean) => void): Promise<UnlistenFn> => listen<boolean>("browser:explore", (e) => cb(e.payload)),
   /** Rust asks the sidebar to start inline-renaming a space or folder. */

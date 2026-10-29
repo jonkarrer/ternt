@@ -11,6 +11,7 @@
     "test": "bun run test:unit && bun run test:e2e",
     "test:unit": "bun test src && bun run check && cd src-tauri && cargo test --lib -q && cargo clippy -q --all-targets -- -D warnings",
     "test:e2e": "e2e/run.sh",
+    "test:update": "e2e/update.sh",
     "tauri": "tauri"
   },
   "dependencies": {
