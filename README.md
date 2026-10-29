@@ -91,7 +91,7 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
 
 ```sh
 just release 0.2.0         # bump the version everywhere, commit, tag v0.2.0
-just publish               # on the signing Mac: build, sign, notarize, push, publish
+just upload                # on the signing Mac: build, sign, notarize, push, publish
 ```
 
 Releases are built on a Mac with an Apple Developer ID, signed and notarized, and published to

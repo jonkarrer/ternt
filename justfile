@@ -42,10 +42,10 @@ test-update:
 release version:
     scripts/release.sh {{version}}
 
-# Build and verify the tagged release without Apple signing or upload
-publish-dry-run:
-    doppler run -- scripts/publish.sh --dry-run
-
-# Build, sign, notarize and publish the tagged release to GitHub Releases
-publish:
+# Build, sign, notarize and upload the tagged release to GitHub Releases
+upload:
     doppler run -- scripts/publish.sh
+
+# Build and verify the tagged release without Apple signing or upload
+upload-dry-run:
+    doppler run -- scripts/publish.sh --dry-run

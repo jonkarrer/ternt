@@ -6,10 +6,10 @@ update manifest; installed copies update themselves (see `src-tauri/src/updater.
 
 ```sh
 just release 0.2.0   # bump the version, commit, tag v0.2.0 (any machine)
-just publish         # on the signing Mac: build, sign, notarize, push, publish
+just upload          # on the signing Mac: build, sign, notarize, push, publish
 ```
 
-Both run from `nix develop` (Bun, just, doppler). `just publish` runs `scripts/publish.sh`
+Both run from `nix develop` (Bun, just, doppler). `just upload` runs `scripts/publish.sh`
 under `doppler run --`, so the release secrets in the `ternt` Doppler project (`dev` config,
 bound by `doppler setup --no-interactive`) reach the script as environment variables:
 
@@ -17,8 +17,7 @@ bound by `doppler setup --no-interactive`) reach the script as environment varia
 | -------------------------------------- | -------------------------------------------------- | ----------------------------------------- |
 | `TAURI_SIGNING_PRIVATE_KEY` (+`_PASSWORD`) | signs the update archive                        | `~/.tauri/ternt.key` (+`.password`)       |
 | `GITHUB_ACCESS_TOKEN`                  | creates the release, uploads files                 | keychain item `ternt-github`              |
-| `APPLE_ID`                             | Apple developer account email, for notarization    | none: required                            |
-| `APPLE_PASSWORD`                       | app-specific password, for notarization            | keychain item `ternt-notary`              |
+| `APPLE_CLI_UPLOAD_KEY_ID` + `_ISSUER_ID` | App Store Connect API key for notarization (same key as bernt/lernt; the `.p8` is in `~/devjon/ids`) | none: required |
 
 Add one with `doppler secrets set NAME` (it prompts, so the value stays out of shell history).
 
@@ -71,22 +70,12 @@ Add one with `doppler secrets set NAME` (it prompts, so the value stays out of s
    security find-identity -v -p codesigning   # should list "Developer ID Application: …"
    ```
 
-4. **Notarization password.** Create an app-specific password at
-   [account.apple.com](https://account.apple.com) → Sign-In and Security → App-Specific Passwords,
-   then store it in the keychain (it prompts for the password, so it stays out of shell history):
-
-   ```sh
-   security add-generic-password -s ternt-notary -a "you@example.com" -w
-   ```
-
-   and set your Apple ID for the scripts, e.g. in `~/.zshrc`:
-
-   ```sh
-   export APPLE_ID="you@example.com"
-   ```
+4. **Notarization key.** The App Store Connect API key bernt and lernt upload with:
+   `~/devjon/ids/AuthKey_<key id>.p8` on disk, key id and issuer id in Doppler
+   (`APPLE_CLI_UPLOAD_KEY_ID`, `APPLE_CLI_UPLOAD_ISSUER_ID`). No Apple ID password is involved.
 
 5. **Updater signing key.** It is in Doppler (`TAURI_SIGNING_PRIVATE_KEY` and its password), so
-   `just publish` and `just test-update` need nothing else. Without Doppler, put the key in
+   `just upload` and `just test-update` need nothing else. Without Doppler, put the key in
    `~/.tauri/ternt.key` and `~/.tauri/ternt.key.password` with `chmod 600`. This key signs
    every update; installed copies only accept updates signed with it. **Never commit it**:
    losing it means existing installs can't update.
@@ -95,7 +84,7 @@ Add one with `doppler secrets set NAME` (it prompts, so the value stays out of s
 
    ```sh
    git tag v$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"([0-9.]+)".*/\1/')
-   just publish-dry-run           # builds and verifies, skips Apple signing and the upload
+   just upload-dry-run            # builds and verifies, skips Apple signing and the upload
    git tag -d v0.1.0              # (or whichever version it printed)
    ```
 
@@ -105,7 +94,7 @@ Add one with `doppler secrets set NAME` (it prompts, so the value stays out of s
    (e.g. `0.2.0`). It bumps the version in `tauri.conf.json`, `package.json` and `Cargo.toml`,
    commits and tags. For the very first release the version is already `0.1.0`: just
    `git tag -a v0.1.0 -m "Ternt 0.1.0"`.
-2. `just publish`. It checks the setup, builds a universal app, signs and notarizes it
+2. `just upload`. It checks the setup, builds a universal app, signs and notarizes it
    (a few minutes, waiting on Apple), verifies the signature and Gatekeeper assessment, signs the
    update archive, writes `latest.json`, pushes `main` and the tag, and creates the GitHub Release (a draft until every file is
    uploaded, so installed copies never see a half-published update)
@@ -118,7 +107,7 @@ Add one with `doppler secrets set NAME` (it prompts, so the value stays out of s
    an **Update** button at the bottom left of the sidebar.
 
 If something fails halfway, nothing is published until the last step; fix it (deleting any
-leftover draft release on GitHub) and run `just publish` again. To redo a published release, delete it on GitHub first.
+leftover draft release on GitHub) and run `just upload` again. To redo a published release, delete it on GitHub first.
 
 ## Testing the updater without publishing
 

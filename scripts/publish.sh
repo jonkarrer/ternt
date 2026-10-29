@@ -3,15 +3,15 @@
 # Developer ID. See docs/RELEASING.md for the one-time setup.
 #
 #   scripts/release.sh 0.2.0     # bump, commit, tag (any machine)
-#   scripts/publish.sh           # on the signing Mac: build + publish the tag at HEAD
-#   scripts/publish.sh --dry-run # build and check only: no Apple signing, no upload
+#   just upload                  # on the signing Mac: build + publish the tag at HEAD
+#   just upload-dry-run          # build and check only: no Apple signing, no upload
 #
 # Produces a universal (Apple Silicon + Intel) app, notarized and stapled, in a
 # .dmg made with hdiutil (Tauri's dmg bundler lays out the window through
 # Finder AppleScript, which fails outside a GUI login session: SSH, CI, agents),
 # and uploads to GitHub Releases: the .dmg for new installs, the signed
 # update archive and latest.json for installed copies (src-tauri/src/updater.rs).
-# Uploads use a GitHub token: $GITHUB_ACCESS_TOKEN (Doppler, via just publish),
+# Uploads use a GitHub token: $GITHUB_ACCESS_TOKEN (Doppler, via just upload),
 # $GITHUB_TOKEN, or the keychain item "ternt-github".
 set -e
 cd ${0:A:h:h}
@@ -44,7 +44,7 @@ step "checking Ternt $version"
   fail "HEAD isn't tagged $tag; run scripts/release.sh <version> first"
 for tool in bun cargo rustup xcrun; do command -v $tool >/dev/null || fail "$tool not found"; done
 if [[ -z $DRY ]]; then
-  # Doppler supplies GITHUB_ACCESS_TOKEN (just publish); the keychain is the fallback.
+  # Doppler supplies GITHUB_ACCESS_TOKEN (just upload); the keychain is the fallback.
   export GITHUB_TOKEN=${GITHUB_TOKEN:-${GITHUB_ACCESS_TOKEN:-$(security find-generic-password -s ternt-github -w 2>/dev/null)}}
   [[ -n $GITHUB_TOKEN ]] || fail "no GitHub token: see docs/RELEASING.md (Doppler GITHUB_ACCESS_TOKEN or keychain item 'ternt-github')"
   # Also proves the token works before the long build.
@@ -66,14 +66,18 @@ export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-
 
 config='{}'
 if [[ -z $DRY ]]; then
-  # Developer ID: signs the app; Apple ID + app-specific password: notarizes it.
+  # Developer ID: signs the app; an App Store Connect API key (the one bernt and
+  # lernt upload with) notarizes it. Tauri reads APPLE_API_*; notarytool below
+  # takes the same key.
   identity=${APPLE_SIGNING_IDENTITY:-$(security find-identity -v -p codesigning | grep -m1 -o "\"Developer ID Application: [^\"]*($TEAM)\"" | tr -d '"')}
   [[ -n $identity ]] || fail "no 'Developer ID Application' certificate for team $TEAM in the keychain (Xcode > Settings > Accounts > Manage Certificates)"
   export APPLE_SIGNING_IDENTITY=$identity
   export APPLE_TEAM_ID=$TEAM
-  [[ -n $APPLE_ID ]] || fail "set APPLE_ID to your Apple developer account email"
-  export APPLE_PASSWORD=${APPLE_PASSWORD:-$(security find-generic-password -s ternt-notary -a "$APPLE_ID" -w 2>/dev/null)}
-  [[ -n $APPLE_PASSWORD ]] || fail "no app-specific password: see docs/RELEASING.md (keychain item 'ternt-notary')"
+  export APPLE_API_KEY=${APPLE_API_KEY:-$APPLE_CLI_UPLOAD_KEY_ID}
+  export APPLE_API_ISSUER=${APPLE_API_ISSUER:-$APPLE_CLI_UPLOAD_ISSUER_ID}
+  export APPLE_API_KEY_PATH=${APPLE_API_KEY_PATH:-$HOME/devjon/ids/AuthKey_$APPLE_API_KEY.p8}
+  [[ -n $APPLE_API_KEY && -n $APPLE_API_ISSUER ]] || fail "no App Store Connect key: APPLE_CLI_UPLOAD_KEY_ID and _ISSUER_ID come from Doppler (just upload)"
+  [[ -f $APPLE_API_KEY_PATH ]] || fail "missing $APPLE_API_KEY_PATH"
   config="{\"bundle\":{\"macOS\":{\"signingIdentity\":\"$identity\"}}}"
   echo "signing as: $identity (team $APPLE_TEAM_ID)"
 fi
@@ -108,7 +112,7 @@ if [[ -z $DRY ]]; then
   /usr/bin/xcrun stapler validate $app
   spctl --assess --type execute -vv $app
   step "notarizing the dmg"
-  /usr/bin/xcrun notarytool submit $dmg --apple-id $APPLE_ID --team-id $APPLE_TEAM_ID --password $APPLE_PASSWORD --wait
+  /usr/bin/xcrun notarytool submit $dmg --key $APPLE_API_KEY_PATH --key-id $APPLE_API_KEY --issuer $APPLE_API_ISSUER --wait
   /usr/bin/xcrun stapler staple $dmg
   spctl --assess --type open --context context:primary-signature -vv $dmg
 fi
