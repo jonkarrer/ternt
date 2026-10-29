@@ -72,8 +72,6 @@ scripts/publish.sh         # on the signing Mac: build, sign, notarize, push, pu
    git tag -d v0.1.0              # (or whichever version it printed)
    ```
 
-   The first build may ask to let Terminal control Finder (it lays out the .dmg window): allow it.
-
 ## Each release
 
 1. On `main`, with everything committed and pushed: `scripts/release.sh <version>`

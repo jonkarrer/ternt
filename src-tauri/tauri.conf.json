@@ -19,7 +19,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
+    "targets": ["app"],
     "createUpdaterArtifacts": true,
     "macOS": {
       "signingIdentity": "-",

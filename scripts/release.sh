@@ -3,8 +3,8 @@
 #
 #   scripts/release.sh 0.2.0
 #
-# Pushing the tag (printed at the end) makes GitHub Actions build and publish
-# it (.github/workflows/release.yml); installed copies then offer the update.
+# Then scripts/publish.sh, on the signing Mac, builds and publishes it;
+# installed copies then offer the update.
 set -e
 cd ${0:A:h:h}
 version=${1#v}

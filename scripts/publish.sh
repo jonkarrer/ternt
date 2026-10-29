@@ -6,7 +6,9 @@
 #   scripts/publish.sh           # on the signing Mac: build + publish the tag at HEAD
 #   scripts/publish.sh --dry-run # build and check only: no Apple signing, no upload
 #
-# Produces a universal (Apple Silicon + Intel) app, notarized and stapled,
+# Produces a universal (Apple Silicon + Intel) app, notarized and stapled, in a
+# .dmg made with hdiutil (Tauri's dmg bundler lays out the window through
+# Finder AppleScript, which fails outside a GUI login session: SSH, CI, agents),
 # and uploads to GitHub Releases: the .dmg for new installs, the signed
 # update archive and latest.json for installed copies (src-tauri/src/updater.rs).
 # Uploads use a GitHub token from the keychain (item "ternt-github") or
@@ -81,8 +83,17 @@ bun node_modules/@tauri-apps/cli/tauri.js build --target $TARGET --config "$conf
 
 app=$OUT/macos/Ternt.app
 archive=$OUT/macos/Ternt.app.tar.gz
-dmg=$(ls $OUT/dmg/*.dmg | head -1)
-[[ -d $app && -f $archive && -f $archive.sig && -f $dmg ]] || fail "missing build outputs in $OUT"
+[[ -d $app && -f $archive && -f $archive.sig ]] || fail "missing build outputs in $OUT"
+
+step "packaging the dmg"
+dmg=$OUT/dmg/Ternt_${version}_universal.dmg
+stage=$OUT/dmg/stage
+rm -rf $OUT/dmg && mkdir -p $stage
+ditto $app $stage/Ternt.app
+ln -s /Applications $stage/Applications
+hdiutil create -quiet -volname Ternt -srcfolder $stage -fs HFS+ -format UDZO -ov $dmg
+rm -rf $stage
+[[ -n $DRY ]] || codesign --sign "$identity" --timestamp $dmg
 
 step "verifying"
 codesign --verify --deep --strict $app
