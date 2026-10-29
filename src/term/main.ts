@@ -117,9 +117,17 @@ async function start(s: Session) {
   s.term.onResize(({ cols, rows }) => invoke("pty_resize", { id: s.id, cols, rows }));
 }
 
+/** Focus the terminal only if this webview has the keyboard: Rust decides
+    which view gets it (explore mode keeps it in the sidebar), and a script
+    focusing an element would make WebKit grab it. */
+function focus(s: Session) {
+  if (document.hasFocus()) s.term.focus();
+}
+window.addEventListener("focus", () => active?.term.focus());
+
 function show(s: Session) {
   if (active === s) {
-    s.term.focus();
+    focus(s);
     return;
   }
   // Only the visible terminal holds a WebGL context (browsers cap them).
@@ -143,7 +151,7 @@ function show(s: Session) {
   }
   s.fit.fit();
   if (!s.started) start(s);
-  s.term.focus();
+  focus(s);
 }
 
 function dispose(s: Session) {

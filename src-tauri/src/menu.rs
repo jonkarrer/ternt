@@ -257,23 +257,11 @@ pub async fn space_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
 /// "Profile" submenu: the shared profile, each separate profile (named by the
 /// spaces using it), and a new one. The check marks the space's current one.
 fn profile_menu(app: &AppHandle, id: u32, info: &browser::SpaceMenuInfo) -> tauri::Result<Submenu<Wry>> {
-    // Group spaces by profile, in space order; the shared profile first.
-    let mut groups: Vec<(Option<&str>, u32, Vec<&str>)> = vec![(None, id, Vec::new())];
-    for (space, name, profile) in &info.spaces {
-        match groups.iter_mut().find(|g| g.0 == profile.as_deref()) {
-            Some(group) => group.2.push(name),
-            None => groups.push((profile.as_deref(), *space, vec![name])),
-        }
-    }
     let submenu = Submenu::new(app, "Profile", true)?;
-    for (profile, space, names) in groups {
-        let (choice, kind) = match profile {
-            None => ("shared".to_string(), "Shared"),
-            Some(_) => (format!("space-{space}"), "Separate"),
-        };
-        let label = if names.is_empty() { format!("{kind} Profile") } else { format!("{kind} Profile ({})", names.join(", ")) };
-        let checked = profile == info.profile.as_deref();
-        submenu.append(&CheckMenuItem::with_id(app, format!("ctx-space-profile:{id}:{choice}"), label, true, checked, None::<&str>)?)?;
+    for group in &info.groups {
+        let id = format!("ctx-space-profile:{id}:{}", group.choice);
+        let checked = group.profile == info.profile;
+        submenu.append(&CheckMenuItem::with_id(app, id, group.label(), true, checked, None::<&str>)?)?;
     }
     submenu.append(&PredefinedMenuItem::separator(app)?)?;
     submenu.append(&item(app, format!("ctx-space-profile:{id}:new"), "New Profile (signed out)")?)?;

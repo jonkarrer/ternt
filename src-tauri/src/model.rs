@@ -100,6 +100,26 @@ pub struct Folder {
     pub open: bool,
 }
 
+/// A profile and the spaces using it (see `State::profile_groups`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProfileGroup {
+    pub profile: Option<String>,
+    /// How the space menu selects it: `shared` or `space-<id>`.
+    pub choice: String,
+    pub spaces: Vec<String>,
+}
+
+impl ProfileGroup {
+    pub fn label(&self) -> String {
+        let kind = if self.profile.is_some() { "Separate" } else { "Shared" };
+        if self.spaces.is_empty() {
+            format!("{kind} Profile")
+        } else {
+            format!("{kind} Profile ({})", self.spaces.join(", "))
+        }
+    }
+}
+
 pub enum ClosedTab {
     Web { url: String, space: u32 },
     Terminal { space: u32 },
@@ -413,6 +433,27 @@ impl State {
         let old = std::mem::replace(&mut space.profile, profile);
         let affected = self.tabs.iter().filter(|t| t.loaded && t.space == id).map(|t| t.id).collect();
         Some((old, affected))
+    }
+
+    /// The profiles to offer in the space menu: the shared one first, then
+    /// each separate one, named by the spaces using it (in space order).
+    pub fn profile_groups(&self) -> Vec<ProfileGroup> {
+        let mut groups = vec![ProfileGroup {
+            profile: None,
+            choice: "shared".into(),
+            spaces: Vec::new(),
+        }];
+        for space in &self.spaces {
+            match groups.iter_mut().find(|g| g.profile == space.profile) {
+                Some(group) => group.spaces.push(space.name.clone()),
+                None => groups.push(ProfileGroup {
+                    profile: space.profile.clone(),
+                    choice: format!("space-{}", space.id),
+                    spaces: vec![space.name.clone()],
+                }),
+            }
+        }
+        groups
     }
 
     // --- Folders ---------------------------------------------------------
@@ -791,6 +832,106 @@ mod tests {
         assert_eq!(r.tabs[1].zone, Zone::Today);
         assert_eq!(r.active, Some(r.tabs[1].id));
         assert_eq!(r.sidebar_width, 300.0);
+    }
+
+    #[test]
+    fn profile_groups_for_the_space_menu() {
+        let mut s = State::default();
+        let work = s.add_space(Some("w".into()));
+        s.space_mut(work).unwrap().name = "Work".into();
+        let clients = s.add_space(Some("w".into()));
+        s.space_mut(clients).unwrap().name = "Clients".into();
+        let solo = s.add_space(Some("s".into()));
+        s.space_mut(solo).unwrap().name = "Solo".into();
+        let labels: Vec<(String, String)> = s.profile_groups().iter().map(|g| (g.choice.clone(), g.label())).collect();
+        assert_eq!(
+            labels,
+            [
+                ("shared".into(), "Shared Profile (Home)".into()),
+                (format!("space-{work}"), "Separate Profile (Work, Clients)".into()),
+                (format!("space-{solo}"), "Separate Profile (Solo)".into()),
+            ]
+        );
+        // With every space separate, the shared profile is still offered.
+        s.space_mut(1).unwrap().profile = Some("h".into());
+        assert_eq!(s.profile_groups()[0].label(), "Shared Profile");
+    }
+
+    #[test]
+    fn move_clamps_index_and_rejects_other_spaces_folders() {
+        let mut s = State::default();
+        let a = web(&mut s, "a");
+        let b = web(&mut s, "b");
+        s.move_tab(a, Zone::Pinned, None, 99);
+        s.move_tab(b, Zone::Pinned, None, 99);
+        assert_eq!(titles(&s, &s.visible_order(1)), ["a", "b"], "a too-large index appends");
+        let work = s.add_space(None);
+        let foreign = s.add_folder(work, "elsewhere".into()).unwrap();
+        s.move_tab(a, Zone::Pinned, Some(foreign), 0);
+        assert_eq!(s.tab(a).unwrap().folder, None, "can't file into another space's folder");
+        s.move_tab(a, Zone::Today, Some(foreign), 0);
+        assert_eq!(s.tab(a).unwrap().folder, None, "only pinned tabs have folders");
+    }
+
+    #[test]
+    fn spaces_cycle_and_ignore_unknown_ids() {
+        let mut s = State::default();
+        let two = s.add_space(None);
+        let three = s.add_space(None);
+        assert_eq!(s.space_at_offset(1), Some(two));
+        assert_eq!(s.space_at_offset(-1), Some(three), "wraps backwards");
+        s.active_space = three;
+        assert_eq!(s.space_at_offset(1), Some(1), "wraps forwards");
+        assert_eq!(s.switch_space(999), None);
+        assert_eq!(s.active_space, three, "unknown space: no change");
+    }
+
+    #[test]
+    fn focusing_a_favorite_keeps_the_space() {
+        let mut s = State::default();
+        let fav = web(&mut s, "fav");
+        s.move_tab(fav, Zone::Favorite, None, 0);
+        let other = s.add_space(None);
+        s.switch_space(other);
+        s.focus(fav);
+        assert_eq!(s.active_space, other);
+        assert_eq!(s.last_active.get(&other), Some(&fav));
+    }
+
+    #[test]
+    fn closed_tabs_are_capped_and_forgotten_with_their_space() {
+        let mut s = State::default();
+        for i in 0..30 {
+            let id = web(&mut s, &i.to_string());
+            s.remove_tab(id);
+        }
+        assert_eq!(s.closed.len(), MAX_CLOSED_TABS);
+        let work = s.add_space(None);
+        s.switch_space(work);
+        let w = web(&mut s, "w");
+        s.focus(w);
+        s.remove_tab(w);
+        s.remove_space(work);
+        assert!(s.closed.iter().all(|c| !matches!(c, ClosedTab::Web { space, .. } if *space == work)));
+        assert!(!s.last_active.contains_key(&work));
+    }
+
+    #[test]
+    fn restore_drops_dangling_references() {
+        let json = r#"{"tabs":[
+            {"kind":"web","url":"https://a","title":"a","zone":"pinned","space":7,"folder":9},
+            {"kind":"terminal","url":"","title":"t","zone":"favorite","space":1}],
+            "spaces":[{"id":1,"name":"Home","color":"blue"}],
+            "folders":[{"id":9,"space":7,"name":"gone","open":true}],
+            "active":5,"activeSpace":7,"lastActive":[[1,8]],
+            "sidebarWidth":240.0,"sidebarCollapsed":false}"#;
+        let r = State::restore(serde_json::from_str(json).unwrap());
+        assert_eq!(r.active_space, 1, "unknown active space falls back to the first");
+        assert!(r.folders.is_empty(), "folders of unknown spaces are dropped");
+        assert_eq!((r.tabs[0].space, r.tabs[0].folder), (1, None));
+        assert_eq!(r.tabs[1].zone, Zone::Today, "terminals only live in Today");
+        assert_eq!(r.active, None);
+        assert!(r.last_active.is_empty());
     }
 
     impl State {

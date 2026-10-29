@@ -1,19 +1,10 @@
 const S = () => t.state();
 const tab = () => S().tabs.find((x) => x.id === S().active);
 const F = "localhost:8765";
-const request = () => t.invoke("palette_request");
+const request = t.palette.request;
 
-// Drive the palette webview like a user would.
-const P = (js) => t.eval("palette", js);
-const type = (text) =>
-  P(`(() => { const i = document.querySelector("input"); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
-const key = (k) =>
-  P(`document.querySelector("input").dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(k)}, bubbles: true }))`);
-const openPalette = async (id) => {
-  await t.invoke("menu_action", { id });
-  await t.until(request, `${id} opens palette`);
-  await t.sleep(250);
-};
+const { type, key } = t.palette;
+const openPalette = t.palette.open;
 
 // New tab from the palette
 await openPalette("new-tab");
@@ -62,10 +53,10 @@ await type("tauri multiwebview");
 await key("Enter");
 await t.until(() => tab()?.url.startsWith("https://www.google.com/search?q=tauri"), "plain text searches");
 // Before typing: suggested commands, open tabs, spaces
-const labels = async () => JSON.parse(await t.read("palette", `JSON.stringify([...document.querySelectorAll("li")].map((li) => li.textContent.trim()))`));
+const labels = t.palette.rows;
 await openPalette("new-tab");
 await t.until(async () => (await labels()).some((l) => l === "Suggestions"), "empty bar shows suggestions");
-await t.assert((await labels()).some((l) => l.startsWith("New Terminal") && l.includes("⌥⌘T")), "commands show their shortcut");
+await t.assert((await t.read("palette", `document.querySelector("li[role=option] kbd")?.textContent`)) === "⌥⌘T", "commands show their shortcut");
 await t.shot("palette-suggestions");
 
 // Initials find commands, ranked above a web search

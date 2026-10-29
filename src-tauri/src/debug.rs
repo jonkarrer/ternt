@@ -107,3 +107,46 @@ pub fn debug_set(key: String, value: String) {
 pub fn debug_get(key: String) -> Option<String> {
     VALUES.lock().unwrap().iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone())
 }
+
+/// The clipboard's text, to verify Copy URL / Copy Link.
+#[tauri::command]
+pub fn debug_clipboard() -> Result<String, String> {
+    let out = Command::new("pbpaste").output().map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Which webview has keyboard focus (holds the window's first responder),
+/// independent of whether the app is frontmost.
+#[tauri::command]
+pub async fn debug_focused(app: AppHandle) -> Option<String> {
+    let window = app.get_window(MAIN_WINDOW)?;
+    let ns_window = window.ns_window().ok()? as usize;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let webviews: Vec<(String, usize)> = app
+        .webviews()
+        .into_iter()
+        .filter_map(|(label, webview)| {
+            let (vtx, vrx) = std::sync::mpsc::channel();
+            webview.with_webview(move |p| vtx.send(p.inner() as usize).unwrap()).ok()?;
+            Some((label, vrx.recv().ok()?))
+        })
+        .collect();
+    window
+        .run_on_main_thread(move || unsafe {
+            use objc2::runtime::AnyObject;
+            let ns_window = &*(ns_window as *const AnyObject);
+            let responder: *mut AnyObject = objc2::msg_send![ns_window, firstResponder];
+            if responder.is_null() {
+                let _ = tx.send(None);
+                return;
+            }
+            let found = webviews.into_iter().find(|(_, view)| {
+                let view = *view as *const AnyObject;
+                let is_view: bool = objc2::msg_send![&*responder, isKindOfClass: objc2::class!(NSView)];
+                is_view && objc2::msg_send![&*responder, isDescendantOf: &*view]
+            });
+            let _ = tx.send(found.map(|(label, _)| label));
+        })
+        .ok()?;
+    rx.recv().ok().flatten()
+}

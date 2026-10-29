@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+export { hostOf, parseInput, type ParsedInput } from "./url";
+
 export type Zone = "favorite" | "pinned" | "today";
 
 export interface Tab {
@@ -65,8 +67,6 @@ export const DEFAULT_SIDEBAR_WIDTH = 240;
 export const MIN_SIDEBAR_WIDTH = 180;
 export const MAX_SIDEBAR_WIDTH = 480;
 
-const SEARCH_URL = "https://www.google.com/search?q=";
-
 export const browser = {
   getState: () => invoke<BrowserState>("get_state"),
   newTab: (url: string) => invoke<number>("new_tab", { url }),
@@ -117,26 +117,3 @@ export const browser = {
     listen<{ kind: "space" | "folder"; id: number }>("browser:rename", (e) => cb(e.payload)),
 };
 
-export type ParsedInput = { kind: "url" | "search"; url: string };
-
-/** Interpret address-bar input: explicit URL, bare host, or a search. */
-export function parseInput(raw: string): ParsedInput | null {
-  const input = raw.trim();
-  if (!input) return null;
-  if (/^(https?|file|about|data):/i.test(input)) return { kind: "url", url: input };
-  if (/^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?(\/\S*)?$/i.test(input)) {
-    return { kind: "url", url: `http://${input}` };
-  }
-  if (/^[^\s/]+\.[a-z]{2,}(:\d+)?(\/\S*)?$/i.test(input)) {
-    return { kind: "url", url: `https://${input}` };
-  }
-  return { kind: "search", url: SEARCH_URL + encodeURIComponent(input) };
-}
-
-export function hostOf(url: string): string {
-  try {
-    return new URL(url).host.replace(/^www\./, "");
-  } catch {
-    return url;
-  }
-}

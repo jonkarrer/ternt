@@ -3,9 +3,12 @@ const S = () => t.state();
 const tab = () => S().tabs.find((x) => x.id === S().active);
 const find = (title) => S().tabs.find((x) => x.title === title);
 
-await t.until(() => S().tabs.length === 4 && S().spaces.length === 2, "4 tabs in 2 spaces restored");
+await t.until(() => S().tabs.length === 5 && S().spaces.length === 2, "5 tabs in 2 spaces restored");
 const work = S().spaces.find((s) => s.name === "Work");
 await t.assert(work, "space name restored");
+await t.assert(work.profile, "Work's profile restored");
+const mail = S().tabs.find((x) => x.url.includes("cookie.html"));
+await t.assert(mail?.zone === "favorite" && mail.space === work.id, "Work's favorite restored");
 await t.assert(find("Fixture Home")?.zone === "favorite", "favorite restored");
 const docs = S().folders.find((f) => f.name === "Docs");
 await t.assert(docs && find("Fixture Page 2")?.folder === docs.id, "folder and its tab restored");
@@ -26,5 +29,13 @@ await t.sleep(1500);
 await t.invoke("pty_write", { id: term, data: "echo restored-$((3*3))\r" });
 await t.sleep(600);
 await t.assert((await t.read("term", `window.__termText(${term})`)).includes("restored-9"), "restored terminal runs a shell");
+
+// Favorites stay with their profile, and Work is still signed in
+await t.until(() => document.querySelectorAll(".fav").length === 1 && document.querySelector(`.fav[data-tab="${mail.id}"]`), "Work shows only its favorite");
+await t.invoke("activate_tab", { id: mail.id });
+await t.until(() => tab()?.id === mail.id && tab()?.title === "cookie:work-login", "Work's login survived the restart");
 await t.shot("session-2");
+await t.invoke("navigate", { url: "http://localhost:8765/cookie.html?clear" });
+await t.until(() => tab()?.title === "cookie:none", "test login cleared");
+await t.invoke("remove_space", { id: work.id }); // deletes the test profile's data store
 await t.quit();

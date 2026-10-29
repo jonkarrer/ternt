@@ -9,8 +9,9 @@ bun install
 bun tauri dev              # run the app
 bun tauri build            # release bundle (judge performance here, not in dev)
 bun run check              # type-check Svelte/TS
-e2e/run.sh                 # end-to-end tests (macOS); e2e/run.sh <name> for one
-(cd src-tauri && cargo test)  # model unit tests
+bun run test               # everything: unit tests, type check, clippy, then e2e
+bun run test:unit          # the fast part (about a second)
+e2e/run.sh palette         # one e2e suite (VERBOSE=1 lists every check)
 ```
 
 `moove <url>...` opens URLs as tabs (`bun tauri dev -- -- https://example.com`).
@@ -74,8 +75,22 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
 
 ## Tests
 
-`e2e/run.sh` launches the debug build with `MOOVE_TEST=<script>`; the script runs inside the
-UI webview and drives the app through its real commands (`window.__moove`, see
-`src/lib/debug.ts` and `src-tauri/src/debug.rs`, both compiled out of release builds).
-Fixture pages are served from `e2e/fixtures` on port 8765. Logs and screenshots land in
-`e2e/.out/`.
+`bun run test` runs, in order:
+
+- **TypeScript unit tests** (`bun test`, `src/**/*.test.ts`): address parsing (`src/lib/url.ts`)
+  and command bar ranking (`src/palette/rank.ts`, pure: data in, items with actions out).
+- **Type check** (`svelte-check`).
+- **Rust unit tests** (`cargo test`): the tab/space/folder model and profiles (`model.rs`),
+  history ranking and storage (`history.rs`), profile ids (`browser.rs`). Then clippy with
+  warnings as errors.
+- **End-to-end** (`e2e/run.sh`, macOS): launches the debug build once per suite in
+  `e2e/tests/` with `MOOVE_TEST=<script>`. The script runs inside the sidebar webview and drives
+  the app through its real commands and DOM events (`t` = `window.__moove`, see
+  `src/lib/debug.ts`; native checks like keyboard focus and the clipboard are in
+  `src-tauri/src/debug.rs`; both are compiled out of release builds). Fixture pages are served
+  from `e2e/fixtures` on port 8765. Suites named `x-1`, `x-2` share a session and history file,
+  so `x-2` tests what survives a restart. Logs and screenshots land in `e2e/.out/`; a failed
+  screenshot only warns.
+
+Not covered (macOS won't let tests send real input): physical key presses and trackpad
+gestures, native context menus opening (their actions are tested), and real OAuth providers.

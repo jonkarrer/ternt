@@ -164,8 +164,8 @@ pub struct SpaceMenuInfo {
     pub color: String,
     pub profile: Option<String>,
     pub deletable: bool,
-    /// Every space: `(id, name, profile)`, to offer sharing a profile.
-    pub spaces: Vec<(u32, String, Option<String>)>,
+    /// The profiles it could use.
+    pub groups: Vec<crate::model::ProfileGroup>,
 }
 
 pub fn space_menu_info(app: &AppHandle, id: u32) -> Option<SpaceMenuInfo> {
@@ -175,7 +175,7 @@ pub fn space_menu_info(app: &AppHandle, id: u32) -> Option<SpaceMenuInfo> {
             color: space.color.clone(),
             profile: space.profile.clone(),
             deletable: s.spaces.len() > 1,
-            spaces: s.spaces.iter().map(|x| (x.id, x.name.clone(), x.profile.clone())).collect(),
+            groups: s.profile_groups(),
         })
     })
 }
@@ -1204,4 +1204,30 @@ pub async fn set_folder_open(app: AppHandle, id: u32, open: bool) {
 #[tauri::command]
 pub async fn remove_folder(app: AppHandle, id: u32) {
     delete_folder(&app, id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProfileChoice;
+
+    #[test]
+    fn profile_choices_parse() {
+        assert_eq!(ProfileChoice::parse("shared"), Some(ProfileChoice::Shared));
+        assert_eq!(ProfileChoice::parse("new"), Some(ProfileChoice::New));
+        assert_eq!(ProfileChoice::parse("space-12"), Some(ProfileChoice::SameAs(12)));
+        assert_eq!(ProfileChoice::parse("space-"), None);
+        assert_eq!(ProfileChoice::parse("space-x"), None);
+        assert_eq!(ProfileChoice::parse(""), None);
+    }
+
+    #[test]
+    fn profile_ids_round_trip_to_store_bytes() {
+        let id = super::new_profile_id();
+        assert_eq!(id.len(), 32);
+        let bytes = super::profile_bytes(&id).unwrap();
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, id);
+        assert_ne!(super::new_profile_id(), id, "ids are unique");
+        assert_eq!(super::profile_bytes("zz"), None);
+    }
 }

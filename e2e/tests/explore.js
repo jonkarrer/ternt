@@ -92,4 +92,25 @@ await explore();
 await t.invoke("menu_action", { id: "new-tab" });
 await t.until(() => !exploring(), "opening the command bar ends explore mode");
 await t.invoke("close_palette");
+
+// Keyboard focus: the sidebar keeps it while peeking (a terminal too, which
+// would otherwise grab it), and the opened tab gets it back
+const focused = () => t.invoke("debug_focused");
+const term = await t.invoke("new_terminal");
+await t.until(async () => (await focused()) === "term", "a new terminal has the keyboard");
+await t.invoke("activate_tab", { id: workTab });
+await t.until(async () => (await focused()) === `tab-${workTab}`, "the page has the keyboard");
+await explore();
+await t.until(async () => (await focused()) === "ui", "exploring gives the sidebar the keyboard");
+await t.invoke("explore_preview", { id: term });
+await t.until(() => S().active === term, "peek the terminal");
+await t.sleep(300);
+await t.assert((await focused()) === "ui", "peeking keeps the keyboard in the sidebar");
+key("Escape");
+await t.until(async () => !exploring() && (await focused()) === `tab-${workTab}`, "escape hands the keyboard back to the page");
+await explore();
+await t.invoke("explore_preview", { id: term });
+await t.until(() => S().active === term, "peek the terminal again");
+await t.invoke("menu_action", { id: "explore" }); // ⌘F again: stay on it
+await t.until(async () => !exploring() && (await focused()) === "term", "leaving on a terminal gives it the keyboard");
 await t.quit();

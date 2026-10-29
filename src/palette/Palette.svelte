@@ -2,62 +2,8 @@
   import { onMount, tick } from "svelte";
   import Favicon from "../lib/Favicon.svelte";
   import TabIcon from "../lib/TabIcon.svelte";
-  import { browser, hostOf, parseInput, type HistoryHit, type PaletteRequest, type Space, type Tab } from "../lib/browser";
-
-  /** `top` holds the best matches, shown without a header. */
-  type Section = "top" | "Suggestions" | "Tabs" | "History" | "Commands" | "Spaces";
-  type Item = {
-    key: string;
-    kind: "url" | "search" | "tab" | "history" | "command" | "space" | "run";
-    label: string;
-    detail?: string;
-    shortcut?: string;
-    url?: string;
-    tab?: Tab;
-    space?: Space;
-    section: Section;
-    run: () => Promise<unknown>;
-  };
-
-  type Command = {
-    /** Menu action id (see src-tauri/src/menu.rs). */
-    id: string;
-    label: string;
-    shortcut?: string;
-    /** Extra words that find it. */
-    keywords?: string;
-    /** Offered before anything is typed. */
-    suggest?: boolean;
-    /** Only when the active tab is a web page. */
-    web?: boolean;
-    /** Needs an active tab. `ctx-` actions get its id: `<id>:<tab>`. */
-    tab?: boolean;
-    /** Hidden when the active tab is already in this zone. */
-    unless?: Tab["zone"];
-  };
-
-  const COMMANDS: Command[] = [
-    { id: "new-terminal", label: "New Terminal", shortcut: "⌥⌘T", keywords: "shell console", suggest: true },
-    { id: "explore", label: "Explore Tabs", shortcut: "⌘F", keywords: "switch browse find", suggest: true },
-    { id: "new-space", label: "New Space", keywords: "profile", suggest: true },
-    { id: "reopen-tab", label: "Reopen Closed Tab", shortcut: "⇧⌘T", keywords: "undo restore", suggest: true },
-    { id: "copy-url", label: "Copy URL", keywords: "link clipboard", web: true },
-    { id: "ctx-favorite", label: "Add to Favorites", keywords: "star", web: true, tab: true, unless: "favorite" },
-    { id: "ctx-pin", label: "Pin Tab", web: true, tab: true, unless: "pinned" },
-    { id: "ctx-duplicate", label: "Duplicate Tab", keywords: "copy", tab: true },
-    { id: "clear-today", label: "Clear Today Tabs", keywords: "close all archive" },
-    { id: "clear-history", label: "Clear History", keywords: "browsing forget" },
-    { id: "next-space", label: "Next Space", shortcut: "⌥⌘→" },
-    { id: "previous-space", label: "Previous Space", shortcut: "⌥⌘←" },
-    { id: "new-folder", label: "New Folder" },
-    { id: "toggle-sidebar", label: "Toggle Sidebar", shortcut: "⌘S", keywords: "hide show" },
-    { id: "reload", label: "Reload Page", shortcut: "⌘R", keywords: "refresh", web: true },
-    { id: "back", label: "Go Back", shortcut: "⌘[", web: true },
-    { id: "forward", label: "Go Forward", shortcut: "⌘]", web: true },
-    { id: "close-tab", label: "Close Tab", shortcut: "⌘W", tab: true },
-  ];
-  /** Per section, below the top matches. */
-  const SECTION_LIMIT = 5;
+  import { browser, type HistoryHit, type PaletteRequest, type Space, type Tab } from "../lib/browser";
+  import { buildItems, type Action, type Item } from "./rank";
 
   let request = $state<PaletteRequest | null>(null);
   let query = $state("");
@@ -74,7 +20,9 @@
   let history = $state<HistoryHit[]>([]);
   let historySeq = 0;
 
-  const items = $derived(buildItems(query));
+  const items = $derived(
+    request ? buildItems(query, { mode: request.mode, tabs, spaces, activeId, activeSpace, history }) : [],
+  );
 
   $effect(() => {
     const q = query.trim();
@@ -116,155 +64,6 @@
     return browser.closePalette();
   }
 
-  /** How well `text` matches the lowercase query: 0 (no match) to 100. */
-  function score(text: string, q: string): number {
-    const t = text.toLowerCase();
-    if (t.startsWith(q)) return 100;
-    const words = t.split(/[\s\-_/.:]+/).filter(Boolean);
-    const terms = q.split(/\s+/);
-    if (terms.every((term) => words.some((w) => w.startsWith(term)))) return 80;
-    // "nt" → New Terminal
-    if (terms.length === 1 && words.map((w) => w[0]).join("").startsWith(q)) return 70;
-    if (terms.every((term) => t.includes(term))) return 40;
-    return 0;
-  }
-
-  function buildItems(raw: string): Item[] {
-    if (!request) return [];
-    const q = raw.trim();
-    const lq = q.toLowerCase();
-    const activeTab = tabs.find((t) => t.id === activeId);
-    const spaceName = (id: number) => spaces.find((s) => s.id === id)?.name ?? "";
-
-    // "> command" runs in a new terminal.
-    if (q.startsWith(">")) {
-      const command = q.slice(1).trim();
-      return [
-        {
-          key: "run",
-          kind: "run",
-          label: command ? `Run “${command}”` : "Type a command to run in a new terminal",
-          detail: "New terminal",
-          section: "top",
-          run: () => browser.newTerminal(command),
-        },
-      ];
-    }
-
-    const commands = COMMANDS.filter(
-      (c) =>
-        (!c.web || activeTab?.kind === "web") &&
-        (!c.tab || activeTab) &&
-        (!c.unless || activeTab?.zone !== c.unless),
-    );
-    const commandItem = (c: Command, section: Section): Item => ({
-      key: `cmd-${c.id}`,
-      kind: "command",
-      label: c.label,
-      shortcut: c.shortcut,
-      section,
-      run: () => browser.menuAction(c.id.startsWith("ctx-") ? `${c.id}:${activeId}` : c.id),
-    });
-    const tabItem = (t: Tab, section: Section): Item => ({
-      key: `tab-${t.id}`,
-      kind: "tab",
-      label: t.title || hostOf(t.url),
-      detail: t.zone === "favorite" ? "Favorite" : t.space === activeSpace ? "Switch to tab" : spaceName(t.space),
-      url: t.url,
-      tab: t,
-      section,
-      run: () => browser.activateTab(t.id),
-    });
-    const spaceItem = (s: Space, section: Section): Item => ({
-      key: `space-${s.id}`,
-      kind: "space",
-      label: `Go to ${s.name}`,
-      detail: s.profile ? "Space · own profile" : "Space",
-      space: s,
-      section,
-      run: () => browser.activateSpace(s.id),
-    });
-    const otherTabs = tabs.filter((t) => t.id !== activeId);
-    const otherSpaces = spaces.filter((s) => s.id !== activeSpace);
-
-    // Nothing typed: what you can do, where you can go.
-    if (!q) {
-      return [
-        ...commands.filter((c) => c.suggest).map((c) => commandItem(c, "Suggestions")),
-        // This space's tabs first.
-        ...[...otherTabs]
-          .sort((a, b) => Number(b.space === activeSpace) - Number(a.space === activeSpace))
-          .slice(0, SECTION_LIMIT)
-          .map((t) => tabItem(t, "Tabs")),
-        ...otherSpaces.map((s) => spaceItem(s, "Spaces")),
-      ];
-    }
-
-    const ranked = <T,>(list: T[], rate: (x: T) => number) =>
-      list
-        .map((x) => ({ x, s: rate(x) }))
-        .filter((r) => r.s > 0)
-        .sort((a, b) => b.s - a.s);
-    const tabHits = ranked(otherTabs, (t) =>
-      Math.max(score(t.title, lq), t.url.toLowerCase().includes(lq) ? 40 : 0),
-    );
-    const commandHits = ranked(commands, (c) =>
-      Math.max(score(c.label, lq), c.keywords && score(c.keywords, lq) >= 80 ? 50 : 0),
-    );
-    // History: pages not already open, still matching every typed word.
-    const historyHits = history.filter(
-      (h) =>
-        !tabs.some((t) => t.url === h.url) &&
-        lq.split(/\s+/).every((w) => `${h.url} ${h.title}`.toLowerCase().includes(w)),
-    );
-    const historyItem = (h: HistoryHit, section: Section): Item => ({
-      key: `history-${h.url}`,
-      kind: "history",
-      label: h.title || hostOf(h.url),
-      detail: hostOf(h.url),
-      url: h.url,
-      section,
-      run: () => (newTab ? browser.newTab(h.url) : browser.navigate(h.url)),
-    });
-    const spaceHits = ranked(otherSpaces, (s) => Math.max(score(s.name, lq), score("space", lq) >= 80 ? 50 : 0));
-
-    // Top: a typed URL first; then a tab whose title matches (beats a web
-    // search) and a clearly named command; then the URL/search itself.
-    const top: Item[] = [];
-    const parsed = parseInput(q);
-    const newTab = request.mode === "newTab";
-    const open = parsed && {
-      key: "primary",
-      kind: parsed.kind,
-      label: parsed.kind === "search" ? `Search Google for “${q}”` : parsed.url,
-      detail: parsed.kind === "search" ? "Google" : newTab ? "Open in new tab" : "Open",
-      url: parsed.url,
-      section: "top" as const,
-      run: () => (newTab ? browser.newTab(parsed.url) : browser.navigate(parsed.url)),
-    };
-    if (open && parsed.kind === "url") top.push(open);
-    const bestTab = tabHits[0]?.x && score(tabHits[0].x.title, lq) > 0 ? tabHits.shift()!.x : undefined;
-    const bestCommand = commandHits[0]?.s >= 70 ? commandHits.shift()!.x : undefined;
-    const bestSpace = spaceHits[0]?.s >= 80 ? spaceHits.shift()!.x : undefined;
-    if (bestTab) top.push(tabItem(bestTab, "top"));
-    // Typing the start of a visited address: that page, like an address bar.
-    const bare = (url: string) => url.replace(/^[a-z]+:\/\/(www\.)?/i, "").toLowerCase();
-    if (parsed?.kind !== "url" && historyHits[0] && bare(historyHits[0].url).startsWith(lq)) {
-      top.push(historyItem(historyHits.shift()!, "top"));
-    }
-    if (bestCommand) top.push(commandItem(bestCommand, "top"));
-    if (bestSpace) top.push(spaceItem(bestSpace, "top"));
-    if (open && parsed.kind === "search") top.push(open);
-
-    return [
-      ...top,
-      ...tabHits.slice(0, SECTION_LIMIT).map((r) => tabItem(r.x, "Tabs")),
-      ...historyHits.slice(0, SECTION_LIMIT).map((h) => historyItem(h, "History")),
-      ...commandHits.slice(0, SECTION_LIMIT).map((r) => commandItem(r.x, "Commands")),
-      ...spaceHits.map((r) => spaceItem(r.x, "Spaces")),
-    ];
-  }
-
   // WebKit sends pointermove when the list appears under a resting cursor;
   // only a real move should take the selection from the keyboard.
   let lastPointer = "";
@@ -276,10 +75,25 @@
     if (!first) selected = index;
   }
 
+  function perform(action: Action) {
+    switch (action.type) {
+      case "open":
+        return action.newTab ? browser.newTab(action.url) : browser.navigate(action.url);
+      case "tab":
+        return browser.activateTab(action.id);
+      case "space":
+        return browser.activateSpace(action.id);
+      case "menu":
+        return browser.menuAction(action.id);
+      case "terminal":
+        return browser.newTerminal(action.command);
+    }
+  }
+
   async function run(item: Item | undefined) {
     if (!item) return;
     await close();
-    await item.run();
+    await perform(item.action);
   }
 
   function onkeydown(event: KeyboardEvent) {

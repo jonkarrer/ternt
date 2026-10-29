@@ -3,19 +3,9 @@
 const S = () => t.state();
 const tab = () => S().tabs.find((x) => x.id === S().active);
 const F = "http://localhost:8765";
-const request = () => t.invoke("palette_request");
-const P = (js) => t.eval("palette", js);
-const type = (text) =>
-  P(`(() => { const i = document.querySelector("input"); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
-const key = (k) =>
-  P(`document.querySelector("input").dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(k)}, bubbles: true }))`);
-const rows = async () =>
-  JSON.parse(await t.read("palette", `JSON.stringify([...document.querySelectorAll("li")].map((li) => (li.querySelector(".label") ?? li).textContent.trim()))`));
-const openPalette = async () => {
-  await t.invoke("menu_action", { id: "new-tab" });
-  await t.until(request, "palette open");
-  await t.sleep(200);
-};
+const request = t.palette.request;
+const { type, key, rows } = t.palette;
+const openPalette = () => t.palette.open();
 const search = (q) => t.invoke("history_search", { query: q, limit: 10 });
 
 // Visit pages, then close them

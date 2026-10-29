@@ -39,6 +39,13 @@ await t.assert((await t.invoke("set_sidebar_width", { width: 300 })) === 300, "s
 // A second space with a terminal; end on the first space's spa tab
 const work = await t.invoke("create_space");
 await t.invoke("rename_space", { id: work, name: "Work" });
+// Work has its own profile: sign in (a cookie) and keep the page as a favorite
+await t.assert(S().spaces.find((s) => s.id === work)?.profile, "Work has its own profile");
+const mail = await t.invoke("new_tab", { url: `${F}/cookie.html?set=work-login` });
+await t.until(() => tab()?.id === mail && tab()?.title === "cookie:work-login", "Work signs in");
+await t.invoke("navigate", { url: `${F}/cookie.html` }); // saved URL mustn't set the cookie itself
+await t.until(() => tab()?.url === `${F}/cookie.html` && tab()?.title === "cookie:work-login", "signed in page");
+await t.invoke("move_tab", { id: mail, zone: "favorite", folder: null, index: null });
 await t.invoke("new_terminal");
 await t.until(() => tab()?.kind === "terminal" && S().activeSpace === work, "terminal in Work");
 await t.invoke("activate_tab", { id: find("SPA").id });

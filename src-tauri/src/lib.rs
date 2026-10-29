@@ -105,6 +105,10 @@ pub fn run() {
             debug::debug_get,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_quit,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_clipboard,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_focused,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
