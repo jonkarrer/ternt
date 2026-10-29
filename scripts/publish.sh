@@ -73,11 +73,11 @@ lipo -archs $app/Contents/MacOS/* | tr '\n' ' '; echo
 # Only system libraries: a Nix toolchain would link /nix/store paths.
 otool -L $app/Contents/MacOS/* | grep -E '^\s+/(nix|opt|usr/local)/' && fail "links non-system libraries (build with Apple's toolchain)"
 if [[ -z $DRY ]]; then
-  xcrun stapler validate $app
+  /usr/bin/xcrun stapler validate $app
   spctl --assess --type execute -vv $app
   step "notarizing the dmg"
-  xcrun notarytool submit $dmg --apple-id $APPLE_ID --team-id $APPLE_TEAM_ID --password $APPLE_PASSWORD --wait
-  xcrun stapler staple $dmg
+  /usr/bin/xcrun notarytool submit $dmg --apple-id $APPLE_ID --team-id $APPLE_TEAM_ID --password $APPLE_PASSWORD --wait
+  /usr/bin/xcrun stapler staple $dmg
   spctl --assess --type open --context context:primary-signature -vv $dmg
 fi
 
