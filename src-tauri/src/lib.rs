@@ -1,6 +1,7 @@
 mod browser;
 #[cfg(all(debug_assertions, target_os = "macos"))]
 mod debug;
+mod history;
 mod menu;
 mod model;
 #[cfg(target_os = "macos")]
@@ -18,9 +19,11 @@ pub fn run() {
         .manage(Browser::default())
         .manage(palette::Palette::default())
         .manage(pty::Terminals::default())
+        .manage(history::Store::default())
         .setup(|app| {
             browser::create_main_window(app.handle())?;
             app.set_menu(menu::build(app.handle())?)?;
+            history::load(app.handle());
 
             // Restore the last session, then open any `moove <url>...` args.
             let saved = session::load(app.handle());
@@ -81,6 +84,7 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_ack,
+            history::history_search,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_ready,
             #[cfg(all(debug_assertions, target_os = "macos"))]
@@ -108,6 +112,7 @@ pub fn run() {
             // Saves are debounced; make sure the last change lands.
             if let tauri::RunEvent::Exit = event {
                 session::save_now(app);
+                history::save_now(app);
             }
         });
 }

@@ -2,13 +2,13 @@
   import { onMount, tick } from "svelte";
   import Favicon from "../lib/Favicon.svelte";
   import TabIcon from "../lib/TabIcon.svelte";
-  import { browser, hostOf, parseInput, type PaletteRequest, type Space, type Tab } from "../lib/browser";
+  import { browser, hostOf, parseInput, type HistoryHit, type PaletteRequest, type Space, type Tab } from "../lib/browser";
 
   /** `top` holds the best matches, shown without a header. */
-  type Section = "top" | "Suggestions" | "Tabs" | "Commands" | "Spaces";
+  type Section = "top" | "Suggestions" | "Tabs" | "History" | "Commands" | "Spaces";
   type Item = {
     key: string;
-    kind: "url" | "search" | "tab" | "command" | "space" | "run";
+    kind: "url" | "search" | "tab" | "history" | "command" | "space" | "run";
     label: string;
     detail?: string;
     shortcut?: string;
@@ -46,6 +46,7 @@
     { id: "ctx-pin", label: "Pin Tab", web: true, tab: true, unless: "pinned" },
     { id: "ctx-duplicate", label: "Duplicate Tab", keywords: "copy", tab: true },
     { id: "clear-today", label: "Clear Today Tabs", keywords: "close all archive" },
+    { id: "clear-history", label: "Clear History", keywords: "browsing forget" },
     { id: "next-space", label: "Next Space", shortcut: "⌥⌘→" },
     { id: "previous-space", label: "Previous Space", shortcut: "⌥⌘←" },
     { id: "new-folder", label: "New Folder" },
@@ -68,7 +69,24 @@
   let input = $state<HTMLInputElement>();
   let list = $state<HTMLElement>();
 
+  /** Visited pages for the current query, from Rust (kept until the next
+      answer arrives, so the list doesn't flicker per keystroke). */
+  let history = $state<HistoryHit[]>([]);
+  let historySeq = 0;
+
   const items = $derived(buildItems(query));
+
+  $effect(() => {
+    const q = query.trim();
+    const seq = ++historySeq;
+    if (!request || !q || q.startsWith(">")) {
+      history = [];
+      return;
+    }
+    browser.searchHistory(q, 8).then((hits) => {
+      if (seq === historySeq) history = hits;
+    });
+  });
 
   onMount(() => {
     const unlisten = browser.onPaletteOpen(show);
@@ -193,6 +211,21 @@
     const commandHits = ranked(commands, (c) =>
       Math.max(score(c.label, lq), c.keywords && score(c.keywords, lq) >= 80 ? 50 : 0),
     );
+    // History: pages not already open, still matching every typed word.
+    const historyHits = history.filter(
+      (h) =>
+        !tabs.some((t) => t.url === h.url) &&
+        lq.split(/\s+/).every((w) => `${h.url} ${h.title}`.toLowerCase().includes(w)),
+    );
+    const historyItem = (h: HistoryHit, section: Section): Item => ({
+      key: `history-${h.url}`,
+      kind: "history",
+      label: h.title || hostOf(h.url),
+      detail: hostOf(h.url),
+      url: h.url,
+      section,
+      run: () => (newTab ? browser.newTab(h.url) : browser.navigate(h.url)),
+    });
     const spaceHits = ranked(otherSpaces, (s) => Math.max(score(s.name, lq), score("space", lq) >= 80 ? 50 : 0));
 
     // Top: a typed URL first; then a tab whose title matches (beats a web
@@ -214,6 +247,11 @@
     const bestCommand = commandHits[0]?.s >= 70 ? commandHits.shift()!.x : undefined;
     const bestSpace = spaceHits[0]?.s >= 80 ? spaceHits.shift()!.x : undefined;
     if (bestTab) top.push(tabItem(bestTab, "top"));
+    // Typing the start of a visited address: that page, like an address bar.
+    const bare = (url: string) => url.replace(/^[a-z]+:\/\/(www\.)?/i, "").toLowerCase();
+    if (parsed?.kind !== "url" && historyHits[0] && bare(historyHits[0].url).startsWith(lq)) {
+      top.push(historyItem(historyHits.shift()!, "top"));
+    }
     if (bestCommand) top.push(commandItem(bestCommand, "top"));
     if (bestSpace) top.push(spaceItem(bestSpace, "top"));
     if (open && parsed.kind === "search") top.push(open);
@@ -221,6 +259,7 @@
     return [
       ...top,
       ...tabHits.slice(0, SECTION_LIMIT).map((r) => tabItem(r.x, "Tabs")),
+      ...historyHits.slice(0, SECTION_LIMIT).map((h) => historyItem(h, "History")),
       ...commandHits.slice(0, SECTION_LIMIT).map((r) => commandItem(r.x, "Commands")),
       ...spaceHits.map((r) => spaceItem(r.x, "Spaces")),
     ];

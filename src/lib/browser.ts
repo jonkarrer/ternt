@@ -46,6 +46,11 @@ export interface BrowserState {
   sidebarCollapsed: boolean;
 }
 
+export interface HistoryHit {
+  url: string;
+  title: string;
+}
+
 export type PaletteMode = "newTab" | "edit";
 
 export interface PaletteRequest {
@@ -98,6 +103,8 @@ export const browser = {
   openPalette: (mode: PaletteMode) => invoke("open_palette", { mode }),
   closePalette: () => invoke("close_palette"),
   paletteRequest: () => invoke<PaletteRequest | null>("palette_request"),
+  /** Visited pages matching `query`, in the active space's profile. */
+  searchHistory: (query: string, limit: number) => invoke<HistoryHit[]>("history_search", { query, limit }),
 
   onState: (cb: (state: BrowserState) => void): Promise<UnlistenFn> =>
     listen<BrowserState>("browser:state", (e) => cb(e.payload)),

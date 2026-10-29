@@ -67,8 +67,7 @@ await t.until(() => !exploring() && S().active === home, "click opens and exits"
 
 // h/l switch spaces; escape returns to the starting space
 const work = await t.invoke("create_space");
-await t.invoke("new_tab", { url: `${F}/page2.html` });
-const workTab = S().active;
+const workTab = await t.invoke("new_tab", { url: `${F}/page2.html` });
 await explore();
 key("h");
 await t.until(() => S().activeSpace !== work && cursor() === "Fixture Home", "h goes to the previous space, cursor follows");

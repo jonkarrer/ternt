@@ -132,6 +132,10 @@ pub fn run_action(app: &AppHandle, id: String) {
             "forward" => browser::forward_active(&app),
             "reopen-tab" => browser::reopen_closed_tab(&app),
             "clear-today" => browser::clear_today(&app),
+            "clear-history" => {
+                crate::history::clear(&app, browser::active_profile(&app).as_deref());
+                Ok(())
+            }
             #[cfg(target_os = "macos")]
             "copy-url" => {
                 if let Some(url) = browser::active_tab_url(&app) {

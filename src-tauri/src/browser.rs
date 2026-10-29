@@ -114,6 +114,11 @@ pub fn active_webview(app: &AppHandle) -> Option<Webview> {
     app.get_webview(&tab_label(with(app, |s| s.active)?))
 }
 
+/// The active space's profile (for its history).
+pub fn active_profile(app: &AppHandle) -> Option<String> {
+    with(app, |s| s.profile_of(s.active_space).map(String::from))
+}
+
 /// The active web tab's URL; `None` for terminals or no tab.
 pub fn active_tab_url(app: &AppHandle) -> Option<String> {
     with(app, |s| {
@@ -202,6 +207,7 @@ fn schedule_emit(app: &AppHandle) {
 /// Called on the main thread whenever a tab's native navigation state changes.
 pub fn on_native_change(app: &AppHandle, id: u32, native: NativeState) {
     let changed = with(app, |s| {
+        let profile = s.profile_for(s.tab(id)?);
         let tab = s.tab_mut(id)?;
         if let Some(url) = native.url {
             tab.url = url;
@@ -210,11 +216,15 @@ pub fn on_native_change(app: &AppHandle, id: u32, native: NativeState) {
         tab.loading = native.loading;
         tab.can_go_back = native.can_go_back;
         tab.can_go_forward = native.can_go_forward;
-        Some(())
+        // A finished load is a visit (history ignores repeats of the same URL).
+        let visit = (!tab.loading).then(|| (tab.url.clone(), tab.title.clone()));
+        Some((profile, visit))
     });
-    if changed.is_some() {
-        schedule_emit(app);
+    let Some((profile, visit)) = changed else { return };
+    if let Some((url, title)) = visit {
+        crate::history::record(app, id, profile.as_deref(), &url, &title);
     }
+    schedule_emit(app);
 }
 
 /// Left edge of the content pane, in logical px (overlays center on it).
@@ -370,6 +380,7 @@ fn profile_bytes(hex: &str) -> Option<[u8; 16]> {
 /// Delete a profile's cookies and storage. WebKit refuses while a webview
 /// still uses the store, so callers close those first.
 fn remove_profile(app: &AppHandle, profile: String) {
+    crate::history::clear(app, Some(&profile));
     let Some(bytes) = profile_bytes(&profile) else { return };
     let app = app.clone();
     std::thread::spawn(move || {
@@ -455,6 +466,7 @@ fn close_webview(app: &AppHandle, id: u32) -> tauri::Result<()> {
         crate::native::unobserve(&webview, id);
         webview.close()?;
     }
+    crate::history::forget_tab(app, id);
     Ok(())
 }
 

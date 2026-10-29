@@ -69,6 +69,8 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
 - **Terminals** stream raw PTY bytes over a Tauri channel with ack-based flow control
   (`src-tauri/src/pty.rs`).
 - **Sessions** are saved to the app data dir (`session.json`), debounced and on exit.
+- **History** (`src-tauri/src/history.rs`) records each page that finishes loading, per profile, in
+  `history.json`; the command bar searches it in Rust as you type (match quality × frecency).
 
 ## Tests
 
