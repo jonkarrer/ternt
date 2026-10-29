@@ -16,7 +16,7 @@ bound by `doppler setup --no-interactive`) reach the script as environment varia
 | Doppler secret                         | Used for                                           | Fallback if absent                        |
 | -------------------------------------- | -------------------------------------------------- | ----------------------------------------- |
 | `TAURI_SIGNING_PRIVATE_KEY` (+`_PASSWORD`) | signs the update archive                        | `~/.tauri/ternt.key` (+`.password`)       |
-| `GITHUB_TOKEN`                         | creates the release, uploads files                 | keychain item `ternt-github`              |
+| `GITHUB_ACCESS_TOKEN`                  | creates the release, uploads files                 | keychain item `ternt-github`              |
 | `APPLE_ID`                             | Apple developer account email, for notarization    | none: required                            |
 | `APPLE_PASSWORD`                       | app-specific password, for notarization            | keychain item `ternt-notary`              |
 

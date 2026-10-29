@@ -11,8 +11,8 @@
 # Finder AppleScript, which fails outside a GUI login session: SSH, CI, agents),
 # and uploads to GitHub Releases: the .dmg for new installs, the signed
 # update archive and latest.json for installed copies (src-tauri/src/updater.rs).
-# Uploads use a GitHub token from the keychain (item "ternt-github") or
-# $GITHUB_TOKEN.
+# Uploads use a GitHub token: $GITHUB_ACCESS_TOKEN (Doppler, via just publish),
+# $GITHUB_TOKEN, or the keychain item "ternt-github".
 set -e
 cd ${0:A:h:h}
 ROOT=$PWD
@@ -44,8 +44,9 @@ step "checking Ternt $version"
   fail "HEAD isn't tagged $tag; run scripts/release.sh <version> first"
 for tool in bun cargo rustup xcrun; do command -v $tool >/dev/null || fail "$tool not found"; done
 if [[ -z $DRY ]]; then
-  export GITHUB_TOKEN=${GITHUB_TOKEN:-$(security find-generic-password -s ternt-github -w 2>/dev/null)}
-  [[ -n $GITHUB_TOKEN ]] || fail "no GitHub token: see docs/RELEASING.md (keychain item 'ternt-github')"
+  # Doppler supplies GITHUB_ACCESS_TOKEN (just publish); the keychain is the fallback.
+  export GITHUB_TOKEN=${GITHUB_TOKEN:-${GITHUB_ACCESS_TOKEN:-$(security find-generic-password -s ternt-github -w 2>/dev/null)}}
+  [[ -n $GITHUB_TOKEN ]] || fail "no GitHub token: see docs/RELEASING.md (Doppler GITHUB_ACCESS_TOKEN or keychain item 'ternt-github')"
   # Also proves the token works before the long build.
   case $(github GET /repos/$REPO/releases/tags/$tag -o /dev/null -w '%{http_code}' 2>/dev/null || true) in
     404) ;;
