@@ -1,0 +1,113 @@
+#!/bin/zsh
+# Build, sign, notarize and publish a release from a Mac with an Apple
+# Developer ID. See docs/RELEASING.md for the one-time setup.
+#
+#   scripts/release.sh 0.2.0     # bump, commit, tag (any machine)
+#   scripts/publish.sh           # on the signing Mac: build + publish the tag at HEAD
+#   scripts/publish.sh --dry-run # build and check only: no Apple signing, no upload
+#
+# Produces a universal (Apple Silicon + Intel) app, notarized and stapled,
+# and uploads to GitHub Releases: the .dmg for new installs, the signed
+# update archive and latest.json for installed copies (src-tauri/src/updater.rs).
+set -e
+cd ${0:A:h:h}
+ROOT=$PWD
+DRY=$([[ $1 == --dry-run ]] && echo 1 || true)
+REPO=jonkarrer/ternt
+TARGET=${TERNT_TARGET:-universal-apple-darwin}
+OUT=$ROOT/src-tauri/target/$TARGET/release/bundle
+fail() { echo "!! $*"; exit 1; }
+step() { echo "\n== $*"; }
+
+version=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"([0-9.]+)".*/\1/')
+tag=v$version
+
+step "checking Ternt $version"
+[[ -z $(git status --porcelain) ]] || fail "commit or stash your changes first"
+[[ $(git describe --exact-match --tags HEAD 2>/dev/null) == $tag ]] ||
+  fail "HEAD isn't tagged $tag; run scripts/release.sh <version> first"
+for tool in bun cargo rustup xcrun; do command -v $tool >/dev/null || fail "$tool not found"; done
+if [[ -z $DRY ]]; then
+  command -v gh >/dev/null || fail "gh not found (brew install gh, then gh auth login)"
+  gh auth status >/dev/null 2>&1 || fail "gh isn't logged in (gh auth login)"
+  gh release view $tag -R $REPO >/dev/null 2>&1 && fail "release $tag already exists on GitHub"
+fi
+[[ $TARGET != universal-apple-darwin ]] || for t in aarch64-apple-darwin x86_64-apple-darwin; do
+  rustup target list --installed | grep -qx $t || fail "missing Rust target $t (rustup target add $t)"
+done
+
+# Updater key: signs the update archive (verified by installed copies).
+export TAURI_SIGNING_PRIVATE_KEY=${TAURI_SIGNING_PRIVATE_KEY:-$(cat ~/.tauri/ternt.key 2>/dev/null)}
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-$(cat ~/.tauri/ternt.key.password 2>/dev/null)}
+[[ -n $TAURI_SIGNING_PRIVATE_KEY ]] || fail "updater key missing: copy ~/.tauri/ternt.key and ternt.key.password here"
+
+config='{}'
+if [[ -z $DRY ]]; then
+  # Developer ID: signs the app; Apple ID + app-specific password: notarizes it.
+  identity=${APPLE_SIGNING_IDENTITY:-$(security find-identity -v -p codesigning | grep -m1 -o '"Developer ID Application: [^"]*"' | tr -d '"')}
+  [[ -n $identity ]] || fail "no 'Developer ID Application' certificate in the keychain"
+  export APPLE_SIGNING_IDENTITY=$identity
+  export APPLE_TEAM_ID=${APPLE_TEAM_ID:-$(echo $identity | sed -E 's/.*\(([A-Z0-9]+)\)$/\1/')}
+  [[ -n $APPLE_ID ]] || fail "set APPLE_ID to your Apple developer account email"
+  export APPLE_PASSWORD=${APPLE_PASSWORD:-$(security find-generic-password -s ternt-notary -a "$APPLE_ID" -w 2>/dev/null)}
+  [[ -n $APPLE_PASSWORD ]] || fail "no app-specific password: see docs/RELEASING.md (keychain item 'ternt-notary')"
+  config="{\"bundle\":{\"macOS\":{\"signingIdentity\":\"$identity\"}}}"
+  echo "signing as: $identity (team $APPLE_TEAM_ID)"
+fi
+
+step "building ($TARGET; signing and notarizing take a few minutes)"
+rm -rf $OUT
+bun install --frozen-lockfile
+bun node_modules/@tauri-apps/cli/tauri.js build --target $TARGET --config "$config"
+
+app=$OUT/macos/Ternt.app
+archive=$OUT/macos/Ternt.app.tar.gz
+dmg=$(ls $OUT/dmg/*.dmg | head -1)
+[[ -d $app && -f $archive && -f $archive.sig && -f $dmg ]] || fail "missing build outputs in $OUT"
+
+step "verifying"
+codesign --verify --deep --strict $app
+lipo -archs $app/Contents/MacOS/* | tr '\n' ' '; echo
+[[ $(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" $app/Contents/Info.plist) == $version ]] ||
+  fail "built app isn't version $version"
+# Only system libraries: a Nix toolchain would link /nix/store paths.
+otool -L $app/Contents/MacOS/* | grep -E '^\s+/(nix|opt|usr/local)/' && fail "links non-system libraries (build with Apple's toolchain)"
+if [[ -z $DRY ]]; then
+  xcrun stapler validate $app
+  spctl --assess --type execute -vv $app
+  step "notarizing the dmg"
+  xcrun notarytool submit $dmg --apple-id $APPLE_ID --team-id $APPLE_TEAM_ID --password $APPLE_PASSWORD --wait
+  xcrun stapler staple $dmg
+  spctl --assess --type open --context context:primary-signature -vv $dmg
+fi
+
+step "writing latest.json"
+dist=$OUT/publish
+rm -rf $dist && mkdir -p $dist
+cp $dmg $dist/Ternt_${version}_universal.dmg
+cp $archive $dist/Ternt_${version}_universal.app.tar.gz
+url=https://github.com/$REPO/releases/download/$tag/Ternt_${version}_universal.app.tar.gz
+sig=$(cat $archive.sig)
+cat > $dist/latest.json <<JSON
+{
+  "version": "$version",
+  "notes": "Ternt $version",
+  "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "platforms": {
+    "darwin-aarch64": { "signature": "$sig", "url": "$url" },
+    "darwin-x86_64": { "signature": "$sig", "url": "$url" }
+  }
+}
+JSON
+ls -la $dist
+
+if [[ -n $DRY ]]; then
+  echo "\ndry run done: nothing signed by Apple, nothing uploaded ($dist)"
+  exit 0
+fi
+
+step "publishing $tag"
+git push origin HEAD:main $tag
+gh release create $tag -R $REPO --title "Ternt $version" --notes "Download **Ternt_${version}_universal.dmg**, open it and drag Ternt to Applications. Installed copies update themselves: an Update button appears at the bottom left of the sidebar." \
+  $dist/Ternt_${version}_universal.dmg $dist/Ternt_${version}_universal.app.tar.gz $dist/latest.json
+echo "\npublished: https://github.com/$REPO/releases/tag/$tag"

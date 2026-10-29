@@ -5,9 +5,7 @@ An Arc-style browser and terminal. Tauri v2 (Rust) + Svelte 5 (Vite, TypeScript)
 ## Install
 
 Download the `.dmg` from the [latest release](https://github.com/jonkarrer/ternt/releases/latest),
-open it and drag Ternt to Applications. Ternt isn't notarized by Apple yet, so macOS blocks the
-first launch; allow it once with `xattr -dr com.apple.quarantine /Applications/Ternt.app` (or
-System Settings → Privacy & Security → Open Anyway). Needs macOS 14 or later.
+open it and drag Ternt to Applications. Needs macOS 14 or later.
 
 After that Ternt updates itself: when a new version is out, an **Update** button appears at the
 bottom left of the sidebar. Clicking it downloads the update, swaps the app in place and relaunches
@@ -87,24 +85,18 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
 ## Releases
 
 ```sh
-scripts/release.sh 0.2.0        # bump the version everywhere, commit, tag v0.2.0
-git push origin main v0.2.0     # GitHub Actions builds and publishes it
+scripts/release.sh 0.2.0   # bump the version everywhere, commit, tag v0.2.0
+scripts/publish.sh         # on the signing Mac: build, sign, notarize, push, publish
 ```
 
-`.github/workflows/release.yml` runs on the tag: unit tests, a universal (Apple Silicon + Intel)
-build, then a GitHub Release with the `.dmg`, the signed update archive and `latest.json`.
-Installed copies check
-`https://github.com/jonkarrer/ternt/releases/latest/download/latest.json` shortly after launch
-and every 4 hours (`src-tauri/src/updater.rs`).
+Releases are built on a Mac with an Apple Developer ID, signed and notarized, and published to
+GitHub Releases: the `.dmg` for new installs, plus the signed update archive and `latest.json`
+that installed copies check shortly after launch and every 4 hours
+(`src-tauri/src/updater.rs`). Updates are verified against the public key in
+`tauri.conf.json`; the private key lives in `~/.tauri/ternt.key` (**back it up**: without it,
+installed copies can't be updated). Setup and details: [docs/RELEASING.md](docs/RELEASING.md).
 
-Updates are signed with the updater key and verified against the public key in
-`tauri.conf.json` before they're installed. The private key lives in `~/.tauri/ternt.key` (with
-its password in `~/.tauri/ternt.key.password`) and in the repo's Actions secrets
-`TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. **Back it up**: without
-it, installed copies can't be updated any more.
-
-Ship release builds from CI, not from this machine: the local Rust toolchain comes from Nix, so
-local builds link libraries from `/nix/store` that other Macs don't have.
+CI (`.github/workflows/ci.yml`) runs the unit tests on every push.
 
 ## Tests
 
