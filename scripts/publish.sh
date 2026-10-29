@@ -18,6 +18,7 @@ cd ${0:A:h:h}
 ROOT=$PWD
 DRY=$([[ $1 == --dry-run ]] && echo 1 || true)
 REPO=jonkarrer/ternt
+TEAM=6ZS622Z3H8 # Apple Developer team (same as bernt and lernt); public, it is in every signed app
 TARGET=${TERNT_TARGET:-universal-apple-darwin}
 OUT=$ROOT/src-tauri/target/$TARGET/release/bundle
 fail() { echo "!! $*"; exit 1; }
@@ -65,10 +66,10 @@ export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-
 config='{}'
 if [[ -z $DRY ]]; then
   # Developer ID: signs the app; Apple ID + app-specific password: notarizes it.
-  identity=${APPLE_SIGNING_IDENTITY:-$(security find-identity -v -p codesigning | grep -m1 -o '"Developer ID Application: [^"]*"' | tr -d '"')}
-  [[ -n $identity ]] || fail "no 'Developer ID Application' certificate in the keychain"
+  identity=${APPLE_SIGNING_IDENTITY:-$(security find-identity -v -p codesigning | grep -m1 -o "\"Developer ID Application: [^\"]*($TEAM)\"" | tr -d '"')}
+  [[ -n $identity ]] || fail "no 'Developer ID Application' certificate for team $TEAM in the keychain (Xcode > Settings > Accounts > Manage Certificates)"
   export APPLE_SIGNING_IDENTITY=$identity
-  export APPLE_TEAM_ID=${APPLE_TEAM_ID:-$(echo $identity | sed -E 's/.*\(([A-Z0-9]+)\)$/\1/')}
+  export APPLE_TEAM_ID=$TEAM
   [[ -n $APPLE_ID ]] || fail "set APPLE_ID to your Apple developer account email"
   export APPLE_PASSWORD=${APPLE_PASSWORD:-$(security find-generic-password -s ternt-notary -a "$APPLE_ID" -w 2>/dev/null)}
   [[ -n $APPLE_PASSWORD ]] || fail "no app-specific password: see docs/RELEASING.md (keychain item 'ternt-notary')"
