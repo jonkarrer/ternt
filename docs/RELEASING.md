@@ -11,9 +11,9 @@ scripts/publish.sh         # on the signing Mac: build, sign, notarize, push, pu
 
 ## One-time setup on the signing Mac
 
-1. **Tools.** Xcode (or `xcode-select --install`), Rust via [rustup](https://rustup.rs), and
-   either `nix develop` in the repo (the flake provides Bun and the GitHub CLI) or
-   [Bun](https://bun.sh) and `brew install gh`. Release binaries must link only system libraries,
+1. **Tools.** Xcode (or `xcode-select --install`), Rust via [rustup](https://rustup.rs),
+   Bun (`nix develop` in the repo provides it, or [bun.sh](https://bun.sh)), and the GitHub CLI
+   for publishing (`brew install gh`). Release binaries must link only system libraries,
    so C compiling and linking must use Apple's toolchain, not a Nix one (which links
    `/nix/store` libraries other Macs don't have). The flake's shell takes care of that, even when
    entered from another Nix shell; `publish.sh` checks the result either way. Then:

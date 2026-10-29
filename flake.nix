@@ -1,11 +1,11 @@
 {
   description = "Ternt: an Arc-style browser and terminal (Tauri v2 + Svelte 5), macOS";
 
-  # Provides the JS side (Bun) and release tooling. Rust is NOT provided: use
-  # rustup. C compiling and linking deliberately go to Apple's toolchain
-  # (Xcode / Command Line Tools), not a Nix one: a Nix cc links /nix/store
-  # libraries into the app, which then can't run on other Macs and fails
-  # macOS library validation (see docs/RELEASING.md).
+  # Provides Bun. Rust is NOT provided: use rustup. C compiling and linking
+  # deliberately go to Apple's toolchain (Xcode / Command Line Tools), not a
+  # Nix one: a Nix cc links /nix/store libraries into the app, which then
+  # can't run on other Macs and fails macOS library validation (see
+  # docs/RELEASING.md).
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
   outputs =
@@ -21,10 +21,7 @@
       devShells = forAll (pkgs: {
         # NoCC: no Nix compiler, linker or SDK in the shell.
         default = pkgs.mkShellNoCC {
-          packages = [
-            pkgs.bun # package manager, scripts, tests
-            pkgs.gh # publishing releases (scripts/publish.sh)
-          ];
+          packages = [ pkgs.bun ]; # package manager, scripts, tests
 
           shellHook = ''
             # Entered from another Nix shell? Drop its compiler setup so cargo
