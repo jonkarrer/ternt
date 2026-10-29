@@ -3,3 +3,6 @@ node_modules/
 .DS_Store
 /target/
 /e2e/.out/
+.env
+.direnv/
+result

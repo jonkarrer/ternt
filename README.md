@@ -14,15 +14,19 @@ bottom left of the sidebar. Clicking it downloads the update, swaps the app in p
 ## Development
 
 ```sh
-nix develop                # Bun (Rust comes from rustup; Xcode does C/linking)
+nix develop                # Bun, just, doppler (Rust comes from rustup; Xcode does C/linking)
 bun install
-bun tauri dev              # run the app
-bun tauri build            # release bundle (judge performance here, not in dev)
-bun run check              # type-check Svelte/TS
-bun run test               # everything: unit tests, type check, clippy, then e2e
-bun run test:unit          # the fast part (about a second)
-e2e/run.sh palette         # one e2e suite (VERBOSE=1 lists every check)
+just                       # lists every recipe
+just dev                   # run the app
+just build                 # release bundle (judge performance here, not in dev)
+just check                 # type-check Svelte/TS, clippy
+just test                  # unit tests, type check, clippy (about a second)
+just test-e2e palette      # one e2e suite (VERBOSE=1 lists every check); no name runs all
 ```
+
+The flake follows the org Nix standard (`mkDevShell` from `~/devjon/configs/shells/shared`).
+Secrets live in the `ternt` Doppler project (`doppler.yaml` binds `dev`); recipes that need
+them run under `doppler run --`.
 
 `ternt <url>...` opens URLs as tabs (`bun tauri dev -- -- https://example.com`).
 
@@ -86,16 +90,16 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
 ## Releases
 
 ```sh
-scripts/release.sh 0.2.0   # bump the version everywhere, commit, tag v0.2.0
-scripts/publish.sh         # on the signing Mac: build, sign, notarize, push, publish
+just release 0.2.0         # bump the version everywhere, commit, tag v0.2.0
+just publish               # on the signing Mac: build, sign, notarize, push, publish
 ```
 
 Releases are built on a Mac with an Apple Developer ID, signed and notarized, and published to
 GitHub Releases: the `.dmg` for new installs, plus the signed update archive and `latest.json`
 that installed copies check shortly after launch and every 4 hours
 (`src-tauri/src/updater.rs`). Updates are verified against the public key in
-`tauri.conf.json`; the private key lives in `~/.tauri/ternt.key` (**back it up**: without it,
-installed copies can't be updated). Setup and details: [docs/RELEASING.md](docs/RELEASING.md).
+`tauri.conf.json`; the private key lives in Doppler (`ternt` / `dev`, `TAURI_SIGNING_PRIVATE_KEY`) and in
+`~/.tauri/ternt.key` (without it, installed copies can't be updated). Setup and details: [docs/RELEASING.md](docs/RELEASING.md).
 
 CI (`.github/workflows/ci.yml`) runs the unit tests on every push.
 
