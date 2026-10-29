@@ -14,6 +14,7 @@ bottom left of the sidebar. Clicking it downloads the update, swaps the app in p
 ## Development
 
 ```sh
+nix develop                # Bun + gh (Rust comes from rustup; Xcode does C/linking)
 bun install
 bun tauri dev              # run the app
 bun tauri build            # release bundle (judge performance here, not in dev)

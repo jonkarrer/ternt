@@ -11,11 +11,12 @@ scripts/publish.sh         # on the signing Mac: build, sign, notarize, push, pu
 
 ## One-time setup on the signing Mac
 
-1. **Apple's toolchain, not Nix.** Install the Xcode command line tools
-   (`xcode-select --install`), Rust via [rustup](https://rustup.rs), [Bun](https://bun.sh) and the
-   GitHub CLI (`brew install gh`). Release binaries must link only system libraries; a Nix shell's
-   Rust links `/nix/store` paths that don't exist on other Macs (`publish.sh` checks for this).
-   Then:
+1. **Tools.** Xcode (or `xcode-select --install`), Rust via [rustup](https://rustup.rs), and
+   either `nix develop` in the repo (the flake provides Bun and the GitHub CLI) or
+   [Bun](https://bun.sh) and `brew install gh`. Release binaries must link only system libraries,
+   so C compiling and linking must use Apple's toolchain, not a Nix one (which links
+   `/nix/store` libraries other Macs don't have). The flake's shell takes care of that, even when
+   entered from another Nix shell; `publish.sh` checks the result either way. Then:
 
    ```sh
    rustup target add aarch64-apple-darwin x86_64-apple-darwin

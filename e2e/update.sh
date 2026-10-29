@@ -7,9 +7,9 @@
 # Needs the updater signing key: ~/.tauri/ternt.key (+ .password), or
 # TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
 # Debug bundles, so it takes a few minutes; output in e2e/.out/update/.
-# The hardened runtime is off for these test bundles only: with a Nix
-# toolchain, local builds link /nix/store libraries, which library
-# validation rejects. (Release builds come from CI with the system toolchain.)
+# The hardened runtime is off for these test bundles only: outside `nix
+# develop`, a Nix shell's linker puts /nix/store libraries in the app, which
+# library validation rejects.
 set -e
 E2E=${0:A:h}
 ROOT=${E2E:h}

@@ -33,8 +33,8 @@ await t.until(() => tab()?.title === "build-logs", "OSC title updates the tab");
 await t.resize(1100, 720);
 await t.sleep(400);
 await run(term1, "echo size:$(stty size)");
-await waitFor(term1, "size:", "stty reports a size");
-const size = (await text(term1)).match(/size:(\d+) (\d+)/);
+// Wait for the output line, not the echoed command (which also says "size:").
+const size = await t.until(async () => (await text(term1)).match(/size:(\d+) (\d+)/), "stty reports a size");
 await t.assert(size && +size[1] > 10 && +size[2] > 40, `pty sized to the view (${size?.[1]} rows x ${size?.[2]} cols)`);
 
 // Flood: 200k lines must not wedge anything (flow control)
