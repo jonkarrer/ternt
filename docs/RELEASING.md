@@ -52,7 +52,20 @@ Add one with `doppler secrets set NAME` (it prompts, so the value stays out of s
 
 3. **Developer ID certificate.** In the keychain you need a *Developer ID Application*
    certificate (Xcode → Settings → Accounts → Manage Certificates → + → Developer ID
-   Application). Check with:
+   Application). Headless Macs (SSH, remote agents) can't use the login keychain for signing:
+   there, import the certificate and key from Doppler (`APPLE_DEVELOPER_ID_P12`, base64 PKCS12,
+   and `APPLE_DEVELOPER_ID_P12_PASSWORD`) into a dedicated keychain, as this Mac does
+   (`ternt-sign.keychain-db`, password in `~/.tauri/ternt-sign.keychain.password`):
+
+   ```sh
+   security create-keychain -p "<pw>" ~/Library/Keychains/ternt-sign.keychain-db
+   security set-keychain-settings ~/Library/Keychains/ternt-sign.keychain-db   # never auto-lock
+   security import ternt-devid.p12 -k ~/Library/Keychains/ternt-sign.keychain-db -P "<p12 pw>" -T /usr/bin/codesign
+   security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "<pw>" ~/Library/Keychains/ternt-sign.keychain-db
+   security list-keychains -d user -s ~/Library/Keychains/login.keychain-db ~/Library/Keychains/ternt-sign.keychain-db
+   ```
+
+   Check with:
 
    ```sh
    security find-identity -v -p codesigning   # should list "Developer ID Application: …"
