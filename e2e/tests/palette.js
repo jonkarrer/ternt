@@ -68,13 +68,13 @@ await t.invoke("close_tab", { id: S().active });
 
 // "> cmd" runs in a new terminal
 await openPalette("new-tab");
-await type("> echo moove-$((6*7))");
+await type("> echo ternt-$((6*7))");
 await t.until(async () => (await labels())[0]?.startsWith("Run “echo"), "'>' offers to run the command");
 await t.shot("palette-run");
 await key("Enter");
 await t.until(() => tab()?.kind === "terminal", "terminal opened for the command");
 const ran = S().active;
-await t.until(async () => (await t.read("term", `window.__termText(${ran})`)).includes("moove-42"), "the command ran");
+await t.until(async () => (await t.read("term", `window.__termText(${ran})`)).includes("ternt-42"), "the command ran");
 await t.invoke("close_tab", { id: ran });
 
 // The bar centers over the content pane, with or without the sidebar

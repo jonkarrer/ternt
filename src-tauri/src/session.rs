@@ -18,10 +18,10 @@ const SAVE_DELAY: Duration = Duration::from_millis(750);
 
 static SAVE_PENDING: AtomicBool = AtomicBool::new(false);
 
-/// `MOOVE_SESSION_FILE` overrides the location (the e2e suite uses this to
+/// `TERNT_SESSION_FILE` overrides the location (the e2e suite uses this to
 /// stay away from the real session).
 fn path(app: &AppHandle) -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("MOOVE_SESSION_FILE") {
+    if let Some(path) = std::env::var_os("TERNT_SESSION_FILE") {
         return Some(path.into());
     }
     Some(app.path().app_data_dir().ok()?.join("session.json"))

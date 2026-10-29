@@ -174,9 +174,9 @@ pub struct Store {
     save_pending: AtomicBool,
 }
 
-/// `MOOVE_HISTORY_FILE` overrides the location (used by the e2e suite).
+/// `TERNT_HISTORY_FILE` overrides the location (used by the e2e suite).
 fn path(app: &AppHandle) -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("MOOVE_HISTORY_FILE") {
+    if let Some(path) = std::env::var_os("TERNT_HISTORY_FILE") {
         return Some(path.into());
     }
     Some(app.path().app_data_dir().ok()?.join("history.json"))

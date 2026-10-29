@@ -15,7 +15,7 @@ use crate::{
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let app_menu = Submenu::with_items(
         app,
-        "moove",
+        "Ternt",
         true,
         &[
             &PredefinedMenuItem::about(app, None, None)?,

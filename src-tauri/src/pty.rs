@@ -85,7 +85,7 @@ fn spawn(app: &AppHandle, id: u32, cols: u16, rows: u16) -> Result<Session, Stri
     }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
-    cmd.env("TERM_PROGRAM", "moove");
+    cmd.env("TERM_PROGRAM", "Ternt");
     if std::env::var_os("LANG").is_none() {
         cmd.env("LANG", "en_US.UTF-8");
     }

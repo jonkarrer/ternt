@@ -1,8 +1,8 @@
 //! Debug-build-only test harness.
 //!
-//! `MOOVE_TEST=path/to/script.js` runs the script inside the UI webview once
+//! `TERNT_TEST=path/to/script.js` runs the script inside the UI webview once
 //! it has mounted. The script drives the app through the same commands the UI
-//! uses (`window.__moove`, see src/lib/debug.ts) plus the helpers here.
+//! uses (`window.__ternt`, see src/lib/debug.ts) plus the helpers here.
 
 use std::process::Command;
 
@@ -13,7 +13,7 @@ use crate::browser::{MAIN_WINDOW, UI_WEBVIEW};
 /// Called by the UI on mount; evaluates the test script if one was given.
 #[tauri::command]
 pub async fn debug_ready(app: AppHandle) -> Result<(), String> {
-    let Ok(path) = std::env::var("MOOVE_TEST") else {
+    let Ok(path) = std::env::var("TERNT_TEST") else {
         return Ok(());
     };
     let script = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
@@ -21,7 +21,7 @@ pub async fn debug_ready(app: AppHandle) -> Result<(), String> {
     crate::palette::close(&app).map_err(|e| e.to_string())?;
     let ui = app.get_webview(UI_WEBVIEW).ok_or("no ui webview")?;
     ui.eval(format!(
-        "(async () => {{ const t = window.__moove; try {{ {script}\n }} catch (e) {{ await t.log('FAIL ' + (e?.message ?? e) + '\\n' + (e?.stack ?? '')); }} finally {{ await t.log('TEST DONE'); }} }})()"
+        "(async () => {{ const t = window.__ternt; try {{ {script}\n }} catch (e) {{ await t.log('FAIL ' + (e?.message ?? e) + '\\n' + (e?.stack ?? '')); }} finally {{ await t.log('TEST DONE'); }} }})()"
     ))
     .map_err(|e| e.to_string())
 }
@@ -48,13 +48,13 @@ pub async fn debug_resize(app: AppHandle, width: f64, height: f64) -> Result<(),
         .map_err(|e| e.to_string())
 }
 
-/// Capture just the main window to `$MOOVE_SHOTS/<name>.png`.
+/// Capture just the main window to `$TERNT_SHOTS/<name>.png`.
 #[tauri::command]
 pub async fn debug_screenshot(app: AppHandle, name: String) -> Result<String, String> {
     let window = app.get_window(MAIN_WINDOW).ok_or("no window")?;
     let ns_window = window.ns_window().map_err(|e| e.to_string())? as *const objc2::runtime::AnyObject;
     let number: isize = unsafe { objc2::msg_send![&*ns_window, windowNumber] };
-    let dir = std::env::var("MOOVE_SHOTS").unwrap_or_else(|_| std::env::temp_dir().display().to_string());
+    let dir = std::env::var("TERNT_SHOTS").unwrap_or_else(|_| std::env::temp_dir().display().to_string());
     let path = format!("{dir}/{name}.png");
     let status = Command::new("screencapture")
         .args(["-x", "-o", "-l", &number.to_string(), &path])

@@ -92,7 +92,7 @@ define_class!(
     // SAFETY: NSObject has no subclassing requirements and we don't impl Drop.
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "MooveTabObserver"]
+    #[name = "TerntTabObserver"]
     #[ivars = ObserverIvars]
     struct TabObserver;
 
@@ -203,7 +203,7 @@ define_class!(
     // SAFETY: NSBox has no subclassing requirements and we don't impl Drop.
     #[unsafe(super(NSBox, NSView, NSResponder, NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "MooveDimView"]
+    #[name = "TerntDimView"]
     #[ivars = AppHandle]
     struct DimView;
 

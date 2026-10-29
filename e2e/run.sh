@@ -1,6 +1,6 @@
 #!/bin/zsh
 # End-to-end tests (macOS, debug build). Each test is a script evaluated in the
-# UI webview with `t` = window.__moove (see src/lib/debug.ts).
+# UI webview with `t` = window.__ternt (see src/lib/debug.ts).
 #
 #   e2e/run.sh            run every test in e2e/tests
 #   e2e/run.sh browsing   run one test (or several: e2e/run.sh palette history-1)
@@ -30,8 +30,8 @@ for name in $tests; do
   # restores); the first test of a group starts from scratch.
   key=${name%%-*}
   [[ $name == $key || $name == *-1 ]] && rm -f $OUT/$key.session.json $OUT/$key.history.json
-  MOOVE_TEST=$E2E/tests/$name.js MOOVE_SHOTS=$OUT MOOVE_SESSION_FILE=$OUT/$key.session.json \
-    MOOVE_HISTORY_FILE=$OUT/$key.history.json $ROOT/src-tauri/target/debug/moove > $OUT/$name.log 2>&1 &
+  TERNT_TEST=$E2E/tests/$name.js TERNT_SHOTS=$OUT TERNT_SESSION_FILE=$OUT/$key.session.json \
+    TERNT_HISTORY_FILE=$OUT/$key.history.json $ROOT/src-tauri/target/debug/ternt > $OUT/$name.log 2>&1 &
   pid=$!
   for i in {1..400}; do grep -q "TEST DONE" $OUT/$name.log && break; kill -0 $pid 2>/dev/null || break; sleep 0.25; done
   # Give the app a moment to exit on its own (it saves its session on exit).

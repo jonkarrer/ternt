@@ -1,4 +1,4 @@
-# moove
+# Ternt
 
 An Arc-style browser and terminal. Tauri v2 (Rust) + Svelte 5 (Vite, TypeScript), macOS-first.
 
@@ -14,7 +14,7 @@ bun run test:unit          # the fast part (about a second)
 e2e/run.sh palette         # one e2e suite (VERBOSE=1 lists every check)
 ```
 
-`moove <url>...` opens URLs as tabs (`bun tauri dev -- -- https://example.com`).
+`ternt <url>...` opens URLs as tabs (`bun tauri dev -- -- https://example.com`).
 
 ## Shortcuts
 
@@ -84,8 +84,8 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
   history ranking and storage (`history.rs`), profile ids (`browser.rs`). Then clippy with
   warnings as errors.
 - **End-to-end** (`e2e/run.sh`, macOS): launches the debug build once per suite in
-  `e2e/tests/` with `MOOVE_TEST=<script>`. The script runs inside the sidebar webview and drives
-  the app through its real commands and DOM events (`t` = `window.__moove`, see
+  `e2e/tests/` with `TERNT_TEST=<script>`. The script runs inside the sidebar webview and drives
+  the app through its real commands and DOM events (`t` = `window.__ternt`, see
   `src/lib/debug.ts`; native checks like keyboard focus and the clipboard are in
   `src-tauri/src/debug.rs`; both are compiled out of release builds). Fixture pages are served
   from `e2e/fixtures` on port 8765. Suites named `x-1`, `x-2` share a session and history file,

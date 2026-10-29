@@ -266,7 +266,7 @@ fn layout_tabs(app: &AppHandle) -> tauri::Result<()> {
 
 pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
     let builder = WindowBuilder::new(app, MAIN_WINDOW)
-        .title("moove")
+        .title("Ternt")
         .inner_size(1280.0, 800.0)
         .min_inner_size(640.0, 400.0);
 
@@ -340,7 +340,7 @@ fn open_popup(
     let popup_app = app.clone();
     let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External("about:blank".parse().unwrap()))
         .window_features(features)
-        .title(url.host_str().unwrap_or("moove"))
+        .title(url.host_str().unwrap_or("Ternt"))
         .on_document_title_changed(|window, title| {
             let _ = window.set_title(&title);
         })

@@ -22,8 +22,8 @@ await t.invoke("menu_action", { id: "new-terminal" });
 await t.until(() => tab()?.kind === "terminal", "cmd+opt+t opens a terminal tab");
 const term1 = S().active;
 await t.sleep(1500); // login shell startup
-await run(term1, "echo moove-$((6*7))");
-await waitFor(term1, "moove-42", "shell runs commands and output streams back");
+await run(term1, "echo ternt-$((6*7))");
+await waitFor(term1, "ternt-42", "shell runs commands and output streams back");
 
 // Shell sets the tab title via OSC 2
 await run(term1, "printf '\\033]2;build-logs\\007'");

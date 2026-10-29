@@ -25,7 +25,7 @@ pub fn run() {
             app.set_menu(menu::build(app.handle())?)?;
             history::load(app.handle());
 
-            // Restore the last session, then open any `moove <url>...` args.
+            // Restore the last session, then open any `ternt <url>...` args.
             let saved = session::load(app.handle());
             let urls: Vec<_> = std::env::args()
                 .skip(1)

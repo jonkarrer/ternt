@@ -1,5 +1,5 @@
-// Dev-only test hooks. Exposes `window.__moove` for scripts run via the
-// MOOVE_TEST env var (see src-tauri/src/debug.rs). Tree-shaken from release.
+// Dev-only test hooks. Exposes `window.__ternt` for scripts run via the
+// TERNT_TEST env var (see src-tauri/src/debug.rs). Tree-shaken from release.
 import { invoke } from "@tauri-apps/api/core";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -94,6 +94,6 @@ export function installTestHooks(getState: () => State) {
       }
     },
   };
-  (window as any).__moove = hooks;
+  (window as any).__ternt = hooks;
   invoke("debug_ready");
 }
