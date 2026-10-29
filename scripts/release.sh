@@ -20,7 +20,9 @@ fi
 git rev-parse -q --verify "refs/tags/v$version" >/dev/null && { echo "tag v$version already exists"; exit 1; }
 
 # tauri.conf.json is what the app and updater report; keep the others in step.
-perl -pi -e 's/("version": )"[0-9.]+"/$1"'$version'"/ if $. < 6' src-tauri/tauri.conf.json package.json
+for file in src-tauri/tauri.conf.json package.json; do
+  perl -pi -e 's/("version": )"[0-9.]+"/$1"'$version'"/ if $. < 6' $file
+done
 perl -pi -e 's/^version = "[0-9.]+"/version = "'$version'"/ if $. < 5' src-tauri/Cargo.toml
 (cd src-tauri && cargo update -q -p ternt --offline 2>/dev/null || cargo update -q -p ternt)
 
