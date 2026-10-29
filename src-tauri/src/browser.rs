@@ -484,7 +484,17 @@ pub fn open_tab(app: &AppHandle, url: Url) -> tauri::Result<u32> {
 
 /// Must not be called from the main thread (it blocks on it).
 pub fn open_terminal(app: &AppHandle) -> tauri::Result<u32> {
-    let id = with(app, |s| s.add_tab(TabKind::Terminal, String::new(), "Terminal".into()));
+    open_terminal_running(app, None)
+}
+
+/// A new terminal, optionally running `command` once its shell starts.
+/// Must not be called from the main thread.
+pub fn open_terminal_running(app: &AppHandle, command: Option<String>) -> tauri::Result<u32> {
+    let title = command.clone().unwrap_or_else(|| "Terminal".into());
+    let id = with(app, |s| s.add_tab(TabKind::Terminal, String::new(), title));
+    if let Some(command) = command {
+        crate::pty::queue_startup_input(id, format!("{command}\n"));
+    }
     // The terminal webview starts the shell when it first shows the tab.
     activate(app, id)?;
     Ok(id)
@@ -1031,8 +1041,10 @@ pub async fn new_tab(app: AppHandle, url: String) -> Result<u32, String> {
 }
 
 #[tauri::command]
-pub async fn new_terminal(app: AppHandle) -> Result<u32, String> {
-    open_terminal(&app).map_err(err)
+/// `command`, if given, runs in the new terminal's shell.
+pub async fn new_terminal(app: AppHandle, command: Option<String>) -> Result<u32, String> {
+    let command = command.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+    open_terminal_running(&app, command).map_err(err)
 }
 
 #[tauri::command]

@@ -132,6 +132,13 @@ pub fn run_action(app: &AppHandle, id: String) {
             "forward" => browser::forward_active(&app),
             "reopen-tab" => browser::reopen_closed_tab(&app),
             "clear-today" => browser::clear_today(&app),
+            #[cfg(target_os = "macos")]
+            "copy-url" => {
+                if let Some(url) = browser::active_tab_url(&app) {
+                    crate::native::copy_to_clipboard(&app, url);
+                }
+                Ok(())
+            }
             "toggle-sidebar" => browser::toggle_sidebar(&app),
             "explore" => browser::toggle_explore(&app),
             "next-tab" => browser::cycle_tab(&app, 1),

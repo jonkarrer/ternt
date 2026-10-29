@@ -19,7 +19,8 @@ e2e/run.sh                 # end-to-end tests (macOS); e2e/run.sh <name> for one
 
 | Shortcut | Action |
 |---|---|
-| ⌘T / ⌘L | Command bar: new tab / edit current URL |
+| ⌘T | Command bar: open a URL, search Google, switch tabs or spaces, run commands (initials work: "nt" = New Terminal); `> cmd` runs `cmd` in a new terminal |
+| ⌘L | Edit the current URL |
 | ⌥⌘T | New terminal tab |
 | ⌘W / ⇧⌘T | Close tab (unloads pinned tabs) / reopen closed tab |
 | ⌃Tab / ⌃⇧Tab, ⌘1–⌘9 | Switch tabs |

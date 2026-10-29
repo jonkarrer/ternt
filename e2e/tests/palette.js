@@ -48,7 +48,6 @@ await t.until(() => tab()?.url.endsWith("/spa/edited") && S().tabs.length === 2,
 // Commands by name
 await openPalette("new-tab");
 await type("close tab");
-await key("ArrowDown");
 await key("Enter");
 await t.until(() => S().tabs.length === 1, "'Close Tab' command runs");
 
@@ -62,6 +61,31 @@ await openPalette("new-tab");
 await type("tauri multiwebview");
 await key("Enter");
 await t.until(() => tab()?.url.startsWith("https://www.google.com/search?q=tauri"), "plain text searches");
+// Before typing: suggested commands, open tabs, spaces
+const labels = async () => JSON.parse(await t.read("palette", `JSON.stringify([...document.querySelectorAll("li")].map((li) => li.textContent.trim()))`));
+await openPalette("new-tab");
+await t.until(async () => (await labels()).some((l) => l === "Suggestions"), "empty bar shows suggestions");
+await t.assert((await labels()).some((l) => l.startsWith("New Terminal") && l.includes("⌥⌘T")), "commands show their shortcut");
+await t.shot("palette-suggestions");
+
+// Initials find commands, ranked above a web search
+await type("nt");
+await t.until(async () => (await labels())[0]?.startsWith("New Terminal"), "'nt' finds New Terminal first");
+await key("Enter");
+await t.until(() => tab()?.kind === "terminal", "runs it");
+await t.invoke("close_tab", { id: S().active });
+
+// "> cmd" runs in a new terminal
+await openPalette("new-tab");
+await type("> echo moove-$((6*7))");
+await t.until(async () => (await labels())[0]?.startsWith("Run “echo"), "'>' offers to run the command");
+await t.shot("palette-run");
+await key("Enter");
+await t.until(() => tab()?.kind === "terminal", "terminal opened for the command");
+const ran = S().active;
+await t.until(async () => (await t.read("term", `window.__termText(${ran})`)).includes("moove-42"), "the command ran");
+await t.invoke("close_tab", { id: ran });
+
 // The bar centers over the content pane, with or without the sidebar
 const centered = async (label) => {
   const r = JSON.parse(

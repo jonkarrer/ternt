@@ -58,6 +58,14 @@ struct Session {
 #[derive(Default)]
 pub struct Terminals(Mutex<HashMap<u32, Session>>);
 
+/// Input typed into a terminal as soon as its shell starts (`(tab, text)`),
+/// for terminals opened to run a command.
+static STARTUP_INPUT: Mutex<Vec<(u32, String)>> = Mutex::new(Vec::new());
+
+pub fn queue_startup_input(id: u32, text: String) {
+    STARTUP_INPUT.lock().unwrap().push((id, text));
+}
+
 fn size(cols: u16, rows: u16) -> PtySize {
     PtySize {
         rows: rows.max(1),
@@ -92,6 +100,14 @@ fn spawn(app: &AppHandle, id: u32, cols: u16, rows: u16) -> Result<Session, Stri
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = Arc::new(Mutex::new(pair.master.take_writer().map_err(|e| e.to_string())?));
+    // The tty buffers this until the shell reads it, so no need to wait.
+    let startup = {
+        let mut queue = STARTUP_INPUT.lock().unwrap();
+        queue.iter().position(|(tab, _)| *tab == id).map(|i| queue.remove(i).1)
+    };
+    if let Some(text) = startup {
+        let _ = writer.lock().unwrap().write_all(text.as_bytes());
+    }
     let output = Arc::new(Output {
         pipe: Mutex::new(Pipe::default()),
         changed: Condvar::new(),

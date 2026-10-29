@@ -65,7 +65,8 @@ const SEARCH_URL = "https://www.google.com/search?q=";
 export const browser = {
   getState: () => invoke<BrowserState>("get_state"),
   newTab: (url: string) => invoke<number>("new_tab", { url }),
-  newTerminal: () => invoke<number>("new_terminal"),
+  /** `command` runs in the new terminal's shell. */
+  newTerminal: (command?: string) => invoke<number>("new_terminal", { command: command ?? null }),
   closeTab: (id: number) => invoke("close_tab", { id }),
   activateTab: (id: number) => invoke("activate_tab", { id }),
   /** `index` is the position in the full tab list after removing the tab. */
