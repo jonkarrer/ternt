@@ -35,7 +35,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI3RDZENDBDQkM5QTlDMDAKUldRQW5KcThETlRXdHhwaGNkUndLdlZzZWR2bWVFWWJtUjY5MlFGWTVML1ZYa1E4b2dzR2tUWjAK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM3REQ3NjEzRDY3RUYyRTgKUldUbzhuN1dFM2JkTndha3A4eFJMKzJxeDlRMkxUVjRweU9ZNHZlUjh4MHl1SmlDRFFwWVFxaWIK",
       "endpoints": ["https://github.com/jonkarrer/ternt/releases/latest/download/latest.json"]
     }
   }
