@@ -65,6 +65,16 @@ pub struct NativeState {
 pub struct Browser {
     state: Mutex<State>,
     emit_pending: AtomicBool,
+    /// Set while exploring tabs (⌘F).
+    explore: Mutex<Option<Explore>>,
+}
+
+/// Where explore mode started, to return there on cancel.
+struct Explore {
+    origin: Option<u32>,
+    origin_space: u32,
+    /// The sidebar was collapsed and opened for exploring.
+    reopened_sidebar: bool,
 }
 
 impl Browser {
@@ -144,11 +154,24 @@ pub fn tab_menu_info(app: &AppHandle, id: u32) -> Option<TabMenuInfo> {
     })
 }
 
-/// `(color, isolated profile, can delete)` for the space context menu.
-pub fn space_menu_info(app: &AppHandle, id: u32) -> Option<(String, bool, bool)> {
+/// What the space context menu needs to know.
+pub struct SpaceMenuInfo {
+    pub color: String,
+    pub profile: Option<String>,
+    pub deletable: bool,
+    /// Every space: `(id, name, profile)`, to offer sharing a profile.
+    pub spaces: Vec<(u32, String, Option<String>)>,
+}
+
+pub fn space_menu_info(app: &AppHandle, id: u32) -> Option<SpaceMenuInfo> {
     with(app, |s| {
         let space = s.space(id)?;
-        Some((space.color.clone(), space.profile.is_some(), s.spaces.len() > 1))
+        Some(SpaceMenuInfo {
+            color: space.color.clone(),
+            profile: space.profile.clone(),
+            deletable: s.spaces.len() > 1,
+            spaces: s.spaces.iter().map(|x| (x.id, x.name.clone(), x.profile.clone())).collect(),
+        })
     })
 }
 
@@ -224,6 +247,9 @@ fn layout_tabs(app: &AppHandle) -> tauri::Result<()> {
         .chain(app.get_webview(TERM_WEBVIEW));
     for webview in views {
         webview.set_bounds(bounds)?;
+    }
+    if exploring(app) {
+        update_dim(app)?;
     }
     Ok(())
 }
@@ -493,7 +519,12 @@ fn activate(app: &AppHandle, id: u32) -> tauri::Result<()> {
     // Show the new view before hiding the old one so there's no empty frame.
     // Terminals share a view, so terminal-to-terminal switches hide nothing.
     next_view.show()?;
-    next_view.set_focus()?;
+    if exploring(app) {
+        // Previewing: the sidebar keeps the keyboard, the dim stays on top.
+        update_dim(app)?;
+    } else {
+        next_view.set_focus()?;
+    }
     if let Some(webview) = previous
         .filter(|&p| p != id)
         .and_then(|p| view_for(app, p))
@@ -726,7 +757,9 @@ pub fn select_space_number(app: &AppHandle, number: usize) -> tauri::Result<()> 
 }
 
 pub fn new_space(app: &AppHandle) -> tauri::Result<u32> {
-    let id = with(app, |s| s.add_space());
+    // Each new space gets its own logins; it can share another's via the
+    // space menu.
+    let id = with(app, |s| s.add_space(Some(new_profile_id())));
     switch_space(app, id)?;
     emit_state(app);
     Ok(id)
@@ -758,7 +791,7 @@ pub fn delete_space(app: &AppHandle, id: u32) -> tauri::Result<()> {
             TabKind::Terminal => crate::pty::kill(app, tab.id),
         }
     }
-    if let Some(profile) = space.profile {
+    if let Some(profile) = space.profile.filter(|p| !with(app, |s| s.profile_in_use(p))) {
         remove_profile(app, profile);
     }
     emit_state(app);
@@ -774,25 +807,39 @@ pub fn set_space_color(app: &AppHandle, id: u32, color: &str) {
     }
 }
 
-/// Give a space its own cookie jar and storage, or return it to the shared
-/// one. Its loaded tabs reload under the new store; a dropped store's data is
+/// Which cookie jar a space uses (the space menu's Profile submenu).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProfileChoice {
+    /// The default store, shared by every space that picks it.
+    Shared,
+    /// A fresh, empty store.
+    New,
+    /// Whatever store another space uses.
+    SameAs(u32),
+}
+
+impl ProfileChoice {
+    /// `shared`, `new` or `space-<id>`.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "shared" => Some(Self::Shared),
+            "new" => Some(Self::New),
+            _ => value.strip_prefix("space-")?.parse().ok().map(Self::SameAs),
+        }
+    }
+}
+
+/// Switch a space's cookie jar and storage. Its loaded tabs (favorites
+/// included) reload under the new store; a store no space uses any more is
 /// deleted.
-pub fn set_space_profile(app: &AppHandle, id: u32, isolated: bool) -> tauri::Result<()> {
+pub fn set_space_profile(app: &AppHandle, id: u32, choice: ProfileChoice) -> tauri::Result<()> {
     let Some((old, affected, active)) = with(app, |s| {
-        let space = s.space_mut(id)?;
-        if space.profile.is_some() == isolated {
-            return None;
-        }
-        let old = space.profile.take();
-        if isolated {
-            space.profile = Some(new_profile_id());
-        }
-        let affected: Vec<u32> = s
-            .tabs
-            .iter()
-            .filter(|t| t.loaded && t.zone != Zone::Favorite && t.space == id)
-            .map(|t| t.id)
-            .collect();
+        let profile = match choice {
+            ProfileChoice::Shared => None,
+            ProfileChoice::New => Some(new_profile_id()),
+            ProfileChoice::SameAs(other) => s.space(other)?.profile.clone(),
+        };
+        let (old, affected) = s.set_space_profile(id, profile)?;
         Some((old, affected, s.active))
     }) else {
         return Ok(());
@@ -803,7 +850,7 @@ pub fn set_space_profile(app: &AppHandle, id: u32, isolated: bool) -> tauri::Res
     if let Some(active) = active.filter(|a| affected.contains(a)) {
         activate(app, active)?;
     }
-    if let Some(old) = old {
+    if let Some(old) = old.filter(|p| !with(app, |s| s.profile_in_use(p))) {
         remove_profile(app, old);
     }
     emit_state(app);
@@ -835,6 +882,101 @@ pub fn delete_folder(app: &AppHandle, id: u32) {
     if with(app, |s| s.remove_folder(id)) {
         emit_state(app);
     }
+}
+
+// --- Explore mode (⌘F) --------------------------------------------------------
+//
+// The content dims and the sidebar takes the keyboard: the UI moves a cursor
+// over the tabs (no IPC per keypress), previews with Space and opens with
+// Enter. Rust owns the mode so focus and the dim stay consistent.
+
+#[derive(Clone, Copy, Debug)]
+pub enum ExploreEnd {
+    /// Open this tab.
+    Open(u32),
+    /// Stay on whatever is showing.
+    Commit,
+    /// Go back to the tab shown when exploring started.
+    Cancel,
+}
+
+pub fn exploring(app: &AppHandle) -> bool {
+    app.state::<Browser>().explore.lock().unwrap().is_some()
+}
+
+/// Cover the content area with the dim (or refresh its frame and z-order).
+fn update_dim(app: &AppHandle) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
+    if let Some(ui) = app.get_webview(UI_WEBVIEW) {
+        let bounds = content_bounds(app)?;
+        let (position, size) = (bounds.position.to_logical::<f64>(1.0), bounds.size.to_logical::<f64>(1.0));
+        let frame = exploring(app).then_some((position.x, position.y, size.width, size.height));
+        crate::native::set_dim(&ui, frame, CONTENT_RADIUS);
+    }
+    Ok(())
+}
+
+fn emit_explore(app: &AppHandle, on: bool) {
+    let _ = app.emit_to(EventTarget::webview(UI_WEBVIEW), "browser:explore", on);
+}
+
+/// ⌘F: start exploring, or (pressed again) stop on what's showing.
+pub fn toggle_explore(app: &AppHandle) -> tauri::Result<()> {
+    if exploring(app) {
+        end_explore(app, ExploreEnd::Commit);
+        return Ok(());
+    }
+    let (origin, origin_space, collapsed) = with(app, |s| (s.active, s.active_space, s.sidebar_collapsed));
+    *app.state::<Browser>().explore.lock().unwrap() = Some(Explore {
+        origin,
+        origin_space,
+        reopened_sidebar: collapsed,
+    });
+    if collapsed {
+        toggle_sidebar(app)?;
+    }
+    update_dim(app)?;
+    if let Some(ui) = app.get_webview(UI_WEBVIEW) {
+        ui.set_focus()?;
+    }
+    emit_explore(app, true);
+    Ok(())
+}
+
+/// Leave explore mode. Must not be called from the main thread.
+pub fn end_explore(app: &AppHandle, end: ExploreEnd) {
+    let Some(explore) = app.state::<Browser>().explore.lock().unwrap().take() else {
+        return;
+    };
+    // The mode is off, so activating focuses the page as usual.
+    let result = (|| -> tauri::Result<()> {
+        match end {
+            ExploreEnd::Open(id) => activate(app, id)?,
+            ExploreEnd::Commit => {
+                if let Some(view) = active_view(app) {
+                    view.set_focus()?;
+                }
+            }
+            ExploreEnd::Cancel => {
+                if with(app, |s| s.space(explore.origin_space).is_some()) {
+                    with(app, |s| s.active_space = explore.origin_space);
+                }
+                match explore.origin.filter(|&id| with(app, |s| s.tab(id).is_some())) {
+                    Some(id) => activate(app, id)?,
+                    None => deactivate(app)?,
+                }
+            }
+        }
+        update_dim(app)?;
+        if explore.reopened_sidebar && !with(app, |s| s.sidebar_collapsed) {
+            toggle_sidebar(app)?;
+        }
+        Ok(())
+    })();
+    if let Err(err) = result {
+        eprintln!("failed to end explore mode: {err}");
+    }
+    emit_explore(app, false);
 }
 
 // --- Session ----------------------------------------------------------------
@@ -900,7 +1042,30 @@ pub async fn close_tab(app: AppHandle, id: u32) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn activate_tab(app: AppHandle, id: u32) -> Result<(), String> {
+    // Clicking a tab while exploring opens it for real.
+    if exploring(&app) {
+        end_explore(&app, ExploreEnd::Open(id));
+        return Ok(());
+    }
     activate(&app, id).map_err(err)
+}
+
+/// Show a tab while exploring, without leaving explore mode.
+#[tauri::command]
+pub async fn explore_preview(app: AppHandle, id: u32) -> Result<(), String> {
+    activate(&app, id).map_err(err)
+}
+
+/// Leave explore mode: open `open`, or with `cancel` return to where it
+/// started, else stay on what's showing.
+#[tauri::command]
+pub async fn explore_end(app: AppHandle, open: Option<u32>, cancel: bool) {
+    let end = match (open, cancel) {
+        (_, true) => ExploreEnd::Cancel,
+        (Some(id), _) => ExploreEnd::Open(id),
+        (None, _) => ExploreEnd::Commit,
+    };
+    end_explore(&app, end);
 }
 
 /// `index` is the position within the target group after removing the tab.
@@ -987,8 +1152,9 @@ pub async fn space_color(app: AppHandle, id: u32, color: String) {
 }
 
 #[tauri::command]
-pub async fn space_profile(app: AppHandle, id: u32, isolated: bool) -> Result<(), String> {
-    set_space_profile(&app, id, isolated).map_err(err)
+pub async fn space_profile(app: AppHandle, id: u32, profile: String) -> Result<(), String> {
+    let choice = ProfileChoice::parse(&profile).ok_or("invalid profile choice")?;
+    set_space_profile(&app, id, choice).map_err(err)
 }
 
 #[tauri::command]

@@ -1,7 +1,7 @@
 //! The tab/space/folder model: pure data and ordering rules, no webviews.
 //!
 //! Arc-style layout, top to bottom:
-//! - **Favorites**: icon tiles shared by every space.
+//! - **Favorites**: icon tiles shared by every space with the same profile.
 //! - **Pinned**: per space, optionally grouped into folders.
 //! - **Today**: per space, newest first.
 //!
@@ -43,7 +43,8 @@ pub struct Tab {
     pub url: String,
     pub title: String,
     pub zone: Zone,
-    /// Owning space (ignored for favorites, which every space shares).
+    /// Owning space. For favorites, the space they were added from: they
+    /// show in every space sharing its profile.
     pub space: u32,
     /// Pinned tabs only.
     pub folder: Option<u32>,
@@ -76,9 +77,6 @@ impl Tab {
         self.zone != Zone::Today
     }
 
-    fn in_group(&self, zone: Zone, space: u32, folder: Option<u32>) -> bool {
-        self.zone == zone && (zone == Zone::Favorite || self.space == space) && self.folder == folder
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -195,13 +193,32 @@ impl State {
         if self.sidebar_collapsed { 0.0 } else { self.sidebar_width }
     }
 
-    /// The data store a tab's webview should use. Favorites always use the
-    /// shared one.
+    /// A space's data store: `Some(id)` for a separate profile, `None` for
+    /// the shared default.
+    pub fn profile_of(&self, space: u32) -> Option<&str> {
+        self.space(space)?.profile.as_deref()
+    }
+
+    /// The data store a tab's webview should use: its space's.
     pub fn profile_for(&self, tab: &Tab) -> Option<String> {
-        if tab.zone == Zone::Favorite {
-            return None;
-        }
-        self.space(tab.space)?.profile.clone()
+        self.profile_of(tab.space).map(String::from)
+    }
+
+    /// Whether any space still uses a profile (its data must be kept).
+    pub fn profile_in_use(&self, profile: &str) -> bool {
+        self.spaces.iter().any(|s| s.profile.as_deref() == Some(profile))
+    }
+
+    /// Whether `tab` belongs to the group `(zone, space, folder)`. Favorites
+    /// are grouped by profile rather than by space.
+    fn in_group(&self, tab: &Tab, zone: Zone, space: u32, folder: Option<u32>) -> bool {
+        tab.zone == zone
+            && tab.folder == folder
+            && if zone == Zone::Favorite {
+                self.space(tab.space).is_some() && self.profile_of(tab.space) == self.profile_of(space)
+            } else {
+                tab.space == space
+            }
     }
 
     fn next_group_id(&mut self) -> u32 {
@@ -220,7 +237,7 @@ impl State {
         let at = self
             .tabs
             .iter()
-            .position(|t| t.in_group(Zone::Today, tab.space, None))
+            .position(|t| self.in_group(t, Zone::Today, tab.space, None))
             .unwrap_or(self.tabs.len());
         self.tabs.insert(at, tab);
         id
@@ -251,7 +268,7 @@ impl State {
         tab.space = space;
         tab.folder = folder;
         let members: Vec<usize> = (0..self.tabs.len())
-            .filter(|&i| self.tabs[i].in_group(zone, space, folder))
+            .filter(|&i| self.in_group(&self.tabs[i], zone, space, folder))
             .collect();
         let at = match members.get(index) {
             Some(&i) => i,
@@ -267,7 +284,7 @@ impl State {
         let ids = |zone, folder| {
             self.tabs
                 .iter()
-                .filter(move |t| t.in_group(zone, space, folder))
+                .filter(move |t| self.in_group(t, zone, space, folder))
                 .map(|t| t.id)
         };
         let mut out: Vec<u32> = ids(Zone::Favorite, None).collect();
@@ -321,7 +338,7 @@ impl State {
 
     // --- Spaces ----------------------------------------------------------
 
-    pub fn add_space(&mut self) -> u32 {
+    pub fn add_space(&mut self, profile: Option<String>) -> u32 {
         let id = self.next_group_id();
         let used: Vec<&str> = self.spaces.iter().map(|s| s.color.as_str()).collect();
         let color = SPACE_COLORS
@@ -332,7 +349,7 @@ impl State {
             id,
             name: format!("Space {}", self.spaces.len() + 1),
             color: (*color).into(),
-            profile: None,
+            profile,
         });
         id
     }
@@ -357,7 +374,8 @@ impl State {
         Some(self.spaces[(index + delta).rem_euclid(len) as usize].id)
     }
 
-    /// Delete a space and its tabs and folders (never the last space).
+    /// Delete a space and its tabs and folders (never the last space). Its
+    /// favorites move to another space with the same profile, or go with it.
     /// Returns the removed tabs and the space, for webview/PTY cleanup.
     pub fn remove_space(&mut self, id: u32) -> Option<(Vec<Tab>, Space)> {
         if self.spaces.len() <= 1 {
@@ -365,9 +383,16 @@ impl State {
         }
         let index = self.spaces.iter().position(|s| s.id == id)?;
         let space = self.spaces.remove(index);
+        let heir = self.spaces.iter().find(|s| s.profile == space.profile).map(|s| s.id);
         let (removed, kept): (Vec<Tab>, Vec<Tab>) = std::mem::take(&mut self.tabs)
             .into_iter()
-            .partition(|t| t.zone != Zone::Favorite && t.space == id);
+            .map(|mut t| {
+                if t.zone == Zone::Favorite && t.space == id {
+                    t.space = heir.unwrap_or(id);
+                }
+                t
+            })
+            .partition(|t| t.space == id);
         self.tabs = kept;
         self.folders.retain(|f| f.space != id);
         self.last_active.remove(&id);
@@ -375,6 +400,19 @@ impl State {
             ClosedTab::Web { space, .. } | ClosedTab::Terminal { space } => *space != id,
         });
         Some((removed, space))
+    }
+
+    /// Point a space at a profile. Returns the old profile and the loaded
+    /// tabs that must reload under the new one (its favorites included: they
+    /// follow their space), or `None` if nothing changed.
+    pub fn set_space_profile(&mut self, id: u32, profile: Option<String>) -> Option<(Option<String>, Vec<u32>)> {
+        let space = self.space_mut(id)?;
+        if space.profile == profile {
+            return None;
+        }
+        let old = std::mem::replace(&mut space.profile, profile);
+        let affected = self.tabs.iter().filter(|t| t.loaded && t.space == id).map(|t| t.id).collect();
+        Some((old, affected))
     }
 
     // --- Folders ---------------------------------------------------------
@@ -587,15 +625,59 @@ mod tests {
     }
 
     #[test]
-    fn favorites_are_shared_across_spaces() {
+    fn favorites_are_shared_across_spaces_with_the_same_profile() {
         let mut s = State::default();
         let fav = web(&mut s, "fav");
         s.move_tab(fav, Zone::Favorite, None, 0);
         let home_tab = web(&mut s, "home");
-        let work = s.add_space();
+        let reading = s.add_space(None);
+        s.switch_space(reading);
+        assert_eq!(titles(&s, &s.visible_order(reading)), ["fav"]);
+        assert!(!s.visible_order(reading).contains(&home_tab));
+
+        // A separate profile has its own favorites, using its own store.
+        let work = s.add_space(Some("w".into()));
         s.switch_space(work);
-        assert_eq!(titles(&s, &s.visible_order(work)), ["fav"]);
-        assert!(!s.visible_order(work).contains(&home_tab));
+        let mail = web(&mut s, "mail");
+        s.move_tab(mail, Zone::Favorite, None, 0);
+        assert_eq!(titles(&s, &s.visible_order(work)), ["mail"]);
+        assert_eq!(titles(&s, &s.visible_order(1)), ["fav", "home"]);
+        assert_eq!(s.profile_for(s.tab(mail).unwrap()).as_deref(), Some("w"));
+        assert_eq!(s.profile_for(s.tab(fav).unwrap()), None);
+    }
+
+    #[test]
+    fn favorites_follow_their_space_profile() {
+        let mut s = State::default();
+        let work = s.add_space(None);
+        s.switch_space(work);
+        let mail = web(&mut s, "mail");
+        s.move_tab(mail, Zone::Favorite, None, 0);
+        s.tab_mut(mail).unwrap().loaded = true;
+        let (old, affected) = s.set_space_profile(work, Some("w".into())).unwrap();
+        assert_eq!((old, affected), (None, vec![mail]));
+        assert!(s.set_space_profile(work, Some("w".into())).is_none(), "no-op");
+        assert!(!s.visible_order(1).contains(&mail));
+        assert!(s.profile_in_use("w"));
+    }
+
+    #[test]
+    fn removing_a_space_hands_favorites_to_its_profile() {
+        let mut s = State::default();
+        let work = s.add_space(Some("w".into()));
+        let work2 = s.add_space(Some("w".into()));
+        let solo = s.add_space(Some("solo".into()));
+        let [a, b] = [work, solo].map(|space| {
+            s.switch_space(space);
+            let id = web(&mut s, "fav");
+            s.move_tab(id, Zone::Favorite, None, 0);
+            id
+        });
+        s.remove_space(work).unwrap();
+        assert_eq!(s.tab(a).unwrap().space, work2, "kept by the space sharing the profile");
+        let (removed, space) = s.remove_space(solo).unwrap();
+        assert_eq!(removed.iter().map(|t| t.id).collect::<Vec<_>>(), [b], "last of its profile: removed");
+        assert!(!s.profile_in_use(space.profile.as_deref().unwrap()));
     }
 
     #[test]
@@ -604,7 +686,7 @@ mod tests {
         let a = web(&mut s, "a");
         let b = web(&mut s, "b");
         s.focus(a);
-        let work = s.add_space();
+        let work = s.add_space(None);
         assert_eq!(s.switch_space(work), None, "empty space shows nothing");
         let w = web(&mut s, "w");
         s.focus(w);
@@ -616,7 +698,7 @@ mod tests {
     fn focusing_a_tab_switches_to_its_space() {
         let mut s = State::default();
         let a = web(&mut s, "a");
-        let work = s.add_space();
+        let work = s.add_space(None);
         s.switch_space(work);
         s.focus(a);
         assert_eq!(s.active_space, 1);
@@ -649,7 +731,7 @@ mod tests {
     #[test]
     fn removing_a_space_drops_its_tabs_but_not_favorites() {
         let mut s = State::default();
-        let work = s.add_space();
+        let work = s.add_space(None);
         s.switch_space(work);
         let w = web(&mut s, "w");
         let fav = web(&mut s, "fav");
@@ -677,7 +759,7 @@ mod tests {
     fn save_and_restore_round_trip() {
         let mut s = State::default();
         let a = web(&mut s, "a");
-        let work = s.add_space();
+        let work = s.add_space(None);
         s.switch_space(work);
         let w = web(&mut s, "w");
         let f = s.add_folder(work, "f".into()).unwrap();
@@ -718,7 +800,7 @@ mod tests {
                 spaces: self.spaces.clone(),
                 ..State::default()
             };
-            let id = copy.add_space();
+            let id = copy.add_space(None);
             !self.spaces.iter().any(|s| s.id == id) && !self.folders.iter().any(|f| f.id == id)
         }
     }

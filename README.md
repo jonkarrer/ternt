@@ -25,13 +25,14 @@ e2e/run.sh                 # end-to-end tests (macOS); e2e/run.sh <name> for one
 | ⌃Tab / ⌃⇧Tab, ⌘1–⌘9 | Switch tabs |
 | ⌘[ / ⌘] / ⌘R | Back / forward / reload |
 | ⌘S | Toggle sidebar |
+| ⌘F | Explore tabs: j/k or ↑/↓ move, h/l or ←/→ switch space, Space peeks, Enter opens, Esc goes back |
 | ⌃1–⌃9, ⌘⌥← / ⌘⌥→ | Switch spaces (or swipe two fingers across the sidebar) |
 
 ## Sidebar
 
 Arc-style, top to bottom:
 
-- **Favorites**: icon tiles shared by every space.
+- **Favorites**: icon tiles shared by every space with the same profile.
 - **Pinned**: per space, optionally grouped in folders.
 - **Today**: per space, newest first, below a divider. Hover the divider for *Clear*, which
   closes the space's Today web tabs (terminals stay; ⇧⌘T reopens).
@@ -40,8 +41,10 @@ Drag tabs between sections, into folders, or to reorder. Closing a favorite or p
 unloads it (frees memory, keeps it in the sidebar). Right-click a tab, folder or space dot
 for more. Double-click a space or folder name to rename it.
 
-**Spaces** share cookies and logins by default. Right-click a space dot → *Separate Profile*
-to give it its own cookie jar (macOS 14+); turning it off deletes that profile's data.
+**Profiles**: each new space gets its own cookie jar (macOS 14+), so logins (Google, etc.) stay
+in their space; sign-in popups and favorites use their space's profile. Right-click a space dot →
+*Profile* to share the default profile, share another space's, or start a fresh one. A profile no
+space uses any more is deleted.
 
 ## Architecture
 

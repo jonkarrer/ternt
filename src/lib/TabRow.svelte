@@ -7,6 +7,7 @@
     active,
     dragging = false,
     mark = null,
+    cursor = false,
     indent = false,
     zone,
     folder = null,
@@ -18,6 +19,8 @@
     dragging?: boolean;
     /** Drop indicator while another tab is dragged over this row. */
     mark?: "before" | "after" | null;
+    /** Explore mode's keyboard cursor is on this row. */
+    cursor?: boolean;
     indent?: boolean;
     /** This row's group and position, for drop targeting. */
     zone: Zone;
@@ -38,6 +41,7 @@
   class="row tab"
   class:active
   class:dragging
+  class:cursor
   class:indent
   class:terminal={tab.kind === "terminal"}
   class:before={mark === "before"}
@@ -111,6 +115,9 @@
     box-shadow:
       inset 0 0 0 1px var(--fill-strong),
       0 1px 2px var(--shadow);
+  }
+  .row.cursor {
+    box-shadow: inset 0 0 0 2px var(--accent);
   }
   .dragging {
     opacity: 0.5;

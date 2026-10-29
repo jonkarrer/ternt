@@ -42,11 +42,22 @@
   let renaming = $state<{ kind: "space" | "folder"; id: number } | null>(null);
   /** Direction of the last space switch, for the slide-in. */
   let slide = $state(1);
+  /** Explore mode (⌘F): the tab under the keyboard cursor, or null when off. */
+  let explore = $state(false);
+  let cursor = $state<number | null>(null);
 
   const activeSpace = $derived(browserState.activeSpace);
   const space = $derived(browserState.spaces.find((s) => s.id === activeSpace));
   const activeTab = $derived(browserState.tabs.find((t) => t.id === browserState.active));
-  const favorites = $derived(browserState.tabs.filter((t) => t.zone === "favorite"));
+  /** Favorites belong to a profile: they show in every space that uses it. */
+  const profileOf = (spaceId: number) => browserState.spaces.find((s) => s.id === spaceId)?.profile;
+  const favorites = $derived(
+    browserState.tabs.filter((t) => t.zone === "favorite" && profileOf(t.space) === space?.profile),
+  );
+  /** Other spaces signed in with this space's profile. */
+  const profileMates = $derived(
+    browserState.spaces.filter((s) => s.id !== activeSpace && s.profile === space?.profile).map((s) => s.name),
+  );
   const folders = $derived(browserState.folders.filter((f) => f.space === activeSpace));
   const loosePinned = $derived(pinnedIn(null));
   const today = $derived(browserState.tabs.filter((t) => t.zone === "today" && t.space === activeSpace));
@@ -60,13 +71,25 @@
     const from = browserState.spaces.findIndex((x) => x.id === browserState.activeSpace);
     const to = s.spaces.findIndex((x) => x.id === s.activeSpace);
     if (from !== to && from >= 0) slide = to > from ? 1 : -1;
+    // Exploring into another space (or the cursor's tab closed): follow
+    // what's showing.
+    if (explore && (from !== to || !s.tabs.some((t) => t.id === cursor))) cursor = s.active;
     browserState = s;
     // Rust owns the width; don't fight an in-progress drag.
     if (!resizing) sidebarWidth = s.sidebarWidth;
   }
 
   onMount(() => {
-    const unlisten = [browser.onState(applyState), browser.onRename((target) => (renaming = target))];
+    const unlisten = [
+      browser.onState(applyState),
+      browser.onRename((target) => (renaming = target)),
+      browser.onExplore((on) => {
+        explore = on;
+        cursor = on ? (browserState.active ?? exploreIds()[0] ?? null) : null;
+        // Keys go to the window handler, not a focused button.
+        if (on) (document.activeElement as HTMLElement | null)?.blur();
+      }),
+    ];
     (async () => {
       // Subscribe before reading state, so no update can fall in between.
       await Promise.all(unlisten);
@@ -126,7 +149,8 @@
   // the tab on release: between rows, into a folder, or into a section.
 
   function sameGroup(a: Tab, zone: Zone, folder: number | null) {
-    return a.zone === zone && a.folder === folder && (zone === "favorite" || a.space === activeSpace);
+    if (zone === "favorite") return a.zone === zone && profileOf(a.space) === space?.profile;
+    return a.zone === zone && a.folder === folder && a.space === activeSpace;
   }
 
   function hitTest(x: number, y: number, tab: Tab): DropTarget | null {
@@ -205,6 +229,62 @@
     return kind === "folder" ? mark.kind === "folder" && mark.id === key : mark.kind === "zone" && mark.zone === key;
   }
 
+  // --- Explore mode (⌘F) ---------------------------------------------------
+  // The cursor moves locally (no IPC per key); Space previews the tab, Enter
+  // opens it, Escape returns to where exploring started.
+
+  /** Tab ids in sidebar order, as rendered (collapsed folders skipped). */
+  function exploreIds() {
+    return [...document.querySelectorAll<HTMLElement>(".sidebar [data-tab]")].map((el) => Number(el.dataset.tab));
+  }
+
+  function moveCursor(delta: number) {
+    const ids = exploreIds();
+    if (!ids.length) return;
+    const at = cursor == null ? -1 : ids.indexOf(cursor);
+    cursor = ids[Math.min(ids.length - 1, Math.max(0, at < 0 ? 0 : at + delta))];
+  }
+
+  function exploreKeys(event: KeyboardEvent) {
+    if (!explore || renaming || event.metaKey || event.ctrlKey || event.altKey) return;
+    switch (event.key) {
+      case "j":
+      case "ArrowDown":
+        moveCursor(1);
+        break;
+      case "k":
+      case "ArrowUp":
+        moveCursor(-1);
+        break;
+      case "h":
+      case "ArrowLeft":
+        browser.menuAction("previous-space");
+        break;
+      case "l":
+      case "ArrowRight":
+        browser.menuAction("next-space");
+        break;
+      case " ":
+        if (cursor != null && cursor !== browserState.active) browser.explorePreview(cursor);
+        break;
+      case "Enter":
+        browser.exploreEnd(cursor);
+        break;
+      case "Escape":
+        browser.exploreEnd(null, true);
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  $effect(() => {
+    if (cursor == null) return;
+    document.querySelector(`.sidebar [data-tab="${cursor}"]`)?.scrollIntoView({ block: "nearest" });
+  });
+
   // --- Spaces --------------------------------------------------------------
 
   // Two-finger horizontal swipe over the sidebar switches spaces.
@@ -248,9 +328,12 @@
   }
 </script>
 
+<svelte:window onkeydowncapture={exploreKeys} />
+
 <div
   class="app"
   class:resizing
+  class:exploring={explore}
   class:dragging={drag != null}
   style:--sidebar="{collapsed ? 0 : sidebarWidth}px"
   style={spaceStyle(space?.color ?? "blue")}
@@ -276,7 +359,7 @@
 
       <Omnibox tab={activeTab} />
 
-      <!-- Favorites: shared by every space. While dragging, an empty
+      <!-- Favorites: shared by every space with this profile. While dragging, an empty
            favorites area appears as a drop target. -->
       {#if favorites.length || drag}
         <div class="favorites" class:drop-into={isDropInto("zone", "favorite")} data-drop="zone" data-zone="favorite">
@@ -284,6 +367,7 @@
             <button
               class="fav"
               class:active={tab.id === browserState.active}
+              class:cursor={tab.id === cursor}
               class:dragging={drag?.id === tab.id}
               class:before={markFor(tab) === "before"}
               class:after={markFor(tab) === "after"}
@@ -322,7 +406,11 @@
                 {space?.name}
               </span>
               {#if space?.profile}
-                <span class="profile" title="This space has its own cookies and logins">Profile</span>
+                <span
+                  class="profile"
+                  title="Own cookies and logins{profileMates.length ? `, shared with ` : ''}. Change via right-click on the space dot."
+                  >Profile</span
+                >
               {/if}
             {/if}
             <button class="icon small" aria-label="New folder" title="New folder" onclick={() => browser.menuAction("new-folder")}>
@@ -366,6 +454,7 @@
                     folder={folder.id}
                     index={i}
                     active={tab.id === browserState.active}
+                    cursor={tab.id === cursor}
                     dragging={drag?.id === tab.id}
                     mark={markFor(tab)}
                     onpointerdown={(e) => startDrag(e, tab)}
@@ -379,6 +468,7 @@
                 zone="pinned"
                 index={i}
                 active={tab.id === browserState.active}
+                cursor={tab.id === cursor}
                 dragging={drag?.id === tab.id}
                 mark={markFor(tab)}
                 onpointerdown={(e) => startDrag(e, tab)}
@@ -416,6 +506,7 @@
                 zone="today"
                 index={i}
                 active={tab.id === browserState.active}
+                cursor={tab.id === cursor}
                 dragging={drag?.id === tab.id}
                 mark={markFor(tab)}
                 onpointerdown={(e) => startDrag(e, tab)}
@@ -424,6 +515,13 @@
           </nav>
         </div>
       {/key}
+
+      {#if explore}
+        <p class="explore-hint" transition:fly={{ y: 6, duration: 120 }}>
+          <kbd>j</kbd><kbd>k</kbd> move <kbd>h</kbd><kbd>l</kbd> spaces <kbd>␣</kbd> peek <kbd>↵</kbd> open
+          <kbd>esc</kbd> back
+        </p>
+      {/if}
 
       <footer class="spaces">
         {#each browserState.spaces as s (s.id)}
@@ -752,6 +850,39 @@
   .divider .clear:hover {
     background: var(--fill-hover);
     color: var(--text);
+  }
+
+  /* Explore mode: the sidebar lifts (the page dims natively) and a ring
+     follows the keyboard cursor. */
+  .sidebar {
+    transition: background 160ms ease;
+  }
+  .exploring .sidebar {
+    background: var(--explore-lift);
+  }
+  .fav.cursor {
+    box-shadow: inset 0 0 0 2px var(--accent);
+  }
+  .explore-hint {
+    margin: 0;
+    padding: 6px 4px 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 3px 5px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .explore-hint kbd {
+    padding: 0 4px;
+    border-radius: 4px;
+    background: var(--fill-strong);
+    font: inherit;
+    color: var(--text);
+  }
+  .explore-hint kbd + kbd {
+    margin-left: -2px;
   }
 
   .spaces {

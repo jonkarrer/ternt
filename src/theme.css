@@ -17,6 +17,7 @@
   --term-row: rgb(0 0 0 / 0.13);
   --term-row-hover: rgb(0 0 0 / 0.17);
   --term-row-active: rgb(0 0 0 / 0.24);
+  --explore-lift: rgb(255 255 255 / 0.22);
   --shadow: rgb(0 0 0 / 0.1);
   --accent: #3478f6;
   /* Sidebar tint over the native vibrancy. The hue comes from the active
@@ -49,6 +50,7 @@
     --term-row: rgb(0 0 0 / 0.26);
     --term-row-hover: rgb(0 0 0 / 0.32);
     --term-row-active: rgb(0 0 0 / 0.46);
+    --explore-lift: rgb(255 255 255 / 0.06);
     --shadow: rgb(0 0 0 / 0.35);
     --tint-l1: 32%;
     --tint-a1: 0.38;

@@ -51,6 +51,8 @@ pub fn run() {
             browser::new_terminal,
             browser::close_tab,
             browser::activate_tab,
+            browser::explore_preview,
+            browser::explore_end,
             browser::move_tab,
             browser::create_space,
             browser::activate_space,

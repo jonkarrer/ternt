@@ -77,6 +77,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         true,
         &[
             &MenuItem::with_id(app, "toggle-sidebar", "Toggle Sidebar", true, Some("CmdOrCtrl+S"))?,
+            &MenuItem::with_id(app, "explore", "Explore Tabs", true, Some("CmdOrCtrl+F"))?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "reload", "Reload Page", true, Some("CmdOrCtrl+R"))?,
             &MenuItem::with_id(app, "back", "Back", true, Some("CmdOrCtrl+["))?,
@@ -132,6 +133,7 @@ pub fn run_action(app: &AppHandle, id: String) {
             "reopen-tab" => browser::reopen_closed_tab(&app),
             "clear-today" => browser::clear_today(&app),
             "toggle-sidebar" => browser::toggle_sidebar(&app),
+            "explore" => browser::toggle_explore(&app),
             "next-tab" => browser::cycle_tab(&app, 1),
             "previous-tab" => browser::cycle_tab(&app, -1),
             "new-space" => browser::new_space(&app).map(|_| ()),
@@ -223,29 +225,48 @@ pub async fn tab_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
 /// Right-click menu for a space in the switcher.
 #[tauri::command]
 pub async fn space_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
-    let (color, isolated, deletable) = browser::space_menu_info(&app, id).ok_or("no such space")?;
+    let info = browser::space_menu_info(&app, id).ok_or("no such space")?;
     let build = || -> tauri::Result<Menu<Wry>> {
         let menu = Menu::new(&app)?;
         menu.append(&item(&app, format!("ctx-rename-space:{id}"), "Rename Space…")?)?;
         let colors = Submenu::new(&app, "Color", true)?;
         for option in SPACE_COLORS {
             let label = format!("{}{}", option[..1].to_uppercase(), &option[1..]);
-            colors.append(&CheckMenuItem::with_id(&app, format!("ctx-space-color:{id}:{option}"), label, true, option == color, None::<&str>)?)?;
+            colors.append(&CheckMenuItem::with_id(&app, format!("ctx-space-color:{id}:{option}"), label, true, option == info.color, None::<&str>)?)?;
         }
         menu.append(&colors)?;
-        menu.append(&CheckMenuItem::with_id(
-            &app,
-            format!("ctx-space-profile:{id}"),
-            "Separate Profile (own cookies and logins)",
-            true,
-            isolated,
-            None::<&str>,
-        )?)?;
+        menu.append(&profile_menu(&app, id, &info)?)?;
         menu.append(&PredefinedMenuItem::separator(&app)?)?;
-        menu.append(&MenuItem::with_id(&app, format!("ctx-delete-space:{id}"), "Delete Space", deletable, None::<&str>)?)?;
+        menu.append(&MenuItem::with_id(&app, format!("ctx-delete-space:{id}"), "Delete Space", info.deletable, None::<&str>)?)?;
         Ok(menu)
     };
     popup(&app, build())
+}
+
+/// "Profile" submenu: the shared profile, each separate profile (named by the
+/// spaces using it), and a new one. The check marks the space's current one.
+fn profile_menu(app: &AppHandle, id: u32, info: &browser::SpaceMenuInfo) -> tauri::Result<Submenu<Wry>> {
+    // Group spaces by profile, in space order; the shared profile first.
+    let mut groups: Vec<(Option<&str>, u32, Vec<&str>)> = vec![(None, id, Vec::new())];
+    for (space, name, profile) in &info.spaces {
+        match groups.iter_mut().find(|g| g.0 == profile.as_deref()) {
+            Some(group) => group.2.push(name),
+            None => groups.push((profile.as_deref(), *space, vec![name])),
+        }
+    }
+    let submenu = Submenu::new(app, "Profile", true)?;
+    for (profile, space, names) in groups {
+        let (choice, kind) = match profile {
+            None => ("shared".to_string(), "Shared"),
+            Some(_) => (format!("space-{space}"), "Separate"),
+        };
+        let label = if names.is_empty() { format!("{kind} Profile") } else { format!("{kind} Profile ({})", names.join(", ")) };
+        let checked = profile == info.profile.as_deref();
+        submenu.append(&CheckMenuItem::with_id(app, format!("ctx-space-profile:{id}:{choice}"), label, true, checked, None::<&str>)?)?;
+    }
+    submenu.append(&PredefinedMenuItem::separator(app)?)?;
+    submenu.append(&item(app, format!("ctx-space-profile:{id}:new"), "New Profile (signed out)")?)?;
+    Ok(submenu)
 }
 
 /// Right-click menu for a pinned folder.
@@ -294,8 +315,9 @@ fn run_context_action(app: &AppHandle, id: &str) -> tauri::Result<()> {
         "ctx-rename-space" => browser::request_rename(app, "space", target)?,
         "ctx-space-color" => browser::set_space_color(app, target, arg.unwrap_or_default()),
         "ctx-space-profile" => {
-            let isolated = browser::space_menu_info(app, target).is_some_and(|(_, isolated, _)| isolated);
-            browser::set_space_profile(app, target, !isolated)?;
+            if let Some(choice) = arg.and_then(browser::ProfileChoice::parse) {
+                browser::set_space_profile(app, target, choice)?;
+            }
         }
         "ctx-delete-space" => browser::delete_space(app, target)?,
         // Folders

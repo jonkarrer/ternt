@@ -16,7 +16,11 @@ await t.invoke("rename_space", { id: work, name: "Work" });
 await t.invoke("space_color", { id: work, color: "green" });
 await t.until(() => S().spaces.find((s) => s.id === work)?.color === "green", "space renamed and recolored");
 
-// Tabs belong to their space; favorites are shared
+// Spaces sharing a profile share favorites (new spaces get their own; see profiles.js)
+await t.invoke("space_profile", { id: work, profile: "shared" });
+await t.until(() => !S().spaces.find((s) => s.id === work)?.profile, "Work on the shared profile");
+
+// Tabs belong to their space; favorites are shared by the profile
 await t.invoke("new_tab", { url: `${F}/page2.html` });
 await t.until(() => tab()?.title === "Fixture Page 2" && tab()?.space === work, "tab opens in Work");
 await t.invoke("new_tab", { url: `${F}/spa/x` });

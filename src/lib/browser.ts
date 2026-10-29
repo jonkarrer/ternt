@@ -72,6 +72,10 @@ export const browser = {
   moveTab: (id: number, zone: Zone, folder: number | null, index: number | null) =>
     invoke("move_tab", { id, zone, folder, index }),
   tabContextMenu: (id: number) => invoke("tab_context_menu", { id }),
+  /** Explore mode (⌘F): show a tab without leaving the mode. */
+  explorePreview: (id: number) => invoke("explore_preview", { id }),
+  /** Leave explore mode: open a tab, cancel back to the start, or stay put. */
+  exploreEnd: (open: number | null, cancel = false) => invoke("explore_end", { open, cancel }),
 
   createSpace: () => invoke<number>("create_space"),
   activateSpace: (id: number) => invoke("activate_space", { id }),
@@ -98,6 +102,8 @@ export const browser = {
     listen<BrowserState>("browser:state", (e) => cb(e.payload)),
   onPaletteOpen: (cb: (request: PaletteRequest) => void): Promise<UnlistenFn> =>
     listen<PaletteRequest>("palette:open", (e) => cb(e.payload)),
+  /** Explore mode (⌘F) started or ended. */
+  onExplore: (cb: (on: boolean) => void): Promise<UnlistenFn> => listen<boolean>("browser:explore", (e) => cb(e.payload)),
   /** Rust asks the sidebar to start inline-renaming a space or folder. */
   onRename: (cb: (target: { kind: "space" | "folder"; id: number }) => void): Promise<UnlistenFn> =>
     listen<{ kind: "space" | "folder"; id: number }>("browser:rename", (e) => cb(e.payload)),

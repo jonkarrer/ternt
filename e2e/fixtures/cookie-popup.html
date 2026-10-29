@@ -1,0 +1,5 @@
+<!doctype html><title>Sign in</title><body style="font:20px system-ui;padding:40px"><h1>Sign in</h1>
+<script>
+  const who = document.cookie.match(/who=([^;]*)/)?.[1] ?? "none";
+  setTimeout(() => { window.opener?.postMessage(who, "*"); window.close(); }, 200);
+</script></body>

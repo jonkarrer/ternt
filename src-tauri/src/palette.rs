@@ -56,6 +56,10 @@ pub fn create(window: &Window) -> tauri::Result<()> {
 }
 
 pub fn open(app: &AppHandle, mode: Mode) -> tauri::Result<()> {
+    // The command bar takes over from explore mode (keeping what it showed).
+    if browser::exploring(app) {
+        browser::end_explore(app, browser::ExploreEnd::Commit);
+    }
     let url = browser::active_tab_url(app);
     let mode = if url.is_none() { Mode::NewTab } else { mode };
     let request = Request {

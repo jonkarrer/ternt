@@ -7,9 +7,14 @@ use objc2::{
     rc::Retained,
     runtime::{AnyObject, NSObject},
 };
-use objc2_app_kit::{NSAutoresizingMaskOptions, NSView, NSWindowOrderingMode};
-use objc2_foundation::{NSKeyValueObservingOptions, NSObjectNSKeyValueObserverRegistration, NSString, NSURL};
-use tauri::{AppHandle, Webview};
+use objc2_app_kit::{
+    NSAutoresizingMaskOptions, NSBox, NSBoxType, NSColor, NSEvent, NSResponder, NSTitlePosition, NSView,
+    NSWindowOrderingMode,
+};
+use objc2_foundation::{
+    NSKeyValueObservingOptions, NSObjectNSKeyValueObserverRegistration, NSPoint, NSRect, NSSize, NSString, NSURL,
+};
+use tauri::{AppHandle, Manager, Webview};
 
 use crate::browser::{self, NativeState};
 
@@ -185,5 +190,65 @@ pub fn copy_to_clipboard(app: &AppHandle, text: String) {
         let text = NSString::from_str(&text);
         let kind = NSString::from_str("public.utf8-plain-text");
         let _: bool = msg_send![pasteboard, setString: &*text, forType: &*kind];
+    });
+}
+
+// --- Explore mode dimming --------------------------------------------------
+//
+// One translucent view over the content area while exploring tabs (⌘F). It
+// sits above every content webview, so pages get no input; a click on it
+// ends explore mode. AppKit resizes it with the window like the webviews.
+
+define_class!(
+    // SAFETY: NSBox has no subclassing requirements and we don't impl Drop.
+    #[unsafe(super(NSBox, NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "MooveDimView"]
+    #[ivars = AppHandle]
+    struct DimView;
+
+    impl DimView {
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, _event: &NSEvent) {
+            let app = self.ivars().clone();
+            std::thread::spawn(move || browser::end_explore(&app, browser::ExploreEnd::Commit));
+        }
+    }
+);
+
+thread_local! {
+    static DIM: RefCell<Option<Retained<DimView>>> = const { RefCell::new(None) };
+}
+
+/// Show the dim over `frame` (x, y, width, height in the content view's
+/// coordinates) above all content views, or remove it with `None`. Called
+/// again after a view is added, to stay on top.
+pub fn set_dim(ui: &Webview, frame: Option<(f64, f64, f64, f64)>, radius: f64) {
+    let app = ui.app_handle().clone();
+    let _ = ui.with_webview(move |platform| unsafe {
+        let mtm = MainThreadMarker::new().expect("with_webview runs on the main thread");
+        let Some((x, y, width, height)) = frame else {
+            if let Some(dim) = DIM.take() {
+                dim.removeFromSuperview();
+            }
+            return;
+        };
+        let Some(parent) = view(platform.inner()).superview() else { return };
+        let dim = DIM.with_borrow_mut(|slot| {
+            slot.get_or_insert_with(|| {
+                let dim: Retained<DimView> = msg_send![super(DimView::alloc(mtm).set_ivars(app)), init];
+                dim.setBoxType(NSBoxType::Custom);
+                dim.setTitlePosition(NSTitlePosition::NoTitle);
+                dim.setBorderWidth(0.0);
+                dim.setCornerRadius(radius);
+                dim.setFillColor(&NSColor::colorWithWhite_alpha(0.0, 0.32));
+                dim.setContentViewMargins(NSSize::new(0.0, 0.0));
+                pin_to_superview(&dim);
+                dim
+            })
+            .clone()
+        });
+        dim.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(width, height)));
+        parent.addSubview_positioned_relativeTo(&dim, NSWindowOrderingMode::Above, None);
     });
 }
