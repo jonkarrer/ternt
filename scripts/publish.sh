@@ -9,6 +9,8 @@
 # Produces a universal (Apple Silicon + Intel) app, notarized and stapled,
 # and uploads to GitHub Releases: the .dmg for new installs, the signed
 # update archive and latest.json for installed copies (src-tauri/src/updater.rs).
+# Uploads use a GitHub token from the keychain (item "ternt-github") or
+# $GITHUB_TOKEN.
 set -e
 cd ${0:A:h:h}
 ROOT=$PWD
@@ -19,6 +21,17 @@ OUT=$ROOT/src-tauri/target/$TARGET/release/bundle
 fail() { echo "!! $*"; exit 1; }
 step() { echo "\n== $*"; }
 
+# GitHub's REST API (GITHUB_API overrides it, for testing). The token reaches
+# curl through a file descriptor, never the command line (no `ps` exposure).
+API=${GITHUB_API:-https://api.github.com}
+github() { # github METHOD PATH|URL [curl args...]: response body on stdout
+  local method=$1 url=$2; shift 2
+  [[ $url == http* ]] || url=$API$url
+  curl -sS --fail-with-body -X $method -K <(printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN") \
+    -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$@" "$url"
+}
+json() { bun -e "const v = JSON.parse(await Bun.stdin.text()); console.log($1)"; } # json EXPR < body
+
 version=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"([0-9.]+)".*/\1/')
 tag=v$version
 
@@ -28,9 +41,15 @@ step "checking Ternt $version"
   fail "HEAD isn't tagged $tag; run scripts/release.sh <version> first"
 for tool in bun cargo rustup xcrun; do command -v $tool >/dev/null || fail "$tool not found"; done
 if [[ -z $DRY ]]; then
-  command -v gh >/dev/null || fail "gh not found (brew install gh, then gh auth login)"
-  gh auth status >/dev/null 2>&1 || fail "gh isn't logged in (gh auth login)"
-  gh release view $tag -R $REPO >/dev/null 2>&1 && fail "release $tag already exists on GitHub"
+  export GITHUB_TOKEN=${GITHUB_TOKEN:-$(security find-generic-password -s ternt-github -w 2>/dev/null)}
+  [[ -n $GITHUB_TOKEN ]] || fail "no GitHub token: see docs/RELEASING.md (keychain item 'ternt-github')"
+  # Also proves the token works before the long build.
+  case $(github GET /repos/$REPO/releases/tags/$tag -o /dev/null -w '%{http_code}' 2>/dev/null || true) in
+    404) ;;
+    200) fail "release $tag already exists on GitHub" ;;
+    401) fail "GitHub rejected the token (expired or revoked?)" ;;
+    *) fail "couldn't reach GitHub's API with the token" ;;
+  esac
 fi
 [[ $TARGET != universal-apple-darwin ]] || for t in aarch64-apple-darwin x86_64-apple-darwin; do
   rustup target list --installed | grep -qx $t || fail "missing Rust target $t (rustup target add $t)"
@@ -108,6 +127,19 @@ fi
 
 step "publishing $tag"
 git push origin HEAD:main $tag
-gh release create $tag -R $REPO --title "Ternt $version" --notes "Download **Ternt_${version}_universal.dmg**, open it and drag Ternt to Applications. Installed copies update themselves: an Update button appears at the bottom left of the sidebar." \
-  $dist/Ternt_${version}_universal.dmg $dist/Ternt_${version}_universal.app.tar.gz $dist/latest.json
+# A draft first, published once every file is up: installed copies never
+# see a latest.json whose update archive isn't there yet.
+notes="Download **Ternt_${version}_universal.dmg**, open it and drag Ternt to Applications. Installed copies update themselves: an Update button appears at the bottom left of the sidebar."
+release=$(TAG=$tag NAME="Ternt $version" NOTES=$notes bun -e \
+  'const e = process.env; console.log(JSON.stringify({ tag_name: e.TAG, name: e.NAME, body: e.NOTES, draft: true }))' |
+  github POST /repos/$REPO/releases --data-binary @-) || fail "couldn't create the release (does the token have Contents: write?)"
+id=$(json 'v.id' <<< $release)
+uploads=$(json 'v.upload_url.replace(/{.*}$/, "")' <<< $release)
+for file in $dist/Ternt_${version}_universal.dmg $dist/Ternt_${version}_universal.app.tar.gz $dist/latest.json; do
+  echo "uploading ${file:t}"
+  github POST "$uploads?name=${file:t}" -H "Content-Type: application/octet-stream" --data-binary @$file > /dev/null ||
+    fail "upload failed; delete the draft release on GitHub, then run scripts/publish.sh again"
+done
+github PATCH /repos/$REPO/releases/$id --data-binary '{"draft":false,"make_latest":"true"}' > /dev/null ||
+  fail "couldn't publish the draft; publish it on GitHub by hand"
 echo "\npublished: https://github.com/$REPO/releases/tag/$tag"
