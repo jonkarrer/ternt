@@ -90,11 +90,12 @@ Add one with `doppler secrets set NAME` (it prompts, so the value stays out of s
 
 ## Each release
 
-1. On `main`, with everything committed and pushed: `just release <version>`
-   (e.g. `0.2.0`). It bumps the version in `tauri.conf.json`, `package.json` and `Cargo.toml`,
-   commits and tags. For the very first release the version is already `0.1.0`: just
-   `git tag -a v0.1.0 -m "Ternt 0.1.0"`.
-2. `just upload`. It checks the setup, builds a universal app, signs and notarizes it
+1. On `main`, with everything committed: `just upload`. HEAD isn't tagged yet, so it asks
+   whether this is a patch, minor or major release (or take the choice up front:
+   `just upload minor`), bumps the version in `tauri.conf.json`, `package.json` and
+   `Cargo.toml`, commits and tags. To pick an exact version instead, run
+   `just release 0.2.0` first; `just upload` then publishes the tag at HEAD without asking.
+2. The same run then checks the setup, builds a universal app, signs and notarizes it
    (a few minutes, waiting on Apple), verifies the signature and Gatekeeper assessment, signs the
    update archive, writes `latest.json`, pushes `main` and the tag, and creates the GitHub Release (a draft until every file is
    uploaded, so installed copies never see a half-published update)
@@ -106,8 +107,11 @@ Add one with `doppler secrets set NAME` (it prompts, so the value stays out of s
 3. Within a few seconds of launch (or via *Ternt → Check for Updates…*), installed copies show
    an **Update** button at the bottom left of the sidebar.
 
-If something fails halfway, nothing is published until the last step; fix it (deleting any
-leftover draft release on GitHub) and run `just upload` again. To redo a published release, delete it on GitHub first.
+If something fails halfway, nothing is published until the last step. The bump commit and tag
+stay local, and the built, notarized files stay in the bundle's `publish` folder: fix the cause
+(deleting any leftover draft release on GitHub) and run `just upload-resume`, which publishes
+those files without rebuilding or notarizing again. `just upload` instead rebuilds from the
+tag at HEAD. To redo a published release, delete it on GitHub first.
 
 ## Testing the updater without publishing
 

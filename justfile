@@ -38,14 +38,18 @@ test-update:
 
 # ─── Release (docs/RELEASING.md) ─────────────────────────
 
-# Bump the version everywhere, commit and tag, e.g. `just release 0.2.0`
+# Bump the version everywhere, commit and tag: `just release minor` (or patch, major, 0.2.0)
 release version:
     scripts/release.sh {{version}}
 
-# Build, sign, notarize and upload the tagged release to GitHub Releases
-upload:
-    doppler run -- scripts/publish.sh
+# Release: bump (asks patch/minor/major unless given: `just upload minor`), build, sign, notarize, upload
+upload bump="":
+    doppler run -- scripts/publish.sh {{bump}}
 
-# Build and verify the tagged release without Apple signing or upload
+# Publish the files the last `just upload` built, after a push or upload error (no rebuild)
+upload-resume:
+    doppler run -- scripts/publish.sh --resume
+
+# Build and verify the release tagged at HEAD without Apple signing or upload
 upload-dry-run:
     doppler run -- scripts/publish.sh --dry-run
