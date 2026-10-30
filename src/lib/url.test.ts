@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { hostOf, parseInput, SEARCH_URL } from "./url";
+import { hostOf, isAppPage, parseInput, SEARCH_URL } from "./url";
 
 describe("parseInput", () => {
   test("empty input is nothing", () => {
@@ -43,5 +43,20 @@ describe("hostOf", () => {
   test("returns non-URLs unchanged", () => {
     expect(hostOf("not a url")).toBe("not a url");
     expect(hostOf("")).toBe("");
+  });
+});
+
+describe("hostOf", () => {
+  test("web pages show their host, without www", () => {
+    expect(hostOf("https://www.github.com/x/y")).toBe("github.com");
+    expect(hostOf("http://localhost:8765/")).toBe("localhost:8765");
+  });
+  test("app pages show the whole URL", () => {
+    expect(hostOf("ternt://welcome/")).toBe("ternt://welcome");
+    expect(isAppPage("ternt://welcome/")).toBe(true);
+    expect(isAppPage("https://ternt.app/")).toBe(false);
+  });
+  test("garbage is shown as is", () => {
+    expect(hostOf("not a url")).toBe("not a url");
   });
 });

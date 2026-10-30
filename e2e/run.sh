@@ -29,7 +29,12 @@ for name in $tests; do
   # Tests share a session file by prefix (`session-1` saves, `session-2`
   # restores); the first test of a group starts from scratch.
   key=${name%%-*}
-  [[ $name == $key || $name == *-1 ]] && rm -f $OUT/$key.session.json $OUT/$key.history.json
+  if [[ $name == $key || $name == *-1 ]]; then
+    rm -f $OUT/$key.session.json $OUT/$key.history.json
+    # A missing session file is a first launch, which opens the welcome page;
+    # suites start from an empty session instead, except the welcome suite.
+    [[ $key == welcome ]] || echo '{"tabs":[],"active":null,"sidebarWidth":240,"sidebarCollapsed":false}' > $OUT/$key.session.json
+  fi
   TERNT_TEST=$E2E/tests/$name.js TERNT_SHOTS=$OUT TERNT_SESSION_FILE=$OUT/$key.session.json \
     TERNT_HISTORY_FILE=$OUT/$key.history.json $ROOT/src-tauri/target/debug/ternt > $OUT/$name.log 2>&1 &
   pid=$!

@@ -179,7 +179,7 @@ fn path(app: &AppHandle) -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("TERNT_HISTORY_FILE") {
         return Some(path.into());
     }
-    Some(app.path().app_data_dir().ok()?.join("history.json"))
+    Some(crate::session::data_dir(app)?.join("history.json"))
 }
 
 /// Read the saved history. Called at startup, before any page loads.

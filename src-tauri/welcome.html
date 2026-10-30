@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Welcome to Ternt</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0718;
+        --panel: rgba(255, 255, 255, 0.05);
+        --line: rgba(255, 255, 255, 0.1);
+        --text: #f3eefc;
+        --muted: #a79cc4;
+        --pink: #ff2bd6;
+        --cyan: #2bf0ff;
+        --sun: linear-gradient(180deg, #ffe066 0%, #ff5c8a 48%, #9d1bff 100%);
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; min-height: 100%; }
+      body {
+        font: 16px/1.5 -apple-system, "SF Pro Text", system-ui, sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(60% 45% at 50% 0%, #2b1360 0%, rgba(43, 19, 96, 0) 70%),
+          var(--bg);
+        -webkit-font-smoothing: antialiased;
+        overflow-x: hidden;
+      }
+      .horizon {
+        position: fixed; left: 0; right: 0; bottom: 0; height: 38vh; z-index: -1;
+        background:
+          linear-gradient(to top, rgba(255, 43, 214, 0.35), transparent 70%),
+          repeating-linear-gradient(to top, rgba(255, 63, 209, 0.45) 0 2px, transparent 2px 46px),
+          repeating-linear-gradient(to right, rgba(255, 63, 209, 0.35) 0 2px, transparent 2px 72px);
+        transform: perspective(420px) rotateX(58deg);
+        transform-origin: top;
+        border-top: 2px solid var(--cyan);
+        mask-image: linear-gradient(to bottom, #000 0%, transparent 95%);
+        -webkit-mask-image: linear-gradient(to bottom, #000 0%, transparent 95%);
+      }
+      main { max-width: 720px; margin: 0 auto; padding: 56px 32px 160px; }
+      header { display: flex; align-items: center; gap: 24px; margin-bottom: 40px; }
+      .bolt { width: 96px; height: 96px; flex: none; filter: drop-shadow(0 0 18px rgba(255, 43, 214, 0.7)); }
+      h1 {
+        margin: 0; font-size: 44px; line-height: 1.05; letter-spacing: -0.02em; font-weight: 800;
+        background: var(--sun); -webkit-background-clip: text; background-clip: text; color: transparent;
+      }
+      .tag { margin: 8px 0 0; color: var(--muted); font-size: 18px; }
+      section { margin-top: 36px; }
+      h2 { font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan); margin: 0 0 14px; }
+      .keys { display: grid; grid-template-columns: max-content 1fr; gap: 10px 20px; align-items: center; margin: 0; }
+      kbd {
+        display: inline-block; min-width: 2.2em; padding: 3px 8px; text-align: center;
+        font: 600 13px/1.4 -apple-system, "SF Pro Text", system-ui, sans-serif;
+        color: var(--text); background: var(--panel); border: 1px solid var(--line);
+        border-bottom-width: 2px; border-radius: 7px; white-space: nowrap;
+      }
+      dt { margin: 0; }
+      dd { margin: 0; color: var(--muted); }
+      dd b { color: var(--text); font-weight: 600; }
+      .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+      .card { padding: 16px 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+      .card h3 { margin: 0 0 6px; font-size: 15px; }
+      .card p { margin: 0; color: var(--muted); font-size: 14px; }
+      .cta {
+        margin-top: 44px; padding: 18px 22px; border-radius: 14px; text-align: center; font-size: 17px;
+        background: linear-gradient(90deg, rgba(255, 43, 214, 0.18), rgba(43, 240, 255, 0.18));
+        border: 1px solid rgba(255, 43, 214, 0.4);
+      }
+      a { color: var(--cyan); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <div class="horizon" aria-hidden="true"></div>
+    <main>
+      <header>
+        <svg class="bolt" viewBox="300 120 440 790" aria-hidden="true">
+          <defs>
+            <linearGradient id="top" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset="0.55" stop-color="#d7ecff"/><stop offset="1" stop-color="#5eaaff"/></linearGradient>
+            <linearGradient id="bottom" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#101a33"/><stop offset="0.4" stop-color="#5a6d94"/><stop offset="1" stop-color="#f4f8ff"/></linearGradient>
+            <polygon id="b" points="612,150 318,572 494,572 404,884 722,428 556,428 656,150"/>
+            <clipPath id="c"><use href="#b"/></clipPath>
+          </defs>
+          <use href="#b" fill="#07040f" stroke="#07040f" stroke-width="40" stroke-linejoin="miter"/>
+          <g clip-path="url(#c)">
+            <rect x="0" y="0" width="1024" height="560" fill="url(#top)"/>
+            <rect x="0" y="560" width="1024" height="464" fill="url(#bottom)"/>
+            <rect x="0" y="548" width="1024" height="10" fill="#fff" opacity="0.85"/>
+          </g>
+        </svg>
+        <div>
+          <h1>Welcome to Ternt</h1>
+          <p class="tag">A browser and a terminal in one window. Spaces on the left, the web and your shell on the right.</p>
+        </div>
+      </header>
+
+      <section>
+        <h2>Start here</h2>
+        <dl class="keys">
+          <dt><kbd>⌘T</kbd></dt><dd><b>Command bar.</b> Type a URL, a search, a tab name, or <code>&gt; cmd</code> to run a command in a new terminal.</dd>
+          <dt><kbd>⌥⌘T</kbd></dt><dd><b>New terminal tab.</b> Your shell, right next to your tabs.</dd>
+          <dt><kbd>⌘L</kbd></dt><dd><b>Edit the current URL.</b></dd>
+          <dt><kbd>⌘S</kbd></dt><dd><b>Hide or show the sidebar.</b></dd>
+          <dt><kbd>⌘F</kbd></dt><dd><b>Explore tabs.</b> Move with the arrow keys, Space peeks, Enter opens.</dd>
+          <dt><kbd>⌃1–9</kbd></dt><dd><b>Switch spaces.</b> Or swipe two fingers across the sidebar.</dd>
+        </dl>
+      </section>
+
+      <section>
+        <h2>The sidebar</h2>
+        <div class="cards">
+          <div class="card"><h3>Favorites</h3><p>Icon tiles at the top. Drag a tab there to keep it in every space that shares the profile.</p></div>
+          <div class="card"><h3>Pinned</h3><p>Per space, in folders if you like. Closing a pinned tab unloads it and keeps it in the list.</p></div>
+          <div class="card"><h3>Today</h3><p>Everything else, newest first. Hover the divider for Clear.</p></div>
+          <div class="card"><h3>Spaces &amp; profiles</h3><p>Each new space gets its own cookie jar, so logins stay where you put them. Right-click a space dot to share one.</p></div>
+        </div>
+      </section>
+
+      <p class="cta">Press <kbd>⌘T</kbd> to open your first tab. Ternt updates itself: an Update button appears in the sidebar when a new version is out.</p>
+
+      <footer>Shortcuts, architecture and source: <a href="https://github.com/jonkarrer/ternt">github.com/jonkarrer/ternt</a>. This page is always one click away under Help → Welcome to Ternt.</footer>
+    </main>
+  </body>
+</html>

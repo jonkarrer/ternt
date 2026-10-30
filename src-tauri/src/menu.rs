@@ -9,7 +9,7 @@ use tauri::{
 use crate::{
     browser::{self, TabKind, Zone},
     model::SPACE_COLORS,
-    palette,
+    palette, welcome,
 };
 
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
@@ -111,7 +111,14 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     space_items.extend(space_numbers.iter().map(|item| item as &dyn IsMenuItem<Wry>));
     let spaces = Submenu::with_items(app, "Spaces", true, &space_items)?;
 
-    Menu::with_items(app, &[&app_menu, &file, &edit, &view, &tabs, &spaces, &window])
+    let help = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[&MenuItem::with_id(app, "welcome", "Welcome to Ternt", true, None::<&str>)?],
+    )?;
+
+    Menu::with_items(app, &[&app_menu, &file, &edit, &view, &tabs, &spaces, &window, &help])
 }
 
 pub fn handle(app: &AppHandle, event: MenuEvent) {
@@ -151,6 +158,7 @@ pub fn run_action(app: &AppHandle, id: String) {
                 Ok(())
             }
             "toggle-sidebar" => browser::toggle_sidebar(&app),
+            "welcome" => welcome::open(&app),
             "explore" => browser::toggle_explore(&app),
             "next-tab" => browser::cycle_tab(&app, 1),
             "previous-tab" => browser::cycle_tab(&app, -1),

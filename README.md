@@ -7,6 +7,9 @@ An Arc-style browser and terminal. Tauri v2 (Rust) + Svelte 5 (Vite, TypeScript)
 Download the `.dmg` from the [latest release](https://github.com/jonkarrer/ternt/releases/latest),
 open it and drag Ternt to Applications. Needs macOS 14 or later.
 
+The first launch opens a welcome page with the shortcuts (later: *Help → Welcome to Ternt*).
+No tabs are created for you: press ⌘T to open the first one.
+
 After that Ternt updates itself: when a new version is out, an **Update** button appears at the
 bottom left of the sidebar. Clicking it downloads the update, swaps the app in place and relaunches
 (your tabs come back). *Ternt → Check for Updates…* checks right away.
@@ -83,7 +86,13 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
   `WKWebView` (`src-tauri/src/native.rs`).
 - **Terminals** stream raw PTY bytes over a Tauri channel with ack-based flow control
   (`src-tauri/src/pty.rs`).
-- **Sessions** are saved to the app data dir (`session.json`), debounced and on exit.
+- **Sessions** are saved to the app data dir (`session.json`), debounced and on exit. Debug
+  builds use a `dev/` subfolder there, so `just dev` never leaves tabs in the installed app.
+- **Welcome page** (`src-tauri/welcome.html`, served on `ternt://welcome` by
+  `src-tauri/src/welcome.rs`): a plain web tab on a custom scheme, so it needs no IPC. Opened
+  when there is no session file at all (first launch) and from the Help menu.
+- **App icon**: `src-tauri/icons/icon.svg` is the source; render it to a 1024px PNG and run
+  `bun tauri icon <png> -o src-tauri/icons` to regenerate the set.
 - **History** (`src-tauri/src/history.rs`) records each page that finishes loading, per profile, in
   `history.json`; the command bar searches it in Rust as you type (match quality × frecency).
 

@@ -10,6 +10,7 @@ mod palette;
 mod pty;
 mod session;
 mod updater;
+mod welcome;
 
 use browser::Browser;
 
@@ -25,6 +26,7 @@ pub fn run() {
         .manage(pty::Terminals::default())
         .manage(history::Store::default())
         .manage(updater::Updates::default())
+        .register_asynchronous_uri_scheme_protocol(welcome::SCHEME, welcome::respond)
         .setup(|app| {
             browser::create_main_window(app.handle())?;
             app.set_menu(menu::build(app.handle())?)?;
@@ -32,18 +34,25 @@ pub fn run() {
             updater::start(app.handle());
 
             // Restore the last session, then open any `ternt <url>...` args.
+            // No session at all means a first launch: show the welcome page.
+            // A session with no tabs just opens the command bar.
             let saved = session::load(app.handle());
+            let first_launch = saved.is_none();
             let urls: Vec<_> = std::env::args()
                 .skip(1)
                 .filter_map(|arg| tauri::Url::parse(&arg).ok())
                 .collect();
-            if urls.is_empty() && saved.as_ref().is_none_or(|s| s.tabs.is_empty()) {
+            if urls.is_empty() && !first_launch && saved.as_ref().is_some_and(|s| s.tabs.is_empty()) {
                 palette::open(app.handle(), palette::Mode::NewTab)?;
             }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 if let Some(Err(err)) = saved.map(|saved| browser::restore(&handle, saved)) {
                     eprintln!("failed to restore session: {err}");
+                }
+                // Welcome first, so a URL given on the command line ends up active.
+                if first_launch && let Err(err) = welcome::open(&handle) {
+                    eprintln!("failed to open the welcome page: {err}");
                 }
                 for url in urls {
                     if let Err(err) = browser::open_tab(&handle, url) {

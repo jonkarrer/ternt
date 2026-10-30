@@ -18,10 +18,19 @@ export function parseInput(raw: string): ParsedInput | null {
   return { kind: "search", url: SEARCH_URL + encodeURIComponent(input) };
 }
 
+/** What the sidebar shows for a URL: the host for web pages, the whole URL
+    (minus a trailing slash) for app pages like `ternt://welcome`. */
 export function hostOf(url: string): string {
   try {
-    return new URL(url).host.replace(/^www\./, "");
+    const u = new URL(url);
+    if (!u.protocol.startsWith("http")) return url.replace(/\/$/, "");
+    return u.host.replace(/^www\./, "");
   } catch {
     return url;
   }
+}
+
+/** Pages Ternt serves itself (the welcome page). */
+export function isAppPage(url: string): boolean {
+  return url.startsWith("ternt://");
 }

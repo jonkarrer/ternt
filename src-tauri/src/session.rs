@@ -24,7 +24,15 @@ fn path(app: &AppHandle) -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("TERNT_SESSION_FILE") {
         return Some(path.into());
     }
-    Some(app.path().app_data_dir().ok()?.join("session.json"))
+    Some(data_dir(app)?.join("session.json"))
+}
+
+/// Where sessions and history live. Debug builds get their own folder, so
+/// `bun tauri dev` never leaves its tabs in the installed app (same bundle
+/// identifier, same app data dir).
+pub fn data_dir(app: &AppHandle) -> Option<PathBuf> {
+    let dir = app.path().app_data_dir().ok()?;
+    Some(if cfg!(debug_assertions) { dir.join("dev") } else { dir })
 }
 
 pub fn load(app: &AppHandle) -> Option<Saved> {
