@@ -51,6 +51,14 @@ export interface Profile {
   spaces: number[];
 }
 
+/** Two tabs side by side (see `Split` in model.rs). */
+export interface Split {
+  left: number;
+  right: number;
+  /** The left pane's share of the width. */
+  ratio: number;
+}
+
 /** A closed Today tab that can be reopened (newest last). */
 export interface ClosedTab {
   id: number;
@@ -69,6 +77,7 @@ export interface BrowserState {
   profiles: Profile[];
   /** Oldest first. */
   closed: ClosedTab[];
+  splits: Split[];
   active: number | null;
   activeSpace: number;
   sidebarWidth: number;
@@ -102,6 +111,8 @@ export interface PaletteRequest {
 export const DEFAULT_SIDEBAR_WIDTH = 240;
 export const MIN_SIDEBAR_WIDTH = 180;
 export const MAX_SIDEBAR_WIDTH = 480;
+/** Mirror INSET in src-tauri/src/browser.rs (also the gap between split panes). */
+export const INSET = 8;
 
 export const browser = {
   getState: () => invoke<BrowserState>("get_state"),
@@ -110,6 +121,10 @@ export const browser = {
   newTerminal: (command?: string) => invoke<number>("new_terminal", { command: command ?? null }),
   closeTab: (id: number) => invoke("close_tab", { id }),
   activateTab: (id: number) => invoke("activate_tab", { id }),
+  /** Show a tab beside the active one. */
+  splitView: (id: number) => invoke("split_view", { id }),
+  /** Returns the ratio after Rust clamps it (null: no split on screen). */
+  setSplitRatio: (ratio: number) => invoke<number | null>("set_split_ratio", { ratio }),
   /** Reopen one closed tab, in the space it was closed from. */
   reopenClosed: (id: number) => invoke("reopen_closed", { id }),
   /** `index` is the position in the full tab list after removing the tab. */

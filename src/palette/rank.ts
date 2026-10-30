@@ -1,7 +1,7 @@
 // Command bar results: what to offer for a query, in what order. Pure data
 // in, data out (no Tauri calls), so it's unit-tested in rank.test.ts; the
 // palette performs each item's `action`.
-import type { ClosedTab, HistoryHit, PaletteMode, Space, Tab } from "../lib/browser";
+import type { ClosedTab, HistoryHit, PaletteMode, Space, Split, Tab } from "../lib/browser";
 import { hostOf, parseInput } from "../lib/url";
 
 /** `top` holds the best matches, shown without a header. */
@@ -45,6 +45,8 @@ export type Command = {
   tab?: boolean;
   /** Hidden when the active tab is already in this zone. */
   unless?: Tab["zone"];
+  /** Only when the active tab is in a split view. */
+  split?: boolean;
 };
 
 export const COMMANDS: Command[] = [
@@ -61,6 +63,8 @@ export const COMMANDS: Command[] = [
   { id: "next-space", label: "Next Space", shortcut: "⌥⌘→" },
   { id: "previous-space", label: "Previous Space", shortcut: "⌥⌘←" },
   { id: "new-folder", label: "New Folder" },
+  { id: "split-terminal", label: "Split View with New Terminal", shortcut: "⌥⌘\\", keywords: "side by side shell", web: true },
+  { id: "unsplit", label: "Close Split View", keywords: "side by side", split: true },
   { id: "toggle-sidebar", label: "Toggle Sidebar", shortcut: "⌘S", keywords: "hide show" },
   { id: "reload", label: "Reload Page", shortcut: "⌘R", keywords: "refresh", web: true },
   { id: "back", label: "Go Back", shortcut: "⌘[", web: true },
@@ -83,6 +87,7 @@ export interface Context {
   history: HistoryHit[];
   /** Closed tabs, oldest first. */
   closed: ClosedTab[];
+  splits: Split[];
 }
 
 /** How well `text` matches the lowercase query `q`: 0 (no match) to 100. */
@@ -133,7 +138,10 @@ export function buildItems(raw: string, ctx: Context): Item[] {
 
   const commands = COMMANDS.filter(
     (c) =>
-      (!c.web || activeTab?.kind === "web") && (!c.tab || activeTab) && (!c.unless || activeTab?.zone !== c.unless),
+      (!c.web || activeTab?.kind === "web") &&
+      (!c.tab || activeTab) &&
+      (!c.unless || activeTab?.zone !== c.unless) &&
+      (!c.split || ctx.splits.some((s) => s.left === activeId || s.right === activeId)),
   );
   const commandItem = (c: Command, section: Section): Item => ({
     key: `cmd-${c.id}`,

@@ -10,6 +10,7 @@
     browser,
     hostOf,
     DEFAULT_SIDEBAR_WIDTH,
+    INSET,
     MAX_SIDEBAR_WIDTH,
     MIN_SIDEBAR_WIDTH,
     type BrowserState,
@@ -35,6 +36,7 @@
     folders: [],
     profiles: [],
     closed: [],
+    splits: [],
     active: null,
     activeSpace: 0,
     sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
@@ -69,6 +71,58 @@
   const loosePinned = $derived(pinnedIn(null));
   const today = $derived(browserState.tabs.filter((t) => t.zone === "today" && t.space === activeSpace));
   const collapsed = $derived(browserState.sidebarCollapsed);
+
+  // --- Split view -------------------------------------------------------
+  // Rust lays out the two panes; the sidebar webview, under them, draws their
+  // cards and the divider in the gap between them.
+
+  const splitOf = (id: number) => browserState.splits.find((s) => s.left === id || s.right === id);
+  const splitSide = (id: number) => {
+    const s = splitOf(id);
+    return s ? (s.left === id ? "left" : "right") : null;
+  };
+  const activeSplit = $derived(browserState.active != null ? splitOf(browserState.active) : undefined);
+  const besideActive = (id: number) => id !== browserState.active && activeSplit != null && splitOf(id) === activeSplit;
+
+  let innerWidth = $state(window.innerWidth);
+  /** The divider's ratio while it's dragged (Rust's otherwise). */
+  let dragRatio = $state<number | null>(null);
+  const contentLeft = $derived(Math.max(collapsed ? 0 : sidebarWidth, INSET));
+  /** Width the two panes share: the content area minus the gap. */
+  const paneRoom = $derived(Math.max(innerWidth - contentLeft - INSET * 2, 0));
+  const leftPane = $derived(Math.round(paneRoom * (dragRatio ?? activeSplit?.ratio ?? 0.5)));
+
+  let pendingRatio: number | null = null;
+  let ratioInFlight = false;
+  async function pushRatio(ratio: number) {
+    pendingRatio = ratio;
+    if (ratioInFlight) return;
+    ratioInFlight = true;
+    while (pendingRatio != null) {
+      const next = pendingRatio;
+      pendingRatio = null;
+      await browser.setSplitRatio(next);
+    }
+    ratioInFlight = false;
+  }
+
+  function startSplitResize(event: PointerEvent) {
+    const handle = event.currentTarget as HTMLElement;
+    handle.setPointerCapture(event.pointerId);
+    const move = (e: PointerEvent) => {
+      // Rust clamps too; clamp here so the handle doesn't run ahead.
+      const ratio = Math.min(0.8, Math.max(0.2, (e.clientX - contentLeft - INSET / 2) / paneRoom));
+      dragRatio = ratio;
+      pushRatio(ratio);
+    };
+    const end = () => {
+      dragRatio = null;
+      handle.removeEventListener("pointermove", move);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end, { once: true });
+    handle.addEventListener("pointercancel", end, { once: true });
+  }
 
   function pinnedIn(folder: number | null) {
     return browserState.tabs.filter((t) => t.zone === "pinned" && t.space === activeSpace && t.folder === folder);
@@ -337,7 +391,7 @@
   }
 </script>
 
-<svelte:window onkeydowncapture={exploreKeys} />
+<svelte:window onkeydowncapture={exploreKeys} bind:innerWidth />
 
 <div
   class="app"
@@ -488,6 +542,8 @@
                     folder={folder.id}
                     index={i}
                     active={tab.id === browserState.active}
+                    split={splitSide(tab.id)}
+                    beside={besideActive(tab.id)}
                     cursor={tab.id === cursor}
                     dragging={drag?.id === tab.id}
                     mark={markFor(tab)}
@@ -502,6 +558,8 @@
                 zone="pinned"
                 index={i}
                 active={tab.id === browserState.active}
+                split={splitSide(tab.id)}
+                beside={besideActive(tab.id)}
                 cursor={tab.id === cursor}
                 dragging={drag?.id === tab.id}
                 mark={markFor(tab)}
@@ -540,6 +598,8 @@
                 zone="today"
                 index={i}
                 active={tab.id === browserState.active}
+                split={splitSide(tab.id)}
+                beside={besideActive(tab.id)}
                 cursor={tab.id === cursor}
                 dragging={drag?.id === tab.id}
                 mark={markFor(tab)}
@@ -597,11 +657,25 @@
 
   <!-- Sits exactly under the active content view: draws its shadow, and the
        empty state when nothing is open. -->
-  <main class="content">
-    {#if browserState.active == null}
-      <p class="empty">Press <kbd>⌘T</kbd> to open a tab</p>
-    {/if}
-  </main>
+  {#if activeSplit}
+    <main class="content pane" style:width="{leftPane}px"></main>
+    <main class="content pane right" style:left="{contentLeft + leftPane + INSET}px"></main>
+    <div
+      class="split-handle"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize split view"
+      style:left="{contentLeft + leftPane}px"
+      onpointerdown={startSplitResize}
+      ondblclick={() => pushRatio(0.5)}
+    ></div>
+  {:else}
+    <main class="content">
+      {#if browserState.active == null}
+        <p class="empty">Press <kbd>⌘T</kbd> to open a tab</p>
+      {/if}
+    </main>
+  {/if}
 </div>
 
 <style>
@@ -1023,6 +1097,36 @@
       0 2px 12px var(--shadow);
     display: grid;
     place-items: center;
+  }
+  .content.pane {
+    right: auto;
+  }
+  .content.pane.right {
+    right: var(--inset);
+  }
+  /* The gap between split panes; a grip shows on hover. */
+  .split-handle {
+    position: absolute;
+    top: var(--inset);
+    bottom: var(--inset);
+    width: var(--inset);
+    cursor: col-resize;
+  }
+  .split-handle::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 2px;
+    width: 4px;
+    height: 36px;
+    margin-top: -18px;
+    border-radius: 2px;
+    background: var(--separator);
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+  .split-handle:hover::after {
+    opacity: 1;
   }
   .empty {
     color: var(--text-muted);

@@ -9,6 +9,8 @@
     mark = null,
     cursor = false,
     indent = false,
+    split = null,
+    beside = false,
     zone,
     folder = null,
     index,
@@ -22,6 +24,10 @@
     /** Explore mode's keyboard cursor is on this row. */
     cursor?: boolean;
     indent?: boolean;
+    /** Its side, if the tab is in a split view. */
+    split?: "left" | "right" | null;
+    /** On screen beside the active tab (the other pane of its split). */
+    beside?: boolean;
     /** This row's group and position, for drop targeting. */
     zone: Zone;
     folder?: number | null;
@@ -43,6 +49,7 @@
   class:dragging
   class:cursor
   class:indent
+  class:beside
   class:terminal={tab.kind === "terminal"}
   class:before={mark === "before"}
   class:after={mark === "after"}
@@ -64,6 +71,13 @@
 >
   <TabIcon {tab} />
   <span class="title">{tab.title || hostOf(tab.url)}</span>
+  {#if split}
+    <svg class="split-glyph" viewBox="0 0 16 16" aria-label="Split view, {split} side">
+      <rect x="2" y="3.5" width="12" height="9" rx="2" />
+      <path d="M8 3.5v9" />
+      <rect class="side" x={split === "left" ? 3.5 : 9.5} y="5" width="3" height="6" rx="0.75" />
+    </svg>
+  {/if}
   <button
     class="close"
     aria-label={zone === "today" ? "Close tab" : "Unload tab"}
@@ -104,10 +118,17 @@
   .active:hover {
     background: var(--tab-active);
   }
+  /* The other pane of the split on screen. */
+  .beside {
+    background: color-mix(in srgb, var(--tab-active) 50%, transparent);
+  }
   .terminal {
     background: var(--term-row);
   }
   .terminal:hover {
+    background: var(--term-row-hover);
+  }
+  .terminal.beside {
     background: var(--term-row-hover);
   }
   .terminal.active {
@@ -162,6 +183,17 @@
   .row:hover .close,
   .active .close {
     visibility: visible;
+  }
+  .split-glyph {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    stroke-width: 1.3;
+    color: var(--text-muted);
+  }
+  .split-glyph .side {
+    fill: currentColor;
+    stroke: none;
   }
   svg {
     width: 16px;

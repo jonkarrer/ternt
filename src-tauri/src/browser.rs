@@ -32,7 +32,7 @@ use tauri::{
 
 pub use crate::model::{TabKind, Zone};
 use crate::{
-    model::{SPACE_COLORS, Saved, Snapshot, State},
+    model::{SPACE_COLORS, Saved, Snapshot, Split, State},
     session,
 };
 
@@ -67,6 +67,9 @@ pub struct Browser {
     emit_pending: AtomicBool,
     /// Set while exploring tabs (⌘F).
     explore: Mutex<Option<Explore>>,
+    /// Labels of the content views on screen: the active tab's, plus its
+    /// split partner's.
+    shown: Mutex<Vec<String>>,
 }
 
 /// Where explore mode started, to return there on cancel.
@@ -119,6 +122,10 @@ pub fn active_profile(app: &AppHandle) -> Option<String> {
     with(app, |s| s.profile_of(s.active_space).map(String::from))
 }
 
+pub fn active_tab(app: &AppHandle) -> Option<u32> {
+    with(app, |s| s.active)
+}
+
 /// The active web tab's URL; `None` for terminals or no tab.
 pub fn active_tab_url(app: &AppHandle) -> Option<String> {
     with(app, |s| {
@@ -139,6 +146,10 @@ pub struct TabMenuInfo {
     pub folder: Option<u32>,
     /// Folders of the active space: `(id, name)`.
     pub folders: Vec<(u32, String)>,
+    /// It's in a split.
+    pub split: bool,
+    /// It can be shown beside the active tab.
+    pub can_split: bool,
 }
 
 pub fn tab_menu_info(app: &AppHandle, id: u32) -> Option<TabMenuInfo> {
@@ -155,6 +166,8 @@ pub fn tab_menu_info(app: &AppHandle, id: u32) -> Option<TabMenuInfo> {
                 .filter(|f| f.space == s.active_space)
                 .map(|f| (f.id, f.name.clone()))
                 .collect(),
+            split: s.split_of(id).is_some(),
+            can_split: s.active.is_some_and(|active| s.split_partner(active) != Some(id) && s.can_split(active, id)),
         })
     })
 }
@@ -246,17 +259,77 @@ fn content_bounds(app: &AppHandle) -> tauri::Result<Rect> {
     })
 }
 
-/// Apply the current content bounds to every content view (hidden ones too,
-/// so switching tabs never shows a stale size).
+/// Where a content view sits: the whole content area, or a side of a split.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pane {
+    Full,
+    Left,
+    Right,
+}
+
+/// The active tab's split, if it's in one.
+fn active_split(app: &AppHandle) -> Option<Split> {
+    with(app, |s| s.split_of(s.active?).cloned())
+}
+
+/// A tab's pane in `split` (`Full` if it isn't in it).
+fn pane_in(split: Option<&Split>, id: u32) -> Pane {
+    match split {
+        Some(split) if split.left == id => Pane::Left,
+        Some(split) if split.right == id => Pane::Right,
+        _ => Pane::Full,
+    }
+}
+
+fn pane_bounds(app: &AppHandle, pane: Pane, ratio: f64) -> tauri::Result<Rect> {
+    let full = content_bounds(app)?;
+    if pane == Pane::Full {
+        return Ok(full);
+    }
+    let (position, size) = (full.position.to_logical::<f64>(1.0), full.size.to_logical::<f64>(1.0));
+    // The panes share the width minus one gap, as wide as the window inset.
+    let room = (size.width - INSET).max(0.0);
+    let left = (room * ratio).round();
+    let (x, width) = match pane {
+        Pane::Left => (position.x, left),
+        _ => (position.x + left + INSET, room - left),
+    };
+    Ok(Rect {
+        position: LogicalPosition::new(x, position.y).into(),
+        size: LogicalSize::new(width, size.height).into(),
+    })
+}
+
+/// Put a content view in its pane (its frame, and how AppKit resizes it
+/// with the window).
+fn place(app: &AppHandle, webview: &Webview, pane: Pane, ratio: f64) -> tauri::Result<()> {
+    webview.set_bounds(pane_bounds(app, pane, ratio)?)?;
+    #[cfg(target_os = "macos")]
+    crate::native::set_pane(webview, pane);
+    Ok(())
+}
+
+/// The split's terminal tab, if it has one (it's shown by the shared
+/// terminal view).
+fn split_terminal(app: &AppHandle, split: &Split) -> Option<u32> {
+    [split.left, split.right].into_iter().find(|&id| is_terminal_tab(app, id))
+}
+
+/// Apply the current layout to every content view (hidden ones too, so
+/// switching tabs never shows a stale size): the active split's two panes,
+/// the whole content area for everything else.
 fn layout_tabs(app: &AppHandle) -> tauri::Result<()> {
     let ids = with(app, |s| s.tabs.iter().map(|t| t.id).collect::<Vec<_>>());
-    let bounds = content_bounds(app)?;
-    let views = ids
-        .into_iter()
-        .filter_map(|id| app.get_webview(&tab_label(id)))
-        .chain(app.get_webview(TERM_WEBVIEW));
-    for webview in views {
-        webview.set_bounds(bounds)?;
+    let split = active_split(app);
+    let ratio = split.as_ref().map_or(0.5, |s| s.ratio);
+    for id in ids {
+        if let Some(webview) = app.get_webview(&tab_label(id)) {
+            place(app, &webview, pane_in(split.as_ref(), id), ratio)?;
+        }
+    }
+    if let Some(webview) = app.get_webview(TERM_WEBVIEW) {
+        let pane = split.as_ref().and_then(|s| Some(pane_in(Some(s), split_terminal(app, s)?)));
+        place(app, &webview, pane.unwrap_or(Pane::Full), ratio)?;
     }
     if exploring(app) {
         update_dim(app)?;
@@ -298,16 +371,22 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
 
     crate::palette::create(&window)?;
 
-    // macOS resizes content webviews natively (see `native::style_content`).
-    #[cfg(not(target_os = "macos"))]
+    // macOS resizes content webviews natively (see `native::style_content`),
+    // which keeps a split's panes about right while the window resizes;
+    // lay them out exactly after each step.
     {
         let app = app.clone();
         window.on_window_event(move |event| {
-            if let tauri::WindowEvent::Resized(_) = event {
-                let _ = layout_tabs(&app);
+            if let tauri::WindowEvent::Resized(_) = event
+                && (cfg!(not(target_os = "macos")) || active_split(&app).is_some())
+            {
+                let app = app.clone();
+                std::thread::spawn(move || layout_tabs(&app));
             }
         });
     }
+    #[cfg(target_os = "macos")]
+    crate::native::watch_focus(&window, app.clone());
 
     Ok(())
 }
@@ -521,25 +600,61 @@ fn ensure_term_webview(app: &AppHandle) -> tauri::Result<Webview> {
     let builder = WebviewBuilder::new(TERM_WEBVIEW, WebviewUrl::App("term.html".into())).focused(false);
     let webview = main_window(app)?.add_child(builder, bounds.position, bounds.size)?;
     #[cfg(target_os = "macos")]
-    crate::native::style_content(&webview, CONTENT_RADIUS, false);
+    {
+        crate::native::style_content(&webview, CONTENT_RADIUS, false);
+        crate::native::register_terminal_view(&webview);
+    }
     Ok(webview)
 }
 
-fn activate(app: &AppHandle, id: u32) -> tauri::Result<()> {
+/// The view that shows a tab, created if needed: web tabs load lazily, the
+/// terminal view is created on first use.
+fn ensure_view(app: &AppHandle, id: u32) -> tauri::Result<Option<Webview>> {
     let Some((kind, loaded)) = with(app, |s| s.tab(id).map(|t| (t.kind, t.loaded))) else {
-        return Ok(());
+        return Ok(None);
     };
-
-    // Lazily create the view before switching to it.
-    let next_view = match kind {
+    Ok(Some(match kind {
         TabKind::Web if !loaded => load_tab(app, id)?,
         TabKind::Web => app.get_webview(&tab_label(id)).map_or_else(|| load_tab(app, id), Ok)?,
         TabKind::Terminal => ensure_term_webview(app)?,
-    };
-    let previous = with(app, |s| s.focus(id)).flatten();
+    }))
+}
 
-    // Show the new view before hiding the old one so there's no empty frame.
-    // Terminals share a view, so terminal-to-terminal switches hide nothing.
+/// Make `views` the content views on screen, hiding the ones that were.
+/// Called after the new ones are shown, so there's no empty frame.
+fn set_shown(app: &AppHandle, views: &[&Webview]) -> tauri::Result<()> {
+    let labels: Vec<String> = views.iter().map(|v| v.label().to_string()).collect();
+    let before = std::mem::replace(&mut *app.state::<Browser>().shown.lock().unwrap(), labels.clone());
+    for label in before.iter().filter(|l| !labels.contains(l)) {
+        if let Some(webview) = app.get_webview(label) {
+            webview.hide()?;
+        }
+    }
+    Ok(())
+}
+
+/// Show a tab (and its split partner) and focus it.
+fn activate(app: &AppHandle, id: u32) -> tauri::Result<()> {
+    let Some(next_view) = ensure_view(app, id)? else {
+        return Ok(());
+    };
+    let partner = with(app, |s| s.split_partner(id));
+    let partner_view = match partner {
+        Some(partner) => ensure_view(app, partner)?,
+        None => None,
+    };
+    with(app, |s| s.focus(id));
+
+    // Place before showing, then show the new views before hiding the old
+    // ones so there's no empty frame. Terminals share a view, so
+    // terminal-to-terminal switches hide nothing.
+    let split = with(app, |s| s.split_of(id).cloned());
+    let ratio = split.as_ref().map_or(0.5, |s| s.ratio);
+    place(app, &next_view, pane_in(split.as_ref(), id), ratio)?;
+    if let (Some(view), Some(partner)) = (&partner_view, partner) {
+        place(app, view, pane_in(split.as_ref(), partner), ratio)?;
+        view.show()?;
+    }
     next_view.show()?;
     if exploring(app) {
         // Previewing: the sidebar keeps the keyboard, the dim stays on top.
@@ -547,41 +662,49 @@ fn activate(app: &AppHandle, id: u32) -> tauri::Result<()> {
     } else {
         next_view.set_focus()?;
     }
-    if let Some(webview) = previous
-        .filter(|&p| p != id)
-        .and_then(|p| view_for(app, p))
-        .filter(|prev| prev.label() != next_view.label())
-    {
-        webview.hide()?;
-    }
+    let shown: Vec<&Webview> = std::iter::once(&next_view).chain(partner_view.as_ref()).collect();
+    set_shown(app, &shown)?;
     emit_state(app);
     Ok(())
 }
 
 /// Show nothing (an empty space): hide the active view.
 fn deactivate(app: &AppHandle) -> tauri::Result<()> {
-    let previous = with(app, |s| s.active.take());
-    if let Some(webview) = previous.and_then(|p| view_for(app, p)) {
-        webview.hide()?;
-    }
+    with(app, |s| s.active.take());
+    set_shown(app, &[])?;
     emit_state(app);
     Ok(())
+}
+
+/// Show the active tab again after its split changed (ended, or a new one).
+fn refresh_active(app: &AppHandle) -> tauri::Result<()> {
+    match with(app, |s| s.active) {
+        Some(id) => activate(app, id),
+        None => Ok(()),
+    }
 }
 
 pub fn close_tab_by_id(app: &AppHandle, id: u32) -> tauri::Result<()> {
     // Favorites and pinned tabs unload instead of closing (Arc behavior):
     // they stay in the sidebar and reload their URL when next opened.
-    let Some((tab, was_active, next)) = with(app, |s| {
-        let next = s.neighbor(id);
+    let Some((tab, was_active, next, partner_of_active)) = with(app, |s| {
+        // Its split partner takes over the content area.
+        let next = s.split_partner(id).or_else(|| s.neighbor(id));
+        let partner_of_active = s.active.is_some_and(|a| s.split_partner(a) == Some(id));
+        s.remove_split(id);
         let tab = s.remove_tab(id)?;
         let was_active = s.active == Some(id);
         if was_active {
             s.active = None;
         }
-        Some((tab, was_active, next))
+        Some((tab, was_active, next, partner_of_active))
     }) else {
         return Ok(());
     };
+    // The other pane closed: the active tab gets the whole content area.
+    if partner_of_active {
+        refresh_active(app)?;
+    }
 
     // `activate` hides the previously active view, but this tab is no longer
     // active, so its view is handled here.
@@ -595,12 +718,12 @@ pub fn close_tab_by_id(app: &AppHandle, id: u32) -> tauri::Result<()> {
         TabKind::Terminal => {
             crate::pty::kill(app, id);
             // The shared terminal view stays up only if a terminal is now showing.
-            let showing_terminal = next.is_some_and(|n| is_terminal_tab(app, n));
-            if let Some(webview) = app
-                .get_webview(TERM_WEBVIEW)
-                .filter(|_| was_active && !showing_terminal)
-            {
+            let showing_terminal = with(app, |s| {
+                s.active.is_some_and(|a| s.shown_with(a).iter().any(|&t| s.tab(t).is_some_and(|t| t.kind == TabKind::Terminal)))
+            });
+            if let Some(webview) = app.get_webview(TERM_WEBVIEW).filter(|_| !showing_terminal) {
                 webview.hide()?;
+                app.state::<Browser>().shown.lock().unwrap().retain(|l| l != TERM_WEBVIEW);
             }
         }
     }
@@ -666,9 +789,70 @@ pub fn duplicate_tab(app: &AppHandle, id: u32) -> tauri::Result<()> {
 /// the tab context menu). `index: None` appends; Today prepends instead.
 pub fn move_tab_to(app: &AppHandle, id: u32, zone: Zone, folder: Option<u32>, index: Option<usize>) {
     let index = index.unwrap_or(if zone == Zone::Today { 0 } else { usize::MAX });
+    let split_before = active_split(app);
     if with(app, |s| s.move_tab(id, zone, folder, index)) {
+        // Moving a tab can end the split on screen (made a favorite).
+        if active_split(app) != split_before {
+            let _ = refresh_active(app);
+        }
         emit_state(app);
     }
+}
+
+// --- Split view ---------------------------------------------------------------
+
+/// Show `other` beside the active tab (the active tab on the left).
+pub fn split_with(app: &AppHandle, other: u32) -> tauri::Result<()> {
+    let created = with(app, |s| s.active.is_some_and(|active| s.create_split(active, other)));
+    if created {
+        refresh_active(app)?;
+    }
+    Ok(())
+}
+
+/// Open a terminal beside the active web page (⌥⌘\).
+pub fn split_with_new_terminal(app: &AppHandle) -> tauri::Result<()> {
+    let Some(active) = with(app, |s| s.active.filter(|&a| s.tab(a).is_some_and(|t| t.kind == TabKind::Web))) else {
+        // Nothing to split, or a terminal (one per split): a plain terminal.
+        return open_terminal(app).map(|_| ());
+    };
+    let id = with(app, |s| {
+        let id = s.add_tab(TabKind::Terminal, String::new(), "Terminal".into());
+        s.create_split(active, id);
+        id
+    });
+    // The terminal gets the focus, so you can type right away.
+    activate(app, id)
+}
+
+/// End the split a tab is in; the tab that was focused stays on screen.
+pub fn end_split(app: &AppHandle, tab: u32) -> tauri::Result<()> {
+    if with(app, |s| s.remove_split(tab)).is_some() {
+        refresh_active(app)?;
+    }
+    Ok(())
+}
+
+/// Called (on the main thread) when keyboard focus moves into a content
+/// view: clicking into the other pane of a split makes its tab active.
+pub fn on_view_focused(app: &AppHandle, tab: Option<u32>, terminal: bool) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let switched = with(&app, |s| {
+            let active = s.active?;
+            let split = s.split_of(active)?.clone();
+            let partner = split.partner(active)?;
+            let target = if terminal {
+                [split.left, split.right].into_iter().find(|&t| s.tab(t).is_some_and(|t| t.kind == TabKind::Terminal))
+            } else {
+                tab
+            };
+            (target == Some(partner)).then(|| s.focus(partner))
+        });
+        if switched.is_some() {
+            emit_state(&app);
+        }
+    });
 }
 
 /// Activate the tab `delta` positions away in the sidebar, wrapping.
@@ -1151,6 +1335,27 @@ pub async fn go_forward(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn reload(app: AppHandle) -> Result<(), String> {
     reload_active(&app).map_err(err)
+}
+
+/// Show a tab beside the active one.
+#[tauri::command]
+pub async fn split_view(app: AppHandle, id: u32) -> Result<(), String> {
+    split_with(&app, id).map_err(err)
+}
+
+/// Called continuously while the user drags the divider between the panes.
+/// Returns the ratio after Rust clamps it.
+#[tauri::command]
+pub async fn set_split_ratio(app: AppHandle, ratio: f64) -> Result<Option<f64>, String> {
+    let Some(applied) = with(&app, |s| {
+        let active = s.active?;
+        s.set_split_ratio(active, ratio)
+    }) else {
+        return Ok(None);
+    };
+    layout_tabs(&app).map_err(err)?;
+    emit_state(&app);
+    Ok(Some(applied))
 }
 
 /// Called continuously while the user drags the sidebar edge.

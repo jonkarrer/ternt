@@ -25,7 +25,7 @@ const home: Space = { id: 1, name: "Home", color: "blue", profile: null, icon: n
 const work: Space = { id: 2, name: "Work", color: "green", profile: "abc", icon: null };
 
 function ctx(over: Partial<Context> = {}): Context {
-  return { mode: "newTab", tabs: [], spaces: [home, work], activeId: null, activeSpace: 1, history: [], closed: [], ...over };
+  return { mode: "newTab", tabs: [], spaces: [home, work], activeId: null, activeSpace: 1, history: [], closed: [], splits: [], ...over };
 }
 
 const labels = (items: Item[]) => items.map((i) => i.label);
@@ -252,5 +252,16 @@ describe("recently closed", () => {
   test("other spaces' closed tabs say where they were", () => {
     const closed = [closedTab("Jira", "https://jira.com", { space: 2 })];
     expect(buildItems("", ctx({ closed })).find((i) => i.kind === "closed")?.detail).toBe("Closed · Work");
+  });
+});
+
+describe("split view commands", () => {
+  test("Close Split View only when the active tab is in a split", () => {
+    const a = tab("A", "https://a.com");
+    const b = tab("B", "https://b.com");
+    const has = (over: Partial<Context>) => labels(buildItems("split", ctx({ tabs: [a, b], activeId: a.id, ...over })));
+    expect(has({})).not.toContain("Close Split View");
+    expect(has({ splits: [{ left: a.id, right: b.id, ratio: 0.5 }] })).toContain("Close Split View");
+    expect(has({})).toContain("Split View with New Terminal");
   });
 });

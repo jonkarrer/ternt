@@ -166,7 +166,10 @@ function reconcile(state: BrowserState) {
   const ids = new Set(state.tabs.filter((t) => t.kind === "terminal").map((t) => t.id));
   for (const s of [...sessions.values()]) if (!ids.has(s.id)) dispose(s);
   for (const id of ids) if (!sessions.has(id)) create(id);
-  const next = state.active != null ? sessions.get(state.active) : undefined;
+  // The active tab, or its split partner when that's the terminal on screen.
+  const split = state.splits.find((s) => s.left === state.active || s.right === state.active);
+  const onScreen = split ? [state.active, split.left === state.active ? split.right : split.left] : [state.active];
+  const next = onScreen.map((id) => (id != null ? sessions.get(id) : undefined)).find((s) => s);
   if (next) show(next);
 }
 

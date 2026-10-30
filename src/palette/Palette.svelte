@@ -2,7 +2,7 @@
   import { onMount, tick } from "svelte";
   import Favicon from "../lib/Favicon.svelte";
   import TabIcon from "../lib/TabIcon.svelte";
-  import { browser, type ClosedTab, type HistoryHit, type PaletteRequest, type Space, type Tab } from "../lib/browser";
+  import { browser, type ClosedTab, type HistoryHit, type Split, type PaletteRequest, type Space, type Tab } from "../lib/browser";
   import { buildItems, type Action, type Item } from "./rank";
 
   let request = $state<PaletteRequest | null>(null);
@@ -13,6 +13,7 @@
   let activeId = $state<number | null>(null);
   let activeSpace = $state(0);
   let closed = $state<ClosedTab[]>([]);
+  let splits = $state<Split[]>([]);
   let input = $state<HTMLInputElement>();
   let list = $state<HTMLElement>();
 
@@ -22,7 +23,7 @@
   let historySeq = 0;
 
   const items = $derived(
-    request ? buildItems(query, { mode: request.mode, tabs, spaces, activeId, activeSpace, history, closed }) : [],
+    request ? buildItems(query, { mode: request.mode, tabs, spaces, activeId, activeSpace, history, closed, splits }) : [],
   );
 
   $effect(() => {
@@ -59,6 +60,7 @@
     activeId = state.active;
     activeSpace = state.activeSpace;
     closed = state.closed;
+    splits = state.splits;
   }
 
   function close() {

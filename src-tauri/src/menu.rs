@@ -80,6 +80,8 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         true,
         &[
             &MenuItem::with_id(app, "toggle-sidebar", "Toggle Sidebar", true, Some("CmdOrCtrl+S"))?,
+            &MenuItem::with_id(app, "split-terminal", "Split View with New Terminal", true, Some("CmdOrCtrl+Alt+Backslash"))?,
+            &MenuItem::with_id(app, "unsplit", "Close Split View", true, None::<&str>)?,
             &MenuItem::with_id(app, "explore", "Explore Tabs", true, Some("CmdOrCtrl+F"))?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "reload", "Reload Page", true, Some("CmdOrCtrl+R"))?,
@@ -162,6 +164,11 @@ pub fn run_action(app: &AppHandle, id: String) {
                 Ok(())
             }
             "toggle-sidebar" => browser::toggle_sidebar(&app),
+            "split-terminal" => browser::split_with_new_terminal(&app),
+            "unsplit" => match browser::active_tab(&app) {
+                Some(id) => browser::end_split(&app, id),
+                None => Ok(()),
+            },
             "welcome" => welcome::open(&app),
             "explore" => browser::toggle_explore(&app),
             "next-tab" => browser::cycle_tab(&app, 1),
@@ -245,6 +252,15 @@ pub async fn tab_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
             menu.append(&item(&app, format!("ctx-copy-link:{id}"), "Copy Link")?)?;
             menu.append(&PredefinedMenuItem::separator(&app)?)?;
         }
+        if info.can_split {
+            menu.append(&item(&app, format!("ctx-split:{id}"), "Open in Split View")?)?;
+        }
+        if info.split {
+            menu.append(&item(&app, format!("ctx-unsplit:{id}"), "Close Split View")?)?;
+        }
+        if info.can_split || info.split {
+            menu.append(&PredefinedMenuItem::separator(&app)?)?;
+        }
         let close_label = if info.zone == Zone::Today { "Close Tab" } else { "Unload Tab" };
         menu.append(&item(&app, format!("ctx-close:{id}"), close_label)?)?;
         Ok(menu)
@@ -322,6 +338,8 @@ fn run_context_action(app: &AppHandle, id: &str) -> tauri::Result<()> {
             }
         }
         "ctx-duplicate" => browser::duplicate_tab(app, target)?,
+        "ctx-split" => browser::split_with(app, target)?,
+        "ctx-unsplit" => browser::end_split(app, target)?,
         #[cfg(target_os = "macos")]
         "ctx-copy-link" => {
             if let Some(info) = browser::tab_menu_info(app, target) {

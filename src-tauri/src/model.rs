@@ -126,6 +126,37 @@ pub struct ProfileGroup {
     pub spaces: Vec<u32>,
 }
 
+/// Two tabs shown side by side, in the same space (usually `right` right
+/// below `left` in the sidebar). At most one is a terminal: terminals share
+/// one webview.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Split {
+    pub left: u32,
+    pub right: u32,
+    /// The left pane's share of the width.
+    pub ratio: f64,
+}
+
+pub const MIN_SPLIT_RATIO: f64 = 0.2;
+pub const MAX_SPLIT_RATIO: f64 = 0.8;
+
+impl Split {
+    pub fn has(&self, tab: u32) -> bool {
+        self.left == tab || self.right == tab
+    }
+
+    pub fn partner(&self, tab: u32) -> Option<u32> {
+        if self.left == tab {
+            Some(self.right)
+        } else if self.right == tab {
+            Some(self.left)
+        } else {
+            None
+        }
+    }
+}
+
 /// A closed Today tab, kept for "reopen" (⇧⌘T, the command bar).
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -148,6 +179,7 @@ pub struct Snapshot {
     profiles: Vec<ProfileGroup>,
     /// Oldest first.
     closed: Vec<ClosedTab>,
+    splits: Vec<Split>,
     active: Option<u32>,
     active_space: u32,
     sidebar_width: f64,
@@ -160,6 +192,7 @@ pub struct State {
     pub folders: Vec<Folder>,
     /// Names given to separate profiles, by profile id.
     pub profile_names: HashMap<String, String>,
+    pub splits: Vec<Split>,
     pub active: Option<u32>,
     pub active_space: u32,
     /// The tab last shown in each space, restored when switching back.
@@ -186,6 +219,7 @@ impl Default for State {
             }],
             folders: Vec::new(),
             profile_names: HashMap::new(),
+            splits: Vec::new(),
             active: None,
             active_space: 1,
             last_active: HashMap::new(),
@@ -207,6 +241,7 @@ impl State {
             folders: self.folders.clone(),
             profiles: self.profile_groups(),
             closed: self.closed.clone(),
+            splits: self.splits.clone(),
             active: self.active,
             active_space: self.active_space,
             sidebar_width: self.sidebar_width,
@@ -320,6 +355,7 @@ impl State {
             None => members.last().map_or(self.tabs.len(), |&i| i + 1),
         };
         self.tabs.insert(at, tab);
+        self.prune_splits();
         before != (zone, space, folder, at)
     }
 
@@ -368,6 +404,7 @@ impl State {
             return Some(self.tabs[index].clone());
         }
         let tab = self.tabs.remove(index);
+        self.prune_splits();
         self.closed.push(ClosedTab {
             id: self.next_closed_id,
             kind: tab.kind,
@@ -394,6 +431,96 @@ impl State {
             self.active_space = closed.space;
         }
         Some(closed)
+    }
+
+    // --- Split view -------------------------------------------------------
+
+    pub fn split_of(&self, tab: u32) -> Option<&Split> {
+        self.splits.iter().find(|s| s.has(tab))
+    }
+
+    /// The tab shown beside `tab`, if it's in a split.
+    pub fn split_partner(&self, tab: u32) -> Option<u32> {
+        self.split_of(tab)?.partner(tab)
+    }
+
+    /// The tabs on screen with `tab`: itself, plus its split partner.
+    pub fn shown_with(&self, tab: u32) -> Vec<u32> {
+        match self.split_of(tab) {
+            Some(split) => vec![split.left, split.right],
+            None => vec![tab],
+        }
+    }
+
+    /// Show `right` beside `left`; either leaves any split it was in.
+    /// `right` moves right below `left` in the sidebar when it can (a
+    /// terminal can't follow a pinned tab: terminals only live in Today).
+    /// Refused for favorites (they belong to every space of a profile),
+    /// tabs in different spaces, and two terminals.
+    pub fn create_split(&mut self, left: u32, right: u32) -> bool {
+        if !self.can_split(left, right) {
+            return false;
+        }
+        let (Some(l), Some(r)) = (self.tab(left), self.tab(right)) else {
+            return false;
+        };
+        let (zone, folder, space) = (l.zone, l.folder, l.space);
+        let follows = r.kind == TabKind::Web || zone == Zone::Today;
+        self.splits.retain(|s| !s.has(left) && !s.has(right));
+        if follows {
+            // `move_tab` counts positions without the moved tab.
+            let index = self
+                .tabs
+                .iter()
+                .filter(|t| t.id != right && self.in_group(t, zone, space, folder))
+                .position(|t| t.id == left)
+                .map_or(0, |i| i + 1);
+            let active = std::mem::replace(&mut self.active_space, space);
+            self.move_tab(right, zone, folder, index);
+            self.active_space = active;
+        }
+        self.splits.push(Split { left, right, ratio: 0.5 });
+        true
+    }
+
+    /// Whether two tabs can be shown side by side (see `create_split`).
+    pub fn can_split(&self, left: u32, right: u32) -> bool {
+        let (Some(l), Some(r)) = (self.tab(left), self.tab(right)) else {
+            return false;
+        };
+        left != right
+            && l.space == r.space
+            && l.zone != Zone::Favorite
+            && r.zone != Zone::Favorite
+            && !(l.kind == TabKind::Terminal && r.kind == TabKind::Terminal)
+    }
+
+    /// End the split `tab` is in. Returns it.
+    pub fn remove_split(&mut self, tab: u32) -> Option<Split> {
+        let index = self.splits.iter().position(|s| s.has(tab))?;
+        Some(self.splits.remove(index))
+    }
+
+    /// Set the left pane's share of the split `tab` is in (clamped).
+    /// Returns the ratio applied.
+    pub fn set_split_ratio(&mut self, tab: u32, ratio: f64) -> Option<f64> {
+        let split = self.splits.iter_mut().find(|s| s.has(tab))?;
+        split.ratio = ratio.clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
+        Some(split.ratio)
+    }
+
+    /// Drop splits whose tabs are gone or can't be shown together any more
+    /// (one was closed, moved to another space, or became a favorite).
+    fn prune_splits(&mut self) {
+        let together = |s: &State, split: &Split| {
+            let (Some(l), Some(r)) = (s.tab(split.left), s.tab(split.right)) else {
+                return false;
+            };
+            l.space == r.space && l.zone != Zone::Favorite && r.zone != Zone::Favorite
+        };
+        let keep: Vec<bool> = self.splits.iter().map(|split| together(self, split)).collect();
+        let mut keep = keep.into_iter();
+        self.splits.retain(|_| keep.next().unwrap_or(false));
     }
 
     // --- Spaces ----------------------------------------------------------
@@ -471,6 +598,7 @@ impl State {
             })
             .partition(|t| t.space == id);
         self.tabs = kept;
+        self.prune_splits();
         self.folders.retain(|f| f.space != id);
         self.last_active.remove(&id);
         self.closed.retain(|c| c.space != id);
@@ -618,6 +746,18 @@ impl State {
                 id
             })
             .collect();
+        state.splits = saved
+            .splits
+            .into_iter()
+            .filter_map(|(left, right, ratio)| {
+                Some(Split {
+                    left: *ids.get(left)?,
+                    right: *ids.get(right)?,
+                    ratio: ratio.clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO),
+                })
+            })
+            .collect();
+        state.prune_splits();
         for (space, index) in saved.last_active {
             if let Some(&id) = ids.get(index) {
                 state.last_active.insert(space, id);
@@ -654,6 +794,11 @@ impl State {
                 .map(|(id, name)| (id.clone(), name.clone()))
                 .collect(),
             active_space: Some(self.active_space),
+            splits: self
+                .splits
+                .iter()
+                .filter_map(|s| Some((index(s.left)?, index(s.right)?, s.ratio)))
+                .collect(),
             last_active: self
                 .last_active
                 .iter()
@@ -699,6 +844,9 @@ pub struct Saved {
     /// `(space id, index into tabs)`.
     #[serde(default)]
     pub last_active: Vec<(u32, usize)>,
+    /// `(left, right, ratio)`, indexes into `tabs`.
+    #[serde(default)]
+    pub splits: Vec<(usize, usize, f64)>,
     pub sidebar_width: f64,
     pub sidebar_collapsed: bool,
 }
@@ -1031,6 +1179,93 @@ mod tests {
         s.focus(fav);
         assert_eq!(s.active_space, other);
         assert_eq!(s.last_active.get(&other), Some(&fav));
+    }
+
+    fn term(state: &mut State) -> u32 {
+        state.add_tab(TabKind::Terminal, String::new(), "Terminal".into())
+    }
+
+    #[test]
+    fn split_puts_the_second_tab_below_the_first() {
+        let mut s = State::default();
+        let a = web(&mut s, "a");
+        let b = web(&mut s, "b");
+        let c = web(&mut s, "c"); // Today: c, b, a
+        assert!(s.create_split(c, a));
+        assert_eq!(titles(&s, &s.visible_order(1)), ["c", "a", "b"]);
+        assert_eq!(s.split_partner(a), Some(c));
+        assert_eq!(s.shown_with(c), [c, a]);
+        assert_eq!(s.shown_with(b), [b]);
+
+        // A tab is in one split at a time: splitting it again ends the old one.
+        assert!(s.create_split(b, a));
+        assert_eq!(s.splits.len(), 1);
+        assert_eq!(s.split_partner(c), None);
+        assert_eq!(s.split_partner(b), Some(a));
+    }
+
+    #[test]
+    fn split_rules() {
+        let mut s = State::default();
+        let a = web(&mut s, "a");
+        let t1 = term(&mut s);
+        let t2 = term(&mut s);
+        assert!(!s.create_split(a, a), "not with itself");
+        assert!(!s.create_split(t1, t2), "two terminals share one view");
+        let fav = web(&mut s, "fav");
+        s.move_tab(fav, Zone::Favorite, None, 0);
+        assert!(!s.create_split(a, fav), "favorites belong to every space");
+        let work = s.add_space(None);
+        s.switch_space(work);
+        let w = web(&mut s, "w");
+        assert!(!s.create_split(a, w), "same space only");
+
+        // A pinned page and a terminal: the terminal stays in Today.
+        s.switch_space(1);
+        s.move_tab(a, Zone::Pinned, None, 0);
+        assert!(s.create_split(a, t1));
+        assert_eq!(s.tab(t1).unwrap().zone, Zone::Today);
+        assert_eq!(s.split_partner(t1), Some(a));
+    }
+
+    #[test]
+    fn splits_end_when_a_tab_closes_leaves_or_becomes_a_favorite() {
+        let mut s = State::default();
+        let a = web(&mut s, "a");
+        let b = web(&mut s, "b");
+        s.create_split(a, b);
+        s.remove_tab(b);
+        assert!(s.splits.is_empty(), "closed");
+
+        let c = web(&mut s, "c");
+        s.create_split(a, c);
+        s.move_tab(c, Zone::Favorite, None, 0);
+        assert!(s.splits.is_empty(), "favorite");
+
+        let d = web(&mut s, "d");
+        s.create_split(a, d);
+        s.move_tab(d, Zone::Pinned, None, 0);
+        assert_eq!(s.split_partner(a), Some(d), "pinning one keeps the split");
+        assert_eq!(s.remove_split(a).map(|x| x.right), Some(d));
+        assert!(s.splits.is_empty());
+    }
+
+    #[test]
+    fn split_ratio_is_clamped_and_splits_are_saved() {
+        let mut s = State::default();
+        let a = web(&mut s, "a");
+        let b = web(&mut s, "b");
+        s.create_split(a, b);
+        assert_eq!(s.set_split_ratio(b, 0.05), Some(MIN_SPLIT_RATIO));
+        assert_eq!(s.set_split_ratio(a, 0.7), Some(0.7));
+        assert_eq!(s.set_split_ratio(999, 0.5), None);
+
+        let r = State::restore(serde_json::from_str(&serde_json::to_string(&s.save()).unwrap()).unwrap());
+        let split = &r.splits[0];
+        assert_eq!(
+            (r.tab(split.left).unwrap().title.as_str(), r.tab(split.right).unwrap().title.as_str(), split.ratio),
+            ("a", "b", 0.7)
+        );
     }
 
     #[test]

@@ -86,6 +86,8 @@ pub fn run() {
             browser::space_profile,
             browser::space_icon,
             browser::rename_profile,
+            browser::split_view,
+            browser::set_split_ratio,
             browser::reopen_closed,
             browser::clear_profile_history,
             browser::create_folder,
@@ -139,6 +141,10 @@ pub fn run() {
             debug::debug_clipboard,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_focused,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_view,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_focus,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

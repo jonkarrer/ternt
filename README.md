@@ -46,6 +46,7 @@ them run under `doppler run --`.
 | ⌘S | Toggle sidebar |
 | ⌘F | Explore tabs: j/k or ↑/↓ move, h/l or ←/→ switch space, Space peeks, Enter opens, Esc goes back |
 | ⌃1–⌃9, ⌘⌥← / ⌘⌥→ | Switch spaces (or swipe two fingers across the sidebar) |
+| ⌥⌘\ | Split view: a new terminal beside the current page |
 | ⌘, | Settings (⌘1–⌘6 switch its pages, ⌘W closes it) |
 
 ## Sidebar
@@ -56,6 +57,12 @@ Arc-style, top to bottom:
 - **Pinned**: per space, optionally grouped in folders.
 - **Today**: per space, newest first, below a divider. Hover the divider for *Clear*, which
   closes the space's Today web tabs (terminals stay; ⇧⌘T reopens).
+
+**Split view**: right-click a tab → *Open in Split View* shows it beside the current tab
+(⌥⌘\ opens a terminal beside the page). Click into a pane to make it the active tab; drag the gap
+between them to resize (double-click: back to half and half). *Close Split View* (tab menu, View
+menu or command bar) ends it; closing either tab gives the other the whole area. A split holds two
+pages or a page and a terminal, in the same space.
 
 **Spaces**: hover the space name for **…** (rename, icon, color, profile, delete; also a
 right-click on the name or on a space in the switcher). *Change Icon…* picks an emoji, or type any

@@ -173,3 +173,45 @@ pub async fn debug_focused(app: AppHandle) -> Option<String> {
         .ok()?;
     rx.recv().ok().flatten()
 }
+
+/// A webview's frame (logical px, window coordinates) and whether it's
+/// hidden, to check split view layouts.
+#[derive(serde::Serialize)]
+pub struct ViewFrame {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    hidden: bool,
+}
+
+#[tauri::command]
+pub async fn debug_view(app: AppHandle, label: String) -> Result<ViewFrame, String> {
+    let webview = app.get_webview(&label).ok_or_else(|| format!("no webview {label}"))?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    webview
+        .with_webview(move |p| unsafe {
+            let view = &*(p.inner() as *const objc2::runtime::AnyObject);
+            let hidden: bool = objc2::msg_send![view, isHidden];
+            let frame: objc2_foundation::NSRect = objc2::msg_send![view, frame];
+            let _ = tx.send((frame, hidden));
+        })
+        .map_err(|e| e.to_string())?;
+    let (frame, hidden) = rx.recv().map_err(|e| e.to_string())?;
+    Ok(ViewFrame {
+        x: frame.origin.x,
+        y: frame.origin.y,
+        width: frame.size.width,
+        height: frame.size.height,
+        hidden,
+    })
+}
+
+/// Give a webview the keyboard, as a click into it would.
+#[tauri::command]
+pub async fn debug_focus(app: AppHandle, label: String) -> Result<(), String> {
+    app.get_webview(&label)
+        .ok_or_else(|| format!("no webview {label}"))?
+        .set_focus()
+        .map_err(|e| e.to_string())
+}

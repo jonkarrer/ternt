@@ -16,7 +16,7 @@ use objc2_foundation::{
 };
 use tauri::{AppHandle, Manager, Webview};
 
-use crate::browser::{self, NativeState};
+use crate::browser::{self, NativeState, Pane};
 
 /// Pin the view's margins to its superview so AppKit resizes it in the same
 /// frame as the window. This avoids an event-loop/IPC hop per frame during
@@ -73,6 +73,21 @@ fn pin_to_superview(view: &NSView) {
     view.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );
+}
+
+/// How a content view resizes with the window: the full content area pins
+/// all four edges; a split pane also lets its outer margin grow, so the two
+/// panes share a resize roughly evenly until `browser` lays them out exactly.
+pub fn set_pane(webview: &Webview, pane: Pane) {
+    let _ = webview.with_webview(move |platform| unsafe {
+        let sizable = NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable;
+        let mask = match pane {
+            Pane::Full => sizable,
+            Pane::Left => sizable | NSAutoresizingMaskOptions::ViewMaxXMargin,
+            Pane::Right => sizable | NSAutoresizingMaskOptions::ViewMinXMargin,
+        };
+        view(platform.inner()).setAutoresizingMask(mask);
+    });
 }
 
 // --- Navigation state via key-value observing ---------------------------
@@ -162,6 +177,95 @@ pub fn unobserve(webview: &Webview, tab: u32) {
         for key in OBSERVED_KEYS {
             view.removeObserver_forKeyPath(&observer, &NSString::from_str(key));
         }
+    });
+}
+
+// --- Focus between split panes ---------------------------------------------
+//
+// The window's first responder is key-value observable: when it moves into
+// a content view (a click into the other pane of a split), tell `browser`
+// which tab that view shows.
+
+struct FocusIvars {
+    app: AppHandle,
+}
+
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements and we don't impl Drop.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "TerntFocusObserver"]
+    #[ivars = FocusIvars]
+    struct FocusObserver;
+
+    impl FocusObserver {
+        #[unsafe(method(observeValueForKeyPath:ofObject:change:context:))]
+        fn observe(
+            &self,
+            _key_path: Option<&NSString>,
+            object: Option<&AnyObject>,
+            _change: Option<&AnyObject>,
+            _context: *mut c_void,
+        ) {
+            let Some(window) = object else { return };
+            let responder: *mut AnyObject = unsafe { msg_send![window, firstResponder] };
+            let Some(responder) = (unsafe { responder.as_ref() }) else { return };
+            let is_view: bool = unsafe { msg_send![responder, isKindOfClass: objc2::class!(NSView)] };
+            if !is_view {
+                return;
+            }
+            // Walk up from the focused view (WebKit focuses an inner view) to
+            // a content webview.
+            let mut current: Option<Retained<NSView>> =
+                Some(unsafe { &*(responder as *const AnyObject as *const NSView) }.retain());
+            while let Some(view) = current {
+                let ptr = Retained::as_ptr(&view) as usize;
+                if TERM_VIEW.get() == Some(ptr) {
+                    browser::on_view_focused(&self.ivars().app, None, true);
+                    return;
+                }
+                let tab = OBSERVERS.with_borrow(|map| {
+                    map.iter().find(|(_, (_, v))| Retained::as_ptr(v) as usize == ptr).map(|(tab, _)| *tab)
+                });
+                if let Some(tab) = tab {
+                    browser::on_view_focused(&self.ivars().app, Some(tab), false);
+                    return;
+                }
+                current = unsafe { view.superview() };
+            }
+        }
+    }
+);
+
+thread_local! {
+    static FOCUS_OBSERVER: RefCell<Option<Retained<FocusObserver>>> = const { RefCell::new(None) };
+    /// The shared terminal webview's view, once created.
+    static TERM_VIEW: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Start reporting focus moves between content views in `window`.
+pub fn watch_focus(window: &tauri::Window, app: AppHandle) {
+    let Ok(ns_window) = window.ns_window() else { return };
+    let ns_window = ns_window as usize; // raw pointers aren't Send
+    let _ = window.run_on_main_thread(move || unsafe {
+        let mtm = MainThreadMarker::new().expect("run_on_main_thread runs on the main thread");
+        let window = &*(ns_window as *const NSObject);
+        let observer: Retained<FocusObserver> =
+            msg_send![super(FocusObserver::alloc(mtm).set_ivars(FocusIvars { app })), init];
+        window.addObserver_forKeyPath_options_context(
+            &observer,
+            &NSString::from_str("firstResponder"),
+            NSKeyValueObservingOptions::empty(),
+            ptr::null_mut(),
+        );
+        FOCUS_OBSERVER.set(Some(observer));
+    });
+}
+
+/// Remember the shared terminal view, so focus in it maps to its tab.
+pub fn register_terminal_view(webview: &Webview) {
+    let _ = webview.with_webview(|platform| {
+        TERM_VIEW.set(Some(platform.inner() as usize));
     });
 }
 
