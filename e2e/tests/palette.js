@@ -77,6 +77,24 @@ const ran = S().active;
 await t.until(async () => (await t.read("term", `window.__termText(${ran})`)).includes("ternt-42"), "the command ran");
 await t.invoke("close_tab", { id: ran });
 
+// Closed tabs come back from the command bar (Recently Closed)
+// (Only this tab: other copies of page 2 would hide the closed one.)
+for (const x of S().tabs.filter((x) => x.url.endsWith("/page2.html"))) await t.invoke("close_tab", { id: x.id });
+const page2 = await t.invoke("new_tab", { url: `http://${F}/page2.html` });
+await t.until(() => tab()?.title === "Fixture Page 2" && !tab().loading, "page 2 open");
+await t.invoke("close_tab", { id: page2 });
+await t.until(() => !S().tabs.some((x) => x.id === page2), "page 2 closed");
+const closedId = S().closed.at(-1).id;
+await openPalette("new-tab");
+await t.until(async () => (await t.palette.rows()).includes("Recently Closed"), "Recently Closed offered before typing");
+await type("fixture page 2");
+await t.until(async () => (await t.palette.rows())[0] === "Fixture Page 2", "the closed tab is the top match");
+await t.shot("palette-closed");
+await key("Enter");
+await t.until(() => tab()?.url === `http://${F}/page2.html`, "Enter reopens it");
+await t.assert(!S().closed.some((c) => c.id === closedId), "no longer listed as closed");
+await t.invoke("close_tab", { id: S().active });
+
 // The bar centers over the content pane, with or without the sidebar
 const centered = async (label) => {
   const r = JSON.parse(

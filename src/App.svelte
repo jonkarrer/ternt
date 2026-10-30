@@ -33,6 +33,7 @@
     spaces: [],
     folders: [],
     profiles: [],
+    closed: [],
     active: null,
     activeSpace: 0,
     sidebarWidth: DEFAULT_SIDEBAR_WIDTH,

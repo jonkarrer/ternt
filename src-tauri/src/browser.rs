@@ -32,7 +32,7 @@ use tauri::{
 
 pub use crate::model::{TabKind, Zone};
 use crate::{
-    model::{ClosedTab, SPACE_COLORS, Saved, Snapshot, State},
+    model::{SPACE_COLORS, Saved, Snapshot, State},
     session,
 };
 
@@ -636,24 +636,18 @@ pub fn clear_today(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Reopen the most recently closed tab, in the space it was closed from.
-pub fn reopen_closed_tab(app: &AppHandle) -> tauri::Result<()> {
-    let Some(closed) = with(app, |s| {
-        let closed = s.closed.pop()?;
-        let (ClosedTab::Web { space, .. } | ClosedTab::Terminal { space }) = &closed;
-        if s.space(*space).is_some() {
-            s.active_space = *space;
-        }
-        Some(closed)
-    }) else {
+/// Reopen a closed tab (`None`: the most recent one), in the space it was
+/// closed from.
+pub fn reopen_closed_tab(app: &AppHandle, id: Option<u32>) -> tauri::Result<()> {
+    let Some(closed) = with(app, |s| s.take_closed(id)) else {
         return Ok(());
     };
-    match closed {
-        ClosedTab::Web { url, .. } => match Url::parse(&url) {
+    match closed.kind {
+        TabKind::Web => match Url::parse(&closed.url) {
             Ok(url) => open_tab(app, url).map(|_| ()),
             Err(_) => Ok(()),
         },
-        ClosedTab::Terminal { .. } => open_terminal(app).map(|_| ()),
+        TabKind::Terminal => open_terminal(app).map(|_| ()),
     }
 }
 
@@ -1179,6 +1173,12 @@ pub async fn space_color(app: AppHandle, id: u32, color: String) {
 pub async fn space_profile(app: AppHandle, id: u32, profile: String) -> Result<(), String> {
     let choice = ProfileChoice::parse(&profile).ok_or("invalid profile choice")?;
     set_space_profile(&app, id, choice).map_err(err)
+}
+
+/// Reopen one closed tab (the command bar's Recently Closed).
+#[tauri::command]
+pub async fn reopen_closed(app: AppHandle, id: u32) -> Result<(), String> {
+    reopen_closed_tab(&app, Some(id)).map_err(err)
 }
 
 /// Name a separate profile (Settings → Profiles); empty goes back to the

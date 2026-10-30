@@ -119,9 +119,16 @@ pub struct ProfileGroup {
     pub spaces: Vec<u32>,
 }
 
-pub enum ClosedTab {
-    Web { url: String, space: u32 },
-    Terminal { space: u32 },
+/// A closed Today tab, kept for "reopen" (⇧⌘T, the command bar).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClosedTab {
+    /// Its own sequence (tab ids are reused by the reopened tab).
+    pub id: u32,
+    pub kind: TabKind,
+    pub url: String,
+    pub title: String,
+    pub space: u32,
 }
 
 #[derive(Clone, Serialize)]
@@ -132,6 +139,8 @@ pub struct Snapshot {
     folders: Vec<Folder>,
     /// The main profile first, then each separate one in space order.
     profiles: Vec<ProfileGroup>,
+    /// Oldest first.
+    closed: Vec<ClosedTab>,
     active: Option<u32>,
     active_space: u32,
     sidebar_width: f64,
@@ -152,6 +161,7 @@ pub struct State {
     pub sidebar_collapsed: bool,
     pub closed: Vec<ClosedTab>,
     next_tab_id: u32,
+    next_closed_id: u32,
     /// Spaces and folders share one id sequence.
     next_group_id: u32,
 }
@@ -175,6 +185,7 @@ impl Default for State {
             sidebar_collapsed: false,
             closed: Vec::new(),
             next_tab_id: 1,
+            next_closed_id: 1,
             next_group_id: 2,
         }
     }
@@ -187,6 +198,7 @@ impl State {
             spaces: self.spaces.clone(),
             folders: self.folders.clone(),
             profiles: self.profile_groups(),
+            closed: self.closed.clone(),
             active: self.active,
             active_space: self.active_space,
             sidebar_width: self.sidebar_width,
@@ -348,17 +360,32 @@ impl State {
             return Some(self.tabs[index].clone());
         }
         let tab = self.tabs.remove(index);
-        self.closed.push(match tab.kind {
-            TabKind::Web => ClosedTab::Web {
-                url: tab.url.clone(),
-                space: tab.space,
-            },
-            TabKind::Terminal => ClosedTab::Terminal { space: tab.space },
+        self.closed.push(ClosedTab {
+            id: self.next_closed_id,
+            kind: tab.kind,
+            url: tab.url.clone(),
+            title: tab.title.clone(),
+            space: tab.space,
         });
+        self.next_closed_id += 1;
         if self.closed.len() > MAX_CLOSED_TABS {
             self.closed.remove(0);
         }
         Some(tab)
+    }
+
+    /// Take a closed tab back out of the list (`None`: the most recent),
+    /// switching to the space it was closed from.
+    pub fn take_closed(&mut self, id: Option<u32>) -> Option<ClosedTab> {
+        let index = match id {
+            Some(id) => self.closed.iter().position(|c| c.id == id)?,
+            None => self.closed.len().checked_sub(1)?,
+        };
+        let closed = self.closed.remove(index);
+        if self.space(closed.space).is_some() {
+            self.active_space = closed.space;
+        }
+        Some(closed)
     }
 
     // --- Spaces ----------------------------------------------------------
@@ -421,9 +448,7 @@ impl State {
         self.tabs = kept;
         self.folders.retain(|f| f.space != id);
         self.last_active.remove(&id);
-        self.closed.retain(|c| match c {
-            ClosedTab::Web { space, .. } | ClosedTab::Terminal { space } => *space != id,
-        });
+        self.closed.retain(|c| c.space != id);
         Some((removed, space))
     }
 
@@ -810,7 +835,7 @@ mod tests {
         s.remove_tab(b);
         assert!(s.tab(a).is_some());
         assert!(s.tab(b).is_none());
-        assert!(matches!(s.closed.last(), Some(ClosedTab::Web { .. })));
+        assert_eq!(s.closed.last().map(|c| c.title.as_str()), Some("b"));
     }
 
     #[test]
@@ -967,6 +992,21 @@ mod tests {
     }
 
     #[test]
+    fn closed_tabs_reopen_by_id_or_most_recent_first() {
+        let mut s = State::default();
+        for name in ["a", "b", "c"] {
+            let id = web(&mut s, name);
+            s.remove_tab(id);
+        }
+        let b = s.closed.iter().find(|c| c.title == "b").unwrap().id;
+        assert_eq!(s.take_closed(Some(b)).unwrap().url, "https://b");
+        assert_eq!(s.take_closed(None).unwrap().title, "c");
+        assert_eq!(s.take_closed(Some(b)).map(|c| c.id), None, "taken once");
+        assert_eq!(s.take_closed(None).unwrap().title, "a");
+        assert!(s.take_closed(None).is_none());
+    }
+
+    #[test]
     fn closed_tabs_are_capped_and_forgotten_with_their_space() {
         let mut s = State::default();
         for i in 0..30 {
@@ -980,7 +1020,7 @@ mod tests {
         s.focus(w);
         s.remove_tab(w);
         s.remove_space(work);
-        assert!(s.closed.iter().all(|c| !matches!(c, ClosedTab::Web { space, .. } if *space == work)));
+        assert!(s.closed.iter().all(|c| c.space != work));
         assert!(!s.last_active.contains_key(&work));
     }
 

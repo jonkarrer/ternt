@@ -49,6 +49,15 @@ export interface Profile {
   spaces: number[];
 }
 
+/** A closed Today tab that can be reopened (newest last). */
+export interface ClosedTab {
+  id: number;
+  kind: "web" | "terminal";
+  url: string;
+  title: string;
+  space: number;
+}
+
 export interface BrowserState {
   /** Within each group (zone, space, folder), in sidebar order. */
   tabs: Tab[];
@@ -56,6 +65,8 @@ export interface BrowserState {
   folders: Folder[];
   /** The main profile first, then each separate one. */
   profiles: Profile[];
+  /** Oldest first. */
+  closed: ClosedTab[];
   active: number | null;
   activeSpace: number;
   sidebarWidth: number;
@@ -97,6 +108,8 @@ export const browser = {
   newTerminal: (command?: string) => invoke<number>("new_terminal", { command: command ?? null }),
   closeTab: (id: number) => invoke("close_tab", { id }),
   activateTab: (id: number) => invoke("activate_tab", { id }),
+  /** Reopen one closed tab, in the space it was closed from. */
+  reopenClosed: (id: number) => invoke("reopen_closed", { id }),
   /** `index` is the position in the full tab list after removing the tab. */
   moveTab: (id: number, zone: Zone, folder: number | null, index: number | null) =>
     invoke("move_tab", { id, zone, folder, index }),

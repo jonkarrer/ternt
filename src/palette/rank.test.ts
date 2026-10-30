@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import type { HistoryHit, Space, Tab } from "../lib/browser";
+import type { ClosedTab, HistoryHit, Space, Tab } from "../lib/browser";
 import { SEARCH_URL } from "../lib/url";
-import { buildItems, COMMANDS, score, SECTION_LIMIT, type Context, type Item } from "./rank";
+import { buildItems, CLOSED_SUGGESTIONS, COMMANDS, score, SECTION_LIMIT, type Context, type Item } from "./rank";
 
 let nextId = 1;
 function tab(title: string, url: string, extra: Partial<Tab> = {}): Tab {
@@ -25,7 +25,7 @@ const home: Space = { id: 1, name: "Home", color: "blue", profile: null };
 const work: Space = { id: 2, name: "Work", color: "green", profile: "abc" };
 
 function ctx(over: Partial<Context> = {}): Context {
-  return { mode: "newTab", tabs: [], spaces: [home, work], activeId: null, activeSpace: 1, history: [], ...over };
+  return { mode: "newTab", tabs: [], spaces: [home, work], activeId: null, activeSpace: 1, history: [], closed: [], ...over };
 }
 
 const labels = (items: Item[]) => items.map((i) => i.label);
@@ -200,5 +200,49 @@ describe("> runs in a terminal", () => {
 
   test("bare > opens a plain terminal", () => {
     expect(buildItems(">", ctx())[0].action).toEqual({ type: "terminal", command: "" });
+  });
+});
+
+let nextClosed = 1;
+function closedTab(title: string, url: string, extra: Partial<ClosedTab> = {}): ClosedTab {
+  return { id: nextClosed++, kind: "web", url, title, space: 1, ...extra };
+}
+
+describe("recently closed", () => {
+  test("offered newest first before anything is typed, a few of them", () => {
+    const closed = ["a", "b", "c", "d"].map((n) => closedTab(n.toUpperCase(), `https://${n}.com`));
+    const items = buildItems("", ctx({ closed })).filter((i) => i.section === "Recently Closed");
+    expect(labels(items)).toEqual(["D", "C", "B"].slice(0, CLOSED_SUGGESTIONS));
+    expect(items[0].action).toEqual({ type: "closed", id: closed[3].id });
+  });
+
+  test("matches by title or address, skipping terminals, open pages and repeats", () => {
+    const closed = [
+      closedTab("Rust docs", "https://doc.rust-lang.org"),
+      closedTab("Rust docs", "https://doc.rust-lang.org"),
+      closedTab("Terminal", "", { kind: "terminal" }),
+      closedTab("Rust blog", "https://blog.rust-lang.org"),
+    ];
+    const tabs = [tab("Blog", "https://blog.rust-lang.org")];
+    const items = buildItems("rust", ctx({ closed, tabs }));
+    const hits = items.filter((i) => i.kind === "closed");
+    expect(labels(hits)).toEqual(["Rust docs"]);
+    expect(hits[0].action).toEqual({ type: "closed", id: closed[1].id });
+  });
+
+  test("a closed tab named like the query is a top match; history doesn't repeat it", () => {
+    const closed = [closedTab("Linear", "https://linear.app")];
+    const history: HistoryHit[] = [
+      { url: "https://linear.app", title: "Linear" },
+      { url: "https://lineage.com", title: "Lineage" },
+    ];
+    const items = buildItems("linear", ctx({ closed, history }));
+    expect(items[0].kind).toBe("closed");
+    expect(items.filter((i) => i.url === "https://linear.app").length).toBe(1);
+  });
+
+  test("other spaces' closed tabs say where they were", () => {
+    const closed = [closedTab("Jira", "https://jira.com", { space: 2 })];
+    expect(buildItems("", ctx({ closed })).find((i) => i.kind === "closed")?.detail).toBe("Closed · Work");
   });
 });

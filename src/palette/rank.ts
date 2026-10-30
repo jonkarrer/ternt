@@ -1,15 +1,17 @@
 // Command bar results: what to offer for a query, in what order. Pure data
 // in, data out (no Tauri calls), so it's unit-tested in rank.test.ts; the
 // palette performs each item's `action`.
-import type { HistoryHit, PaletteMode, Space, Tab } from "../lib/browser";
+import type { ClosedTab, HistoryHit, PaletteMode, Space, Tab } from "../lib/browser";
 import { hostOf, parseInput } from "../lib/url";
 
 /** `top` holds the best matches, shown without a header. */
-export type Section = "top" | "Suggestions" | "Tabs" | "History" | "Commands" | "Spaces";
+export type Section = "top" | "Suggestions" | "Tabs" | "Recently Closed" | "History" | "Commands" | "Spaces";
 
 export type Action =
   | { type: "open"; url: string; newTab: boolean }
   | { type: "tab"; id: number }
+  /** Reopen a closed tab. */
+  | { type: "closed"; id: number }
   | { type: "space"; id: number }
   /** A menu action id (see src-tauri/src/menu.rs). */
   | { type: "menu"; id: string }
@@ -17,7 +19,7 @@ export type Action =
 
 export type Item = {
   key: string;
-  kind: "url" | "search" | "tab" | "history" | "command" | "space" | "run";
+  kind: "url" | "search" | "tab" | "closed" | "history" | "command" | "space" | "run";
   label: string;
   detail?: string;
   shortcut?: string;
@@ -68,6 +70,8 @@ export const COMMANDS: Command[] = [
 
 /** Per section, below the top matches. */
 export const SECTION_LIMIT = 5;
+/** Recently closed tabs offered before anything is typed. */
+export const CLOSED_SUGGESTIONS = 3;
 
 export interface Context {
   mode: PaletteMode;
@@ -77,6 +81,8 @@ export interface Context {
   activeSpace: number;
   /** Visited pages matching the query (from Rust). */
   history: HistoryHit[];
+  /** Closed tabs, oldest first. */
+  closed: ClosedTab[];
 }
 
 /** How well `text` matches the lowercase query `q`: 0 (no match) to 100. */
@@ -165,8 +171,24 @@ export function buildItems(raw: string, ctx: Context): Item[] {
     section,
     action: { type: "open", url: h.url, newTab },
   });
+  const closedItem = (c: ClosedTab, section: Section): Item => ({
+    key: `closed-${c.id}`,
+    kind: "closed",
+    label: c.title || hostOf(c.url),
+    detail: c.space === activeSpace ? `Closed · ${hostOf(c.url)}` : `Closed · ${spaceName(c.space)}`,
+    url: c.url,
+    section,
+    action: { type: "closed", id: c.id },
+  });
   const otherTabs = tabs.filter((t) => t.id !== activeId);
   const otherSpaces = spaces.filter((s) => s.id !== activeSpace);
+  // Closed web pages, newest first, once per address, unless open again.
+  const closed = [...ctx.closed]
+    .reverse()
+    .filter(
+      (c, i, all) =>
+        c.kind === "web" && !tabs.some((t) => t.url === c.url) && all.findIndex((x) => x.url === c.url) === i,
+    );
 
   // Nothing typed: what you can do, where you can go.
   if (!q) {
@@ -177,6 +199,7 @@ export function buildItems(raw: string, ctx: Context): Item[] {
         .sort((a, b) => Number(b.space === activeSpace) - Number(a.space === activeSpace))
         .slice(0, SECTION_LIMIT)
         .map((t) => tabItem(t, "Tabs")),
+      ...closed.slice(0, CLOSED_SUGGESTIONS).map((c) => closedItem(c, "Recently Closed")),
       ...otherSpaces.map((s) => spaceItem(s, "Spaces")),
     ];
   }
@@ -185,12 +208,15 @@ export function buildItems(raw: string, ctx: Context): Item[] {
   const commandHits = ranked(commands, (c) =>
     Math.max(score(c.label, lq), c.keywords && score(c.keywords, lq) >= 80 ? 50 : 0),
   );
+  // Stable sort: equally good matches stay newest first.
+  const closedHits = ranked(closed, (c) => Math.max(score(c.title, lq), c.url.toLowerCase().includes(lq) ? 40 : 0));
   const spaceHits = ranked(otherSpaces, (s) => Math.max(score(s.name, lq), score("space", lq) >= 80 ? 50 : 0));
   // History: pages not already open, still matching every typed word (the
   // hits may be from the previous keystroke).
   const historyHits = ctx.history.filter(
     (h) =>
       !tabs.some((t) => t.url === h.url) &&
+      !closedHits.some((c) => c.x.url === h.url) &&
       lq.split(/\s+/).every((w) => `${h.url} ${h.title}`.toLowerCase().includes(w)),
   );
 
@@ -211,6 +237,8 @@ export function buildItems(raw: string, ctx: Context): Item[] {
   if (open && parsed?.kind === "url") top.push(open);
   const bestTab = tabHits[0] && score(tabHits[0].x.title, lq) > 0 ? tabHits.shift()!.x : undefined;
   if (bestTab) top.push(tabItem(bestTab, "top"));
+  // Otherwise a closed tab whose title matches as well.
+  else if (closedHits[0] && score(closedHits[0].x.title, lq) >= 80) top.push(closedItem(closedHits.shift()!.x, "top"));
   if (parsed?.kind !== "url" && historyHits[0] && bare(historyHits[0].url).startsWith(lq)) {
     top.push(historyItem(historyHits.shift()!, "top"));
   }
@@ -221,6 +249,7 @@ export function buildItems(raw: string, ctx: Context): Item[] {
   return [
     ...top,
     ...tabHits.slice(0, SECTION_LIMIT).map((r) => tabItem(r.x, "Tabs")),
+    ...closedHits.slice(0, SECTION_LIMIT).map((r) => closedItem(r.x, "Recently Closed")),
     ...historyHits.slice(0, SECTION_LIMIT).map((h) => historyItem(h, "History")),
     ...commandHits.slice(0, SECTION_LIMIT).map((r) => commandItem(r.x, "Commands")),
     ...spaceHits.map((r) => spaceItem(r.x, "Spaces")),

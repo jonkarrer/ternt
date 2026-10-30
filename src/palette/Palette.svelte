@@ -2,7 +2,7 @@
   import { onMount, tick } from "svelte";
   import Favicon from "../lib/Favicon.svelte";
   import TabIcon from "../lib/TabIcon.svelte";
-  import { browser, type HistoryHit, type PaletteRequest, type Space, type Tab } from "../lib/browser";
+  import { browser, type ClosedTab, type HistoryHit, type PaletteRequest, type Space, type Tab } from "../lib/browser";
   import { buildItems, type Action, type Item } from "./rank";
 
   let request = $state<PaletteRequest | null>(null);
@@ -12,6 +12,7 @@
   let spaces = $state<Space[]>([]);
   let activeId = $state<number | null>(null);
   let activeSpace = $state(0);
+  let closed = $state<ClosedTab[]>([]);
   let input = $state<HTMLInputElement>();
   let list = $state<HTMLElement>();
 
@@ -21,7 +22,7 @@
   let historySeq = 0;
 
   const items = $derived(
-    request ? buildItems(query, { mode: request.mode, tabs, spaces, activeId, activeSpace, history }) : [],
+    request ? buildItems(query, { mode: request.mode, tabs, spaces, activeId, activeSpace, history, closed }) : [],
   );
 
   $effect(() => {
@@ -57,6 +58,7 @@
     spaces = state.spaces;
     activeId = state.active;
     activeSpace = state.activeSpace;
+    closed = state.closed;
   }
 
   function close() {
@@ -81,6 +83,8 @@
         return action.newTab ? browser.newTab(action.url) : browser.navigate(action.url);
       case "tab":
         return browser.activateTab(action.id);
+      case "closed":
+        return browser.reopenClosed(action.id);
       case "space":
         return browser.activateSpace(action.id);
       case "menu":

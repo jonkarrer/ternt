@@ -142,7 +142,7 @@ pub fn run_action(app: &AppHandle, id: String) {
             "reload" => browser::reload_active(&app),
             "back" => browser::back_active(&app),
             "forward" => browser::forward_active(&app),
-            "reopen-tab" => browser::reopen_closed_tab(&app),
+            "reopen-tab" => browser::reopen_closed_tab(&app, None),
             "clear-today" => browser::clear_today(&app),
             "check-updates" => {
                 if let Err(err) = crate::updater::check(&app, true).await {
