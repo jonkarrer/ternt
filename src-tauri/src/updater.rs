@@ -46,7 +46,9 @@ pub struct Updates {
 
 fn set_status(app: &AppHandle, status: Status) {
     *app.state::<Updates>().status.lock().unwrap() = Some(status.clone());
-    let _ = app.emit_to(EventTarget::webview(UI_WEBVIEW), "update:status", status);
+    for label in [UI_WEBVIEW, crate::settings::SETTINGS_WINDOW] {
+        let _ = app.emit_to(EventTarget::webview(label), "update:status", status.clone());
+    }
 }
 
 fn status(app: &AppHandle) -> Status {

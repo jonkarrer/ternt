@@ -46,6 +46,7 @@ them run under `doppler run --`.
 | ⌘S | Toggle sidebar |
 | ⌘F | Explore tabs: j/k or ↑/↓ move, h/l or ←/→ switch space, Space peeks, Enter opens, Esc goes back |
 | ⌃1–⌃9, ⌘⌥← / ⌘⌥→ | Switch spaces (or swipe two fingers across the sidebar) |
+| ⌘, | Settings (⌘1–⌘6 switch its pages, ⌘W closes it) |
 
 ## Sidebar
 
@@ -60,10 +61,17 @@ Drag tabs between sections, into folders, or to reorder. Closing a favorite or p
 unloads it (frees memory, keeps it in the sidebar). Right-click a tab, folder or space dot
 for more. Double-click a space or folder name to rename it.
 
-**Profiles**: each new space gets its own cookie jar (macOS 14+), so logins (Google, etc.) stay
-in their space; sign-in popups and favorites use their space's profile. Right-click a space dot →
-*Profile* to share the default profile, share another space's, or start a fresh one. A profile no
-space uses any more is deleted.
+**Profiles**: the main **Ternt** profile is the default cookie jar; each new space gets its own
+(macOS 14+), named after the space, so logins (Google, etc.) stay in their space; sign-in popups
+and favorites use their space's profile. Manage them in *Ternt → Settings…* (the Ternt and Profiles pages: rename a
+profile, move spaces between profiles, clear its history), or right-click a space dot → *Profile*.
+A profile no space uses any more is deleted.
+
+## Settings
+
+*Ternt → Settings…* (⌘,) opens an Arc-style window with pages along the top: **Ternt** (the main
+profile, shown first), **General** (version, updates), **Profiles** (each space's own profile),
+**Links**, **Shortcuts** and **Advanced** (data folder).
 
 ## Architecture
 
@@ -75,6 +83,7 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
 | `tab-<id>` | the web | One per *loaded* web tab, no IPC access |
 | `term` | `term.html` → `src/term/` | All terminal tabs (xterm.js), created on first use |
 | `palette` | `palette.html` → `src/palette/` | Command bar overlay, pre-created hidden |
+| `settings` | `settings.html` → `src/settings/` | Settings, its own window (`src-tauri/src/settings.rs`) |
 
 - **Rust owns state and layout.** The model (spaces, zones, folders, ordering) is plain data in
   `src-tauri/src/model.rs`, unit-tested with `cargo test`; webviews mirror it via
@@ -127,7 +136,8 @@ CI (`.github/workflows/ci.yml`) runs the unit tests on every push.
   `e2e/tests/` with `TERNT_TEST=<script>`. The script runs inside the sidebar webview and drives
   the app through its real commands and DOM events (`t` = `window.__ternt`, see
   `src/lib/debug.ts`; native checks like keyboard focus and the clipboard are in
-  `src-tauri/src/debug.rs`; both are compiled out of release builds). Fixture pages are served
+  `src-tauri/src/debug.rs`; both are compiled out of release builds). The app stays in the background
+  during test runs (it doesn't activate on launch or when it focuses a window), so you can keep working. Fixture pages are served
   from `e2e/fixtures` on port 8765. Suites named `x-1`, `x-2` share a session and history file,
   so `x-2` tests what survives a restart. Logs and screenshots land in `e2e/.out/`; a failed
   screenshot only warns.

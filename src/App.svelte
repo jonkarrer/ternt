@@ -32,6 +32,7 @@
     tabs: [],
     spaces: [],
     folders: [],
+    profiles: [],
     active: null,
     activeSpace: 0,
     sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
@@ -59,6 +60,7 @@
   const profileMates = $derived(
     browserState.spaces.filter((s) => s.id !== activeSpace && s.profile === space?.profile).map((s) => s.name),
   );
+  const profileName = $derived(browserState.profiles.find((p) => p.profile === space?.profile)?.name);
   const folders = $derived(browserState.folders.filter((f) => f.space === activeSpace));
   const loosePinned = $derived(pinnedIn(null));
   const today = $derived(browserState.tabs.filter((t) => t.zone === "today" && t.space === activeSpace));
@@ -410,8 +412,10 @@
               {#if space?.profile}
                 <span
                   class="profile"
-                  title="Own cookies and logins{profileMates.length ? `, shared with ` : ''}. Change via right-click on the space dot."
-                  >Profile</span
+                  title="Own cookies and logins (profile “{profileName}”{profileMates.length
+                    ? `, shared with ${profileMates.join(', ')}`
+                    : ''}). Manage profiles in Settings (⌘,)."
+                  >{profileName && profileName !== space.name ? profileName : "Profile"}</span
                 >
               {/if}
             {/if}

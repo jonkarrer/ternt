@@ -37,11 +37,25 @@ export interface Folder {
   open: boolean;
 }
 
+/** A cookie jar and the spaces using it (see `profile_groups` in model.rs). */
+export interface Profile {
+  /** `null` for the main "Ternt" profile. */
+  profile: string | null;
+  /** How `spaceProfile` selects it: `shared` or `space-<id>`. */
+  choice: string;
+  /** "Ternt" for the main profile; others are named after their spaces unless renamed. */
+  name: string;
+  /** Space ids, in space order. */
+  spaces: number[];
+}
+
 export interface BrowserState {
   /** Within each group (zone, space, folder), in sidebar order. */
   tabs: Tab[];
   spaces: Space[];
   folders: Folder[];
+  /** The main profile first, then each separate one. */
+  profiles: Profile[];
   active: number | null;
   activeSpace: number;
   sidebarWidth: number;
@@ -96,6 +110,14 @@ export const browser = {
   activateSpace: (id: number) => invoke("activate_space", { id }),
   renameSpace: (id: number, name: string) => invoke("rename_space", { id, name }),
   spaceContextMenu: (id: number) => invoke("space_context_menu", { id }),
+  /** `choice`: `shared`, `new` or `space-<id>` (share that space's profile). */
+  spaceProfile: (id: number, choice: string) => invoke("space_profile", { id, profile: choice }),
+  setSpaceColor: (id: number, color: string) => invoke("space_color", { id, color }),
+  /** An empty name goes back to the names of its spaces. */
+  renameProfile: (profile: string, name: string) => invoke("rename_profile", { profile, name }),
+  clearProfileHistory: (profile: string | null) => invoke("clear_profile_history", { profile }),
+  appVersion: () => invoke<string>("app_version"),
+  revealDataDir: () => invoke("reveal_data_dir"),
   createFolder: () => invoke<number | null>("create_folder"),
   renameFolder: (id: number, name: string) => invoke("rename_folder", { id, name }),
   setFolderOpen: (id: number, open: boolean) => invoke("set_folder_open", { id, open }),

@@ -9,7 +9,7 @@ use tauri::{
 use crate::{
     browser::{self, TabKind, Zone},
     model::SPACE_COLORS,
-    palette, welcome,
+    palette, settings, welcome,
 };
 
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
@@ -20,6 +20,8 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         &[
             &PredefinedMenuItem::about(app, None, None)?,
             &MenuItem::with_id(app, "check-updates", "Check for Updates…", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::hide(app, None)?,
             &PredefinedMenuItem::hide_others(app, None)?,
@@ -134,7 +136,9 @@ pub fn run_action(app: &AppHandle, id: String) {
             "new-tab" => palette::open(&app, palette::Mode::NewTab),
             "open-location" => palette::open(&app, palette::Mode::Edit),
             "new-terminal" => browser::open_terminal(&app).map(|_| ()),
+            "close-tab" if settings::close_if_focused(&app) => Ok(()),
             "close-tab" => browser::close_active_tab(&app),
+            "settings" => settings::open(&app),
             "reload" => browser::reload_active(&app),
             "back" => browser::back_active(&app),
             "forward" => browser::forward_active(&app),
@@ -269,14 +273,13 @@ pub async fn space_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
     popup(&app, build())
 }
 
-/// "Profile" submenu: the shared profile, each separate profile (named by the
-/// spaces using it), and a new one. The check marks the space's current one.
+/// "Profile" submenu: the main profile, each separate one, and a new one. The check marks the space's current one.
 fn profile_menu(app: &AppHandle, id: u32, info: &browser::SpaceMenuInfo) -> tauri::Result<Submenu<Wry>> {
     let submenu = Submenu::new(app, "Profile", true)?;
     for group in &info.groups {
         let id = format!("ctx-space-profile:{id}:{}", group.choice);
         let checked = group.profile == info.profile;
-        submenu.append(&CheckMenuItem::with_id(app, id, group.label(), true, checked, None::<&str>)?)?;
+        submenu.append(&CheckMenuItem::with_id(app, id, &group.name, true, checked, None::<&str>)?)?;
     }
     submenu.append(&PredefinedMenuItem::separator(app)?)?;
     submenu.append(&item(app, format!("ctx-space-profile:{id}:new"), "New Profile (signed out)")?)?;

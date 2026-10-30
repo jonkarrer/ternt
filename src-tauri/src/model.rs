@@ -100,24 +100,23 @@ pub struct Folder {
     pub open: bool,
 }
 
+/// The main profile's name: the default data store, shared by every space
+/// that doesn't have its own.
+pub const MAIN_PROFILE_NAME: &str = "Ternt";
+
 /// A profile and the spaces using it (see `State::profile_groups`).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProfileGroup {
+    /// `None` for the main profile.
     pub profile: Option<String>,
     /// How the space menu selects it: `shared` or `space-<id>`.
     pub choice: String,
-    pub spaces: Vec<String>,
-}
-
-impl ProfileGroup {
-    pub fn label(&self) -> String {
-        let kind = if self.profile.is_some() { "Separate" } else { "Shared" };
-        if self.spaces.is_empty() {
-            format!("{kind} Profile")
-        } else {
-            format!("{kind} Profile ({})", self.spaces.join(", "))
-        }
-    }
+    /// "Ternt" for the main profile; a separate one is named after its
+    /// spaces unless renamed.
+    pub name: String,
+    /// Space ids, in space order.
+    pub spaces: Vec<u32>,
 }
 
 pub enum ClosedTab {
@@ -131,6 +130,8 @@ pub struct Snapshot {
     tabs: Vec<Tab>,
     spaces: Vec<Space>,
     folders: Vec<Folder>,
+    /// The main profile first, then each separate one in space order.
+    profiles: Vec<ProfileGroup>,
     active: Option<u32>,
     active_space: u32,
     sidebar_width: f64,
@@ -141,6 +142,8 @@ pub struct State {
     pub tabs: Vec<Tab>,
     pub spaces: Vec<Space>,
     pub folders: Vec<Folder>,
+    /// Names given to separate profiles, by profile id.
+    pub profile_names: HashMap<String, String>,
     pub active: Option<u32>,
     pub active_space: u32,
     /// The tab last shown in each space, restored when switching back.
@@ -164,6 +167,7 @@ impl Default for State {
                 profile: None,
             }],
             folders: Vec::new(),
+            profile_names: HashMap::new(),
             active: None,
             active_space: 1,
             last_active: HashMap::new(),
@@ -182,6 +186,7 @@ impl State {
             tabs: self.tabs.clone(),
             spaces: self.spaces.clone(),
             folders: self.folders.clone(),
+            profiles: self.profile_groups(),
             active: self.active,
             active_space: self.active_space,
             sidebar_width: self.sidebar_width,
@@ -435,25 +440,54 @@ impl State {
         Some((old, affected))
     }
 
-    /// The profiles to offer in the space menu: the shared one first, then
-    /// each separate one, named by the spaces using it (in space order).
+    /// Every profile: the main one first (even when no space uses it), then
+    /// each separate one in the order of its first space. Unnamed separate
+    /// profiles are named after the spaces using them.
     pub fn profile_groups(&self) -> Vec<ProfileGroup> {
         let mut groups = vec![ProfileGroup {
             profile: None,
             choice: "shared".into(),
+            name: MAIN_PROFILE_NAME.into(),
             spaces: Vec::new(),
         }];
+        let mut space_names: Vec<Vec<&str>> = vec![Vec::new()];
         for space in &self.spaces {
-            match groups.iter_mut().find(|g| g.profile == space.profile) {
-                Some(group) => group.spaces.push(space.name.clone()),
-                None => groups.push(ProfileGroup {
-                    profile: space.profile.clone(),
-                    choice: format!("space-{}", space.id),
-                    spaces: vec![space.name.clone()],
-                }),
+            match groups.iter().position(|g| g.profile == space.profile) {
+                Some(i) => {
+                    groups[i].spaces.push(space.id);
+                    space_names[i].push(&space.name);
+                }
+                None => {
+                    groups.push(ProfileGroup {
+                        profile: space.profile.clone(),
+                        choice: format!("space-{}", space.id),
+                        name: String::new(),
+                        spaces: vec![space.id],
+                    });
+                    space_names.push(vec![&space.name]);
+                }
             }
         }
+        for (group, names) in groups.iter_mut().zip(space_names).skip(1) {
+            let id = group.profile.as_deref().unwrap_or_default();
+            group.name = self.profile_names.get(id).cloned().unwrap_or_else(|| names.join(", "));
+        }
         groups
+    }
+
+    /// Name a separate profile (an empty name goes back to its spaces'
+    /// names). The main profile keeps its name. Returns whether anything
+    /// changed.
+    pub fn rename_profile(&mut self, profile: &str, name: &str) -> bool {
+        if !self.profile_in_use(profile) {
+            return false;
+        }
+        let name = name.trim();
+        if name.is_empty() {
+            self.profile_names.remove(profile).is_some()
+        } else {
+            self.profile_names.insert(profile.into(), name.into()).as_deref() != Some(name)
+        }
     }
 
     // --- Folders ---------------------------------------------------------
@@ -493,6 +527,7 @@ impl State {
         if !saved.spaces.is_empty() {
             state.spaces = saved.spaces;
         }
+        state.profile_names = saved.profile_names;
         state.folders = saved
             .folders
             .into_iter()
@@ -561,6 +596,13 @@ impl State {
             active: self.active.and_then(index),
             spaces: self.spaces.clone(),
             folders: self.folders.clone(),
+            // Names of deleted profiles go with them.
+            profile_names: self
+                .profile_names
+                .iter()
+                .filter(|(id, _)| self.profile_in_use(id))
+                .map(|(id, name)| (id.clone(), name.clone()))
+                .collect(),
             active_space: Some(self.active_space),
             last_active: self
                 .last_active
@@ -600,6 +642,8 @@ pub struct Saved {
     pub spaces: Vec<Space>,
     #[serde(default)]
     pub folders: Vec<Folder>,
+    #[serde(default)]
+    pub profile_names: HashMap<String, String>,
     #[serde(default)]
     pub active_space: Option<u32>,
     /// `(space id, index into tabs)`.
@@ -843,18 +887,42 @@ mod tests {
         s.space_mut(clients).unwrap().name = "Clients".into();
         let solo = s.add_space(Some("s".into()));
         s.space_mut(solo).unwrap().name = "Solo".into();
-        let labels: Vec<(String, String)> = s.profile_groups().iter().map(|g| (g.choice.clone(), g.label())).collect();
+        let groups: Vec<(String, String, Vec<u32>)> =
+            s.profile_groups().into_iter().map(|g| (g.choice, g.name, g.spaces)).collect();
         assert_eq!(
-            labels,
+            groups,
             [
-                ("shared".into(), "Shared Profile (Home)".into()),
-                (format!("space-{work}"), "Separate Profile (Work, Clients)".into()),
-                (format!("space-{solo}"), "Separate Profile (Solo)".into()),
+                ("shared".into(), "Ternt".into(), vec![1]),
+                (format!("space-{work}"), "Work, Clients".into(), vec![work, clients]),
+                (format!("space-{solo}"), "Solo".into(), vec![solo]),
             ]
         );
-        // With every space separate, the shared profile is still offered.
+        // With every space separate, the main profile is still offered.
         s.space_mut(1).unwrap().profile = Some("h".into());
-        assert_eq!(s.profile_groups()[0].label(), "Shared Profile");
+        assert_eq!(s.profile_groups()[0].name, "Ternt");
+        assert!(s.profile_groups()[0].spaces.is_empty());
+    }
+
+    #[test]
+    fn profiles_can_be_renamed_and_the_name_is_saved() {
+        let mut s = State::default();
+        let work = s.add_space(Some("w".into()));
+        s.space_mut(work).unwrap().name = "Work".into();
+        assert!(s.rename_profile("w", "  Job  "));
+        assert!(!s.rename_profile("w", "Job"), "same name: no change");
+        assert!(!s.rename_profile("gone", "x"), "only profiles in use");
+        assert_eq!(s.profile_groups()[1].name, "Job");
+
+        let r = State::restore(serde_json::from_str(&serde_json::to_string(&s.save()).unwrap()).unwrap());
+        assert_eq!(r.profile_groups()[1].name, "Job");
+
+        assert!(s.rename_profile("w", ""), "empty: back to the space name");
+        assert_eq!(s.profile_groups()[1].name, "Work");
+
+        // A profile no space uses any more isn't saved with its name.
+        s.rename_profile("w", "Job");
+        s.space_mut(work).unwrap().profile = None;
+        assert!(s.save().profile_names.is_empty());
     }
 
     #[test]

@@ -9,6 +9,7 @@ mod native;
 mod palette;
 mod pty;
 mod session;
+mod settings;
 mod updater;
 mod welcome;
 
@@ -18,7 +19,12 @@ use browser::Browser;
 pub fn run() {
     #[cfg(all(debug_assertions, target_os = "macos"))]
     debug::load_env_from_args();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Test runs launch the app over and over; don't pull it in front of
+    // whatever the user is working in each time.
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    let builder = builder.activate_ignoring_other_apps(std::env::var_os("TERNT_TEST").is_none());
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Browser::default())
@@ -78,6 +84,8 @@ pub fn run() {
             browser::remove_space,
             browser::space_color,
             browser::space_profile,
+            browser::rename_profile,
+            browser::clear_profile_history,
             browser::create_folder,
             browser::rename_folder,
             browser::set_folder_open,
@@ -104,6 +112,7 @@ pub fn run() {
             updater::check_for_updates,
             updater::install_update,
             updater::app_version,
+            settings::reveal_data_dir,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_ready,
             #[cfg(all(debug_assertions, target_os = "macos"))]

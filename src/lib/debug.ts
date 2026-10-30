@@ -20,8 +20,8 @@ export function installTestHooks(getState: () => State) {
     resize: (width: number, height: number) => invoke("debug_resize", { width, height }),
     /** Screenshots are artifacts, not assertions: a failed capture (screen
         locked, display asleep) warns instead of failing the test. */
-    shot: (name: string) =>
-      invoke<string>("debug_screenshot", { name }).catch((e) => hooks.log(`warn - screenshot ${name}: ${e}`)),
+    shot: (name: string, window?: string) =>
+      invoke<string>("debug_screenshot", { name, window: window ?? null }).catch((e) => hooks.log(`warn - screenshot ${name}: ${e}`)),
     /** A key press in the sidebar (explore mode, renames). */
     key: (key: string) => window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })),
     /** Click an element the way a pointer would (rows act on pointerup). */

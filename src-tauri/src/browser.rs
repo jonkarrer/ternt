@@ -184,7 +184,7 @@ pub fn space_menu_info(app: &AppHandle, id: u32) -> Option<SpaceMenuInfo> {
 /// so the sidebar reacts in the same frame.
 fn emit_state(app: &AppHandle) {
     let snapshot: Snapshot = with(app, |s| s.snapshot());
-    for label in [UI_WEBVIEW, TERM_WEBVIEW] {
+    for label in [UI_WEBVIEW, TERM_WEBVIEW, crate::settings::SETTINGS_WINDOW] {
         let _ = app.emit_to(EventTarget::webview(label), "browser:state", snapshot.clone());
     }
     session::schedule_save(app);
@@ -1179,6 +1179,21 @@ pub async fn space_color(app: AppHandle, id: u32, color: String) {
 pub async fn space_profile(app: AppHandle, id: u32, profile: String) -> Result<(), String> {
     let choice = ProfileChoice::parse(&profile).ok_or("invalid profile choice")?;
     set_space_profile(&app, id, choice).map_err(err)
+}
+
+/// Name a separate profile (Settings → Profiles); empty goes back to the
+/// name of its spaces.
+#[tauri::command]
+pub async fn rename_profile(app: AppHandle, profile: String, name: String) {
+    if with(&app, |s| s.rename_profile(&profile, &name)) {
+        emit_state(&app);
+    }
+}
+
+/// Forget a profile's history (`None`: the main profile's).
+#[tauri::command]
+pub async fn clear_profile_history(app: AppHandle, profile: Option<String>) {
+    crate::history::clear(&app, profile.as_deref());
 }
 
 #[tauri::command]

@@ -70,10 +70,11 @@ pub async fn debug_resize(app: AppHandle, width: f64, height: f64) -> Result<(),
         .map_err(|e| e.to_string())
 }
 
-/// Capture just the main window to `$TERNT_SHOTS/<name>.png`.
+/// Capture just one window (the main one unless `window` names another) to
+/// `$TERNT_SHOTS/<name>.png`.
 #[tauri::command]
-pub async fn debug_screenshot(app: AppHandle, name: String) -> Result<String, String> {
-    let window = app.get_window(MAIN_WINDOW).ok_or("no window")?;
+pub async fn debug_screenshot(app: AppHandle, name: String, window: Option<String>) -> Result<String, String> {
+    let window = app.get_window(window.as_deref().unwrap_or(MAIN_WINDOW)).ok_or("no window")?;
     let ns_window = window.ns_window().map_err(|e| e.to_string())? as *const objc2::runtime::AnyObject;
     let number: isize = unsafe { objc2::msg_send![&*ns_window, windowNumber] };
     let dir = std::env::var("TERNT_SHOTS").unwrap_or_else(|_| std::env::temp_dir().display().to_string());
