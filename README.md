@@ -27,7 +27,7 @@ just test                  # unit tests, type check, clippy (about a second)
 just test-e2e palette      # one e2e suite (VERBOSE=1 lists every check); no name runs all
 ```
 
-The flake follows the org Nix standard (`mkDevShell` from `~/devjon/configs/shells/shared`).
+The flake follows the org Nix standard, with the `mkDevShell` builder vendored into `nix/devshell.nix` so the build never depends on the state of the configs checkout.
 Secrets live in the `ternt` Doppler project (`doppler.yaml` binds `dev`); recipes that need
 them run under `doppler run --`.
 

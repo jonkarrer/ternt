@@ -4,16 +4,18 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    devshell-lib.url = "path:/Users/jokar/devjon/configs/shells/shared";
   };
 
-  outputs = { self, nixpkgs, flake-utils, devshell-lib }:
+  outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
+        # Vendored dev-shell builder; see nix/devshell.nix for why it is not
+        # the shared one from ~/devjon/configs.
+        mkDevShell = import ./nix/devshell.nix;
       in
       {
-        devShells.default = devshell-lib.mkDevShell {
+        devShells.default = mkDevShell {
           inherit pkgs;
           name = "Ternt";
           emoji = "🌐";
