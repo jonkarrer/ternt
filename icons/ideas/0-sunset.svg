@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="184"/></clipPath>
+    <radialGradient id="bg" cx="0.5" cy="0.3" r="0.85">
+      <stop offset="0" stop-color="#2b1360"/><stop offset="0.55" stop-color="#150a33"/><stop offset="1" stop-color="#07040f"/>
+    </radialGradient>
+    <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe066"/><stop offset="0.45" stop-color="#ff5c8a"/><stop offset="1" stop-color="#9d1bff"/>
+    </linearGradient>
+    <linearGradient id="chromeTop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/><stop offset="0.55" stop-color="#d7ecff"/><stop offset="1" stop-color="#5eaaff"/>
+    </linearGradient>
+    <linearGradient id="chromeBottom" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#101a33"/><stop offset="0.4" stop-color="#5a6d94"/><stop offset="1" stop-color="#f4f8ff"/>
+    </linearGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="34"/></filter>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="20"/></filter>
+    <polygon id="bolt" points="612,150 318,572 494,572 404,884 722,428 556,428 656,150"/>
+    <clipPath id="boltClip"><use href="#bolt"/></clipPath>
+  </defs>
+
+  <rect x="100" y="118" width="824" height="824" rx="184" fill="#000" opacity="0.4" filter="url(#soft)"/>
+  <g clip-path="url(#sq)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#bg)"/>
+
+    <!-- 80s sun behind the horizon, sliced -->
+    <circle cx="512" cy="640" r="262" fill="url(#sun)"/>
+    <g fill="#150a33">
+      <rect x="200" y="672" width="624" height="8"/>
+      <rect x="200" y="712" width="624" height="12"/>
+      <rect x="200" y="758" width="624" height="17"/>
+      <rect x="200" y="812" width="624" height="24"/>
+      <rect x="200" y="878" width="624" height="40"/>
+    </g>
+
+    <!-- perspective grid below the horizon -->
+    <g stroke="#ff3fd1" stroke-width="3" opacity="0.5" fill="none">
+      <line x1="100" y1="660" x2="924" y2="660"/>
+      <line x1="100" y1="700" x2="924" y2="700"/>
+      <line x1="100" y1="760" x2="924" y2="760"/>
+      <line x1="100" y1="850" x2="924" y2="850"/>
+      <line x1="512" y1="660" x2="512" y2="924"/>
+      <line x1="512" y1="660" x2="340" y2="924"/>
+      <line x1="512" y1="660" x2="684" y2="924"/>
+      <line x1="512" y1="660" x2="130" y2="924"/>
+      <line x1="512" y1="660" x2="894" y2="924"/>
+      <line x1="512" y1="660" x2="-120" y2="924"/>
+      <line x1="512" y1="660" x2="1144" y2="924"/>
+    </g>
+    <rect x="100" y="658" width="824" height="5" fill="#2bf0ff" opacity="0.9"/>
+
+    <!-- bolt: neon halo (stacked soft strokes; the icon renderer has no blur),
+         heavy dark bevel, chrome fill split by a chrome horizon -->
+    <g fill="#ff2bd6" stroke="#ff2bd6" stroke-linejoin="round">
+      <use href="#bolt" stroke-width="150" opacity="0.07"/>
+      <use href="#bolt" stroke-width="110" opacity="0.10"/>
+      <use href="#bolt" stroke-width="80" opacity="0.14"/>
+      <use href="#bolt" stroke-width="56" opacity="0.22"/>
+    </g>
+    <use href="#bolt" fill="#07040f" stroke="#07040f" stroke-width="40" stroke-linejoin="miter" stroke-miterlimit="8"/>
+    <g clip-path="url(#boltClip)">
+      <rect x="0" y="0" width="1024" height="560" fill="url(#chromeTop)"/>
+      <rect x="0" y="560" width="1024" height="464" fill="url(#chromeBottom)"/>
+      <rect x="0" y="548" width="1024" height="10" fill="#ffffff" opacity="0.85"/>
+      <rect x="0" y="560" width="1024" height="6" fill="#ff8ad8" opacity="0.8"/>
+    </g>
+    <use href="#bolt" fill="none" stroke="#ffffff" stroke-width="3" opacity="0.45"/>
+  </g>
+</svg>

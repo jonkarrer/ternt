@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="184"/></clipPath>
+    <linearGradient id="chromeTop" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="0.55" stop-color="#d7ecff"/><stop offset="1" stop-color="#5eaaff"/></linearGradient>
+    <linearGradient id="chromeBottom" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#101a33"/><stop offset="0.4" stop-color="#5a6d94"/><stop offset="1" stop-color="#f4f8ff"/></linearGradient>
+    <polygon id="bolt" points="612,150 318,572 494,572 404,884 722,428 556,428 656,150"/>
+    <clipPath id="boltClip"><use href="#bolt"/></clipPath>
+<radialGradient id="bg" cx="0.5" cy="0.1" r="1"><stop offset="0" stop-color="#3b1a7a"/><stop offset="1" stop-color="#05030a"/></radialGradient>
+<radialGradient id="cloud" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#5b3aa6"/><stop offset="0.6" stop-color="#2a1753" stop-opacity="0.9"/><stop offset="1" stop-color="#2a1753" stop-opacity="0"/></radialGradient>
+<radialGradient id="flash" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#ff2bd6" stop-opacity="0.6"/><stop offset="1" stop-color="#ff2bd6" stop-opacity="0"/></radialGradient>
+  </defs>
+  <g clip-path="url(#sq)">
+<rect x="100" y="100" width="824" height="824" fill="url(#bg)"/>
+<g fill="url(#cloud)"><ellipse cx="220" cy="300" rx="260" ry="150"/><ellipse cx="820" cy="260" rx="280" ry="160"/><ellipse cx="520" cy="200" rx="300" ry="130"/><ellipse cx="180" cy="760" rx="300" ry="170"/><ellipse cx="860" cy="780" rx="320" ry="180"/><ellipse cx="520" cy="860" rx="340" ry="150"/></g>
+<rect x="100" y="100" width="824" height="824" fill="url(#flash)"/>
+<g stroke="#2bf0ff" stroke-width="5" fill="none" opacity="0.8" stroke-linejoin="round"><polyline points="180,140 150,260 200,250 160,380"/><polyline points="850,560 820,660 870,650 830,790"/></g>
+    <g fill="#ff2bd6" stroke="#ff2bd6" stroke-linejoin="round">
+      <use href="#bolt" stroke-width="150" opacity="0.07"/>
+      <use href="#bolt" stroke-width="110" opacity="0.10"/>
+      <use href="#bolt" stroke-width="80" opacity="0.14"/>
+      <use href="#bolt" stroke-width="56" opacity="0.22"/>
+    </g>
+    <use href="#bolt" fill="#07040f" stroke="#07040f" stroke-width="40" stroke-linejoin="miter" stroke-miterlimit="8"/>
+    <g clip-path="url(#boltClip)">
+      <rect x="0" y="0" width="1024" height="560" fill="url(#chromeTop)"/>
+      <rect x="0" y="560" width="1024" height="464" fill="url(#chromeBottom)"/>
+      <rect x="0" y="548" width="1024" height="10" fill="#ffffff" opacity="0.85"/>
+      <rect x="0" y="560" width="1024" height="6" fill="#ff8ad8" opacity="0.8"/>
+    </g>
+    <use href="#bolt" fill="none" stroke="#ffffff" stroke-width="3" opacity="0.45"/>
+  </g>
+</svg>

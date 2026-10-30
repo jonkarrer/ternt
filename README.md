@@ -91,8 +91,8 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
 - **Welcome page** (`src-tauri/welcome.html`, served on `ternt://welcome` by
   `src-tauri/src/welcome.rs`): a plain web tab on a custom scheme, so it needs no IPC. Opened
   when there is no session file at all (first launch) and from the Help menu.
-- **App icon**: `src-tauri/icons/icon.svg` is the source; render it to a 1024px PNG and run
-  `bun tauri icon <png> -o src-tauri/icons` to regenerate the set.
+- **App icon**: `src-tauri/icons/icon.svg` is the source; `icons/README.md` has the
+  regeneration steps and `icons/ideas/` the other backgrounds that were explored.
 - **History** (`src-tauri/src/history.rs`) records each page that finishes loading, per profile, in
   `history.json`; the command bar searches it in Rust as you type (match quality × frecency).
 
