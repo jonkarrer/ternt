@@ -9,7 +9,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, Emitter, EventTarget, LogicalPosition, Manager, Window, WebviewUrl,
+    AppHandle, Emitter, EventTarget, LogicalPosition, Manager, WebviewUrl, Window,
     webview::WebviewBuilder,
 };
 
@@ -42,7 +42,9 @@ pub struct Request {
 pub struct Palette(Mutex<Option<Request>>);
 
 pub fn create(window: &Window) -> tauri::Result<()> {
-    let size = window.inner_size()?.to_logical::<f64>(window.scale_factor()?);
+    let size = window
+        .inner_size()?
+        .to_logical::<f64>(window.scale_factor()?);
     let builder = WebviewBuilder::new(PALETTE_WEBVIEW, WebviewUrl::App("palette.html".into()))
         .transparent(true)
         .focused(false);
@@ -73,7 +75,11 @@ pub fn open(app: &AppHandle, mode: Mode) -> tauri::Result<()> {
         return Ok(());
     };
     // Render the new request before the view becomes visible.
-    app.emit_to(EventTarget::webview(PALETTE_WEBVIEW), "palette:open", request)?;
+    app.emit_to(
+        EventTarget::webview(PALETTE_WEBVIEW),
+        "palette:open",
+        request,
+    )?;
     #[cfg(target_os = "macos")]
     crate::native::bring_to_front(&webview);
     webview.show()?;

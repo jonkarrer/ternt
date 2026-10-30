@@ -19,7 +19,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         true,
         &[
             &PredefinedMenuItem::about(app, None, None)?,
-            &MenuItem::with_id(app, "check-updates", "Check for Updates…", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "check-updates",
+                "Check for Updates…",
+                true,
+                None::<&str>,
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?,
             &PredefinedMenuItem::separator(app)?,
@@ -37,22 +43,56 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         true,
         &[
             &MenuItem::with_id(app, "new-tab", "New Tab", true, Some("CmdOrCtrl+T"))?,
-            &MenuItem::with_id(app, "new-terminal", "New Terminal Tab", true, Some("CmdOrCtrl+Alt+T"))?,
-            &MenuItem::with_id(app, "open-location", "Open Location…", true, Some("CmdOrCtrl+L"))?,
+            &MenuItem::with_id(
+                app,
+                "new-terminal",
+                "New Terminal Tab",
+                true,
+                Some("CmdOrCtrl+Alt+T"),
+            )?,
+            &MenuItem::with_id(
+                app,
+                "open-location",
+                "Open Location…",
+                true,
+                Some("CmdOrCtrl+L"),
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "close-tab", "Close Tab", true, Some("CmdOrCtrl+W"))?,
-            &MenuItem::with_id(app, "reopen-tab", "Reopen Closed Tab", true, Some("CmdOrCtrl+Shift+T"))?,
+            &MenuItem::with_id(
+                app,
+                "reopen-tab",
+                "Reopen Closed Tab",
+                true,
+                Some("CmdOrCtrl+Shift+T"),
+            )?,
         ],
     )?;
 
     let tab_numbers = (1..=9)
         .map(|n| {
-            let label = if n == 9 { "Select Last Tab".into() } else { format!("Select Tab {n}") };
-            MenuItem::with_id(app, format!("select-tab-{n}"), label, true, Some(&format!("CmdOrCtrl+{n}")))
+            let label = if n == 9 {
+                "Select Last Tab".into()
+            } else {
+                format!("Select Tab {n}")
+            };
+            MenuItem::with_id(
+                app,
+                format!("select-tab-{n}"),
+                label,
+                true,
+                Some(&format!("CmdOrCtrl+{n}")),
+            )
         })
         .collect::<tauri::Result<Vec<_>>>()?;
     let next = MenuItem::with_id(app, "next-tab", "Next Tab", true, Some("Ctrl+Tab"))?;
-    let previous = MenuItem::with_id(app, "previous-tab", "Previous Tab", true, Some("Ctrl+Shift+Tab"))?;
+    let previous = MenuItem::with_id(
+        app,
+        "previous-tab",
+        "Previous Tab",
+        true,
+        Some("Ctrl+Shift+Tab"),
+    )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let mut tab_items: Vec<&dyn IsMenuItem<Wry>> = vec![&next, &previous, &separator];
     tab_items.extend(tab_numbers.iter().map(|item| item as &dyn IsMenuItem<Wry>));
@@ -79,8 +119,20 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         "View",
         true,
         &[
-            &MenuItem::with_id(app, "toggle-sidebar", "Toggle Sidebar", true, Some("CmdOrCtrl+S"))?,
-            &MenuItem::with_id(app, "split-terminal", "Split View with New Terminal", true, Some("CmdOrCtrl+Alt+Backslash"))?,
+            &MenuItem::with_id(
+                app,
+                "toggle-sidebar",
+                "Toggle Sidebar",
+                true,
+                Some("CmdOrCtrl+S"),
+            )?,
+            &MenuItem::with_id(
+                app,
+                "split-terminal",
+                "Split View with New Terminal",
+                true,
+                Some("CmdOrCtrl+Alt+Backslash"),
+            )?,
             &MenuItem::with_id(app, "unsplit", "Close Split View", true, None::<&str>)?,
             &MenuItem::with_id(app, "explore", "Explore Tabs", true, Some("CmdOrCtrl+F"))?,
             &PredefinedMenuItem::separator(app)?,
@@ -103,26 +155,67 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     )?;
 
     let space_numbers = (1..=9)
-        .map(|n| MenuItem::with_id(app, format!("select-space-{n}"), format!("Space {n}"), true, Some(&format!("Ctrl+{n}"))))
+        .map(|n| {
+            MenuItem::with_id(
+                app,
+                format!("select-space-{n}"),
+                format!("Space {n}"),
+                true,
+                Some(&format!("Ctrl+{n}")),
+            )
+        })
         .collect::<tauri::Result<Vec<_>>>()?;
     let new_space = MenuItem::with_id(app, "new-space", "New Space", true, None::<&str>)?;
     let new_folder = MenuItem::with_id(app, "new-folder", "New Folder", true, None::<&str>)?;
-    let next_space = MenuItem::with_id(app, "next-space", "Next Space", true, Some("CmdOrCtrl+Alt+Right"))?;
-    let previous_space = MenuItem::with_id(app, "previous-space", "Previous Space", true, Some("CmdOrCtrl+Alt+Left"))?;
+    let next_space = MenuItem::with_id(
+        app,
+        "next-space",
+        "Next Space",
+        true,
+        Some("CmdOrCtrl+Alt+Right"),
+    )?;
+    let previous_space = MenuItem::with_id(
+        app,
+        "previous-space",
+        "Previous Space",
+        true,
+        Some("CmdOrCtrl+Alt+Left"),
+    )?;
     let space_separator = PredefinedMenuItem::separator(app)?;
-    let mut space_items: Vec<&dyn IsMenuItem<Wry>> =
-        vec![&new_space, &new_folder, &space_separator, &next_space, &previous_space, &separator];
-    space_items.extend(space_numbers.iter().map(|item| item as &dyn IsMenuItem<Wry>));
+    let mut space_items: Vec<&dyn IsMenuItem<Wry>> = vec![
+        &new_space,
+        &new_folder,
+        &space_separator,
+        &next_space,
+        &previous_space,
+        &separator,
+    ];
+    space_items.extend(
+        space_numbers
+            .iter()
+            .map(|item| item as &dyn IsMenuItem<Wry>),
+    );
     let spaces = Submenu::with_items(app, "Spaces", true, &space_items)?;
 
     let help = Submenu::with_items(
         app,
         "Help",
         true,
-        &[&MenuItem::with_id(app, "welcome", "Welcome to Ternt", true, None::<&str>)?],
+        &[&MenuItem::with_id(
+            app,
+            "welcome",
+            "Welcome to Ternt",
+            true,
+            None::<&str>,
+        )?],
     )?;
 
-    Menu::with_items(app, &[&app_menu, &file, &edit, &view, &tabs, &spaces, &window, &help])
+    Menu::with_items(
+        app,
+        &[
+            &app_menu, &file, &edit, &view, &tabs, &spaces, &window, &help,
+        ],
+    )
 }
 
 pub fn handle(app: &AppHandle, event: MenuEvent) {
@@ -138,7 +231,11 @@ pub fn run_action(app: &AppHandle, id: String) {
             "new-tab" => palette::open(&app, palette::Mode::NewTab),
             "open-location" => palette::open(&app, palette::Mode::Edit),
             "new-terminal" => browser::open_terminal(&app).map(|_| ()),
-            "close-tab" if settings::close_if_focused(&app) || crate::little::close_if_focused(&app) => Ok(()),
+            "close-tab"
+                if settings::close_if_focused(&app) || crate::little::close_if_focused(&app) =>
+            {
+                Ok(())
+            }
             "close-tab" => browser::close_active_tab(&app),
             "settings" => settings::open(&app),
             "reload" => browser::reload_active(&app),
@@ -174,7 +271,8 @@ pub fn run_action(app: &AppHandle, id: String) {
             "next-tab" => browser::cycle_tab(&app, 1),
             "previous-tab" => browser::cycle_tab(&app, -1),
             "new-space" => browser::new_space(&app).map(|_| ()),
-            "new-folder" => browser::new_folder(&app).map_or(Ok(()), |id| browser::request_rename(&app, "folder", id)),
+            "new-folder" => browser::new_folder(&app)
+                .map_or(Ok(()), |id| browser::request_rename(&app, "folder", id)),
             "next-space" => browser::cycle_space(&app, 1),
             "previous-space" => browser::cycle_space(&app, -1),
             id if id.starts_with("select-space-") => match id["select-space-".len()..].parse() {
@@ -237,7 +335,13 @@ pub async fn tab_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
             let folders = Submenu::new(&app, "Move to Folder", true)?;
             for (folder, name) in &info.folders {
                 let enabled = info.folder != Some(*folder);
-                folders.append(&MenuItem::with_id(&app, format!("ctx-move-folder:{id}:{folder}"), name, enabled, None::<&str>)?)?;
+                folders.append(&MenuItem::with_id(
+                    &app,
+                    format!("ctx-move-folder:{id}:{folder}"),
+                    name,
+                    enabled,
+                    None::<&str>,
+                )?)?;
             }
             if !info.folders.is_empty() {
                 folders.append(&PredefinedMenuItem::separator(&app)?)?;
@@ -253,15 +357,27 @@ pub async fn tab_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
             menu.append(&PredefinedMenuItem::separator(&app)?)?;
         }
         if info.can_split {
-            menu.append(&item(&app, format!("ctx-split:{id}"), "Open in Split View")?)?;
+            menu.append(&item(
+                &app,
+                format!("ctx-split:{id}"),
+                "Open in Split View",
+            )?)?;
         }
         if info.split {
-            menu.append(&item(&app, format!("ctx-unsplit:{id}"), "Close Split View")?)?;
+            menu.append(&item(
+                &app,
+                format!("ctx-unsplit:{id}"),
+                "Close Split View",
+            )?)?;
         }
         if info.can_split || info.split {
             menu.append(&PredefinedMenuItem::separator(&app)?)?;
         }
-        let close_label = if info.zone == Zone::Today { "Close Tab" } else { "Unload Tab" };
+        let close_label = if info.zone == Zone::Today {
+            "Close Tab"
+        } else {
+            "Unload Tab"
+        };
         menu.append(&item(&app, format!("ctx-close:{id}"), close_label)?)?;
         Ok(menu)
     };
@@ -274,32 +390,64 @@ pub async fn space_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
     let info = browser::space_menu_info(&app, id).ok_or("no such space")?;
     let build = || -> tauri::Result<Menu<Wry>> {
         let menu = Menu::new(&app)?;
-        menu.append(&item(&app, format!("ctx-rename-space:{id}"), "Rename Space…")?)?;
+        menu.append(&item(
+            &app,
+            format!("ctx-rename-space:{id}"),
+            "Rename Space…",
+        )?)?;
         menu.append(&item(&app, format!("ctx-space-icon:{id}"), "Change Icon…")?)?;
         let colors = Submenu::new(&app, "Color", true)?;
         for option in SPACE_COLORS {
             let label = format!("{}{}", option[..1].to_uppercase(), &option[1..]);
-            colors.append(&CheckMenuItem::with_id(&app, format!("ctx-space-color:{id}:{option}"), label, true, option == info.color, None::<&str>)?)?;
+            colors.append(&CheckMenuItem::with_id(
+                &app,
+                format!("ctx-space-color:{id}:{option}"),
+                label,
+                true,
+                option == info.color,
+                None::<&str>,
+            )?)?;
         }
         menu.append(&colors)?;
         menu.append(&profile_menu(&app, id, &info)?)?;
         menu.append(&PredefinedMenuItem::separator(&app)?)?;
-        menu.append(&MenuItem::with_id(&app, format!("ctx-delete-space:{id}"), "Delete Space", info.deletable, None::<&str>)?)?;
+        menu.append(&MenuItem::with_id(
+            &app,
+            format!("ctx-delete-space:{id}"),
+            "Delete Space",
+            info.deletable,
+            None::<&str>,
+        )?)?;
         Ok(menu)
     };
     popup(&app, build())
 }
 
 /// "Profile" submenu: the main profile, each separate one, and a new one. The check marks the space's current one.
-fn profile_menu(app: &AppHandle, id: u32, info: &browser::SpaceMenuInfo) -> tauri::Result<Submenu<Wry>> {
+fn profile_menu(
+    app: &AppHandle,
+    id: u32,
+    info: &browser::SpaceMenuInfo,
+) -> tauri::Result<Submenu<Wry>> {
     let submenu = Submenu::new(app, "Profile", true)?;
     for group in &info.groups {
         let id = format!("ctx-space-profile:{id}:{}", group.choice);
         let checked = group.profile == info.profile;
-        submenu.append(&CheckMenuItem::with_id(app, id, &group.name, true, checked, None::<&str>)?)?;
+        submenu.append(&CheckMenuItem::with_id(
+            app,
+            id,
+            &group.name,
+            true,
+            checked,
+            None::<&str>,
+        )?)?;
     }
     submenu.append(&PredefinedMenuItem::separator(app)?)?;
-    submenu.append(&item(app, format!("ctx-space-profile:{id}:new"), "New Profile (signed out)")?)?;
+    submenu.append(&item(
+        app,
+        format!("ctx-space-profile:{id}:new"),
+        "New Profile (signed out)",
+    )?)?;
     Ok(submenu)
 }
 
@@ -308,8 +456,16 @@ fn profile_menu(app: &AppHandle, id: u32, info: &browser::SpaceMenuInfo) -> taur
 pub async fn folder_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
     let build = || -> tauri::Result<Menu<Wry>> {
         let menu = Menu::new(&app)?;
-        menu.append(&item(&app, format!("ctx-rename-folder:{id}"), "Rename Folder…")?)?;
-        menu.append(&item(&app, format!("ctx-delete-folder:{id}"), "Delete Folder (keep tabs)")?)?;
+        menu.append(&item(
+            &app,
+            format!("ctx-rename-folder:{id}"),
+            "Rename Folder…",
+        )?)?;
+        menu.append(&item(
+            &app,
+            format!("ctx-delete-folder:{id}"),
+            "Delete Folder (keep tabs)",
+        )?)?;
         Ok(menu)
     };
     popup(&app, build())

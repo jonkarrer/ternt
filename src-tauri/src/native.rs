@@ -8,11 +8,12 @@ use objc2::{
     runtime::{AnyObject, NSObject},
 };
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBox, NSBoxType, NSColor, NSEvent, NSResponder, NSTitlePosition, NSView,
-    NSWindowOrderingMode,
+    NSAutoresizingMaskOptions, NSBox, NSBoxType, NSColor, NSEvent, NSResponder, NSTitlePosition,
+    NSView, NSWindowOrderingMode,
 };
 use objc2_foundation::{
-    NSKeyValueObservingOptions, NSObjectNSKeyValueObserverRegistration, NSPoint, NSRect, NSSize, NSString, NSURL,
+    NSKeyValueObservingOptions, NSObjectNSKeyValueObserverRegistration, NSPoint, NSRect, NSSize,
+    NSString, NSURL,
 };
 use tauri::{AppHandle, Manager, Webview};
 
@@ -80,7 +81,8 @@ fn pin_to_superview(view: &NSView) {
 /// panes share a resize roughly evenly until `browser` lays them out exactly.
 pub fn set_pane(webview: &Webview, pane: Pane) {
     let _ = webview.with_webview(move |platform| unsafe {
-        let sizable = NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable;
+        let sizable = NSAutoresizingMaskOptions::ViewWidthSizable
+            | NSAutoresizingMaskOptions::ViewHeightSizable;
         let mask = match pane {
             Pane::Full => sizable,
             Pane::Left => sizable | NSAutoresizingMaskOptions::ViewMaxXMargin,
@@ -154,8 +156,10 @@ pub fn observe(webview: &Webview, tab: u32, app: AppHandle) {
     let _ = webview.with_webview(move |platform| unsafe {
         let mtm = MainThreadMarker::new().expect("with_webview runs on the main thread");
         let view = view(platform.inner());
-        let observer: Retained<TabObserver> =
-            msg_send![super(TabObserver::alloc(mtm).set_ivars(ObserverIvars { tab, app })), init];
+        let observer: Retained<TabObserver> = msg_send![
+            super(TabObserver::alloc(mtm).set_ivars(ObserverIvars { tab, app })),
+            init
+        ];
         for key in OBSERVED_KEYS {
             view.addObserver_forKeyPath_options_context(
                 &observer,
@@ -245,13 +249,17 @@ thread_local! {
 
 /// Start reporting focus moves between content views in `window`.
 pub fn watch_focus(window: &tauri::Window, app: AppHandle) {
-    let Ok(ns_window) = window.ns_window() else { return };
+    let Ok(ns_window) = window.ns_window() else {
+        return;
+    };
     let ns_window = ns_window as usize; // raw pointers aren't Send
     let _ = window.run_on_main_thread(move || unsafe {
         let mtm = MainThreadMarker::new().expect("run_on_main_thread runs on the main thread");
         let window = &*(ns_window as *const NSObject);
-        let observer: Retained<FocusObserver> =
-            msg_send![super(FocusObserver::alloc(mtm).set_ivars(FocusIvars { app })), init];
+        let observer: Retained<FocusObserver> = msg_send![
+            super(FocusObserver::alloc(mtm).set_ivars(FocusIvars { app })),
+            init
+        ];
         window.addObserver_forKeyPath_options_context(
             &observer,
             &NSString::from_str("firstResponder"),
@@ -272,7 +280,9 @@ pub fn register_terminal_view(webview: &Webview) {
 /// Hide or show the close/minimize/zoom buttons (hidden while the sidebar is
 /// collapsed, where they'd overlap the page).
 pub fn set_traffic_lights_hidden(window: &tauri::Window, hidden: bool) {
-    let Ok(ns_window) = window.ns_window() else { return };
+    let Ok(ns_window) = window.ns_window() else {
+        return;
+    };
     let ns_window = ns_window as usize; // raw pointers aren't Send
     let _ = window.run_on_main_thread(move || unsafe {
         let ns_window = &*(ns_window as *const AnyObject);
@@ -289,7 +299,9 @@ pub fn set_traffic_lights_hidden(window: &tauri::Window, hidden: bool) {
 pub fn copy_to_clipboard(app: &AppHandle, text: String) {
     let _ = app.run_on_main_thread(move || unsafe {
         let pasteboard: *mut AnyObject = msg_send![objc2::class!(NSPasteboard), generalPasteboard];
-        let Some(pasteboard) = pasteboard.as_ref() else { return };
+        let Some(pasteboard) = pasteboard.as_ref() else {
+            return;
+        };
         let _: isize = msg_send![pasteboard, clearContents];
         let text = NSString::from_str(&text);
         let kind = NSString::from_str("public.utf8-plain-text");
@@ -337,10 +349,13 @@ pub fn set_dim(ui: &Webview, frame: Option<(f64, f64, f64, f64)>, radius: f64) {
             }
             return;
         };
-        let Some(parent) = view(platform.inner()).superview() else { return };
+        let Some(parent) = view(platform.inner()).superview() else {
+            return;
+        };
         let dim = DIM.with_borrow_mut(|slot| {
             slot.get_or_insert_with(|| {
-                let dim: Retained<DimView> = msg_send![super(DimView::alloc(mtm).set_ivars(app)), init];
+                let dim: Retained<DimView> =
+                    msg_send![super(DimView::alloc(mtm).set_ivars(app)), init];
                 dim.setBoxType(NSBoxType::Custom);
                 dim.setTitlePosition(NSTitlePosition::NoTitle);
                 dim.setBorderWidth(0.0);

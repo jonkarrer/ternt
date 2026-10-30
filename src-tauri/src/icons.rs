@@ -22,13 +22,19 @@ const MAX_ICON: usize = 512 * 1024;
 
 #[tauri::command]
 pub async fn site_icon(app: AppHandle, url: String) -> Option<String> {
-    let url = Url::parse(&url).ok().filter(|u| matches!(u.scheme(), "http" | "https"))?;
+    let url = Url::parse(&url)
+        .ok()
+        .filter(|u| matches!(u.scheme(), "http" | "https"))?;
     let origin = url.origin().ascii_serialization();
     if let Some(icon) = app.state::<Icons>().0.lock().unwrap().get(&origin) {
         return icon.clone();
     }
     let fetched = fetch(&url).await?;
-    app.state::<Icons>().0.lock().unwrap().insert(origin, fetched.clone());
+    app.state::<Icons>()
+        .0
+        .lock()
+        .unwrap()
+        .insert(origin, fetched.clone());
     fetched
 }
 
@@ -119,7 +125,11 @@ fn icon_links(html: &str) -> Vec<String> {
         let rel = rel.to_ascii_lowercase();
         let tokens: Vec<&str> = rel.split_whitespace().collect();
         let size = attr(tag, "sizes")
-            .and_then(|s| s.split(['x', 'X']).next().and_then(|n| n.trim().parse::<u32>().ok()))
+            .and_then(|s| {
+                s.split(['x', 'X'])
+                    .next()
+                    .and_then(|n| n.trim().parse::<u32>().ok())
+            })
             .unwrap_or(if href.ends_with(".svg") { 256 } else { 16 });
         let score = if tokens.iter().any(|t| t.starts_with("apple-touch-icon")) {
             10_000 + size
@@ -162,7 +172,11 @@ fn base64(bytes: &[u8]) -> String {
             | u32::from(*chunk.get(1).unwrap_or(&0)) << 8
             | u32::from(*chunk.get(2).unwrap_or(&0));
         for i in 0..4 {
-            out.push(if i <= chunk.len() { CHARS[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+            out.push(if i <= chunk.len() {
+                CHARS[(n >> (18 - 6 * i) & 63) as usize] as char
+            } else {
+                '='
+            });
         }
     }
     out
@@ -182,12 +196,23 @@ mod tests {
             <link rel="apple-touch-icon" href=/touch.png>
             <link rel="stylesheet" href="/x.css">
         </head>"#;
-        assert_eq!(icon_links(html), ["/touch.png", "/icon-192.png?a=1&b=2", "/favicon-16.png", "/fav.ico"]);
+        assert_eq!(
+            icon_links(html),
+            [
+                "/touch.png",
+                "/icon-192.png?a=1&b=2",
+                "/favicon-16.png",
+                "/fav.ico"
+            ]
+        );
     }
 
     #[test]
     fn attributes_must_be_whole_names() {
-        assert_eq!(attr(r#"<link data-rel="x" rel="icon""#, "rel").as_deref(), Some("icon"));
+        assert_eq!(
+            attr(r#"<link data-rel="x" rel="icon""#, "rel").as_deref(),
+            Some("icon")
+        );
         assert_eq!(attr("<link rel = icon", "rel").as_deref(), Some("icon"));
     }
 

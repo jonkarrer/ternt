@@ -95,7 +95,8 @@ fn tab_label(id: u32) -> String {
 }
 
 fn main_window(app: &AppHandle) -> tauri::Result<Window> {
-    app.get_window(MAIN_WINDOW).ok_or(tauri::Error::WindowNotFound)
+    app.get_window(MAIN_WINDOW)
+        .ok_or(tauri::Error::WindowNotFound)
 }
 
 /// The webview that displays a tab: its own for web tabs, the shared
@@ -127,7 +128,10 @@ pub fn active_profile(app: &AppHandle) -> Option<String> {
 pub fn active_space_profile(app: &AppHandle) -> (Option<String>, String) {
     with(app, |s| {
         let space = s.space(s.active_space);
-        (space.and_then(|x| x.profile.clone()), space.map(|x| x.name.clone()).unwrap_or_default())
+        (
+            space.and_then(|x| x.profile.clone()),
+            space.map(|x| x.name.clone()).unwrap_or_default(),
+        )
     })
 }
 
@@ -169,7 +173,9 @@ pub fn active_tab_url(app: &AppHandle) -> Option<String> {
 }
 
 pub fn is_terminal_tab(app: &AppHandle, id: u32) -> bool {
-    with(app, |s| s.tab(id).is_some_and(|t| t.kind == TabKind::Terminal))
+    with(app, |s| {
+        s.tab(id).is_some_and(|t| t.kind == TabKind::Terminal)
+    })
 }
 
 /// What the tab context menu needs to know.
@@ -201,7 +207,9 @@ pub fn tab_menu_info(app: &AppHandle, id: u32) -> Option<TabMenuInfo> {
                 .map(|f| (f.id, f.name.clone()))
                 .collect(),
             split: s.split_of(id).is_some(),
-            can_split: s.active.is_some_and(|active| s.split_partner(active) != Some(id) && s.can_split(active, id)),
+            can_split: s.active.is_some_and(|active| {
+                s.split_partner(active) != Some(id) && s.can_split(active, id)
+            }),
         })
     })
 }
@@ -232,7 +240,11 @@ pub fn space_menu_info(app: &AppHandle, id: u32) -> Option<SpaceMenuInfo> {
 fn emit_state(app: &AppHandle) {
     let snapshot: Snapshot = with(app, |s| s.snapshot());
     for label in [UI_WEBVIEW, TERM_WEBVIEW, crate::settings::SETTINGS_WINDOW] {
-        let _ = app.emit_to(EventTarget::webview(label), "browser:state", snapshot.clone());
+        let _ = app.emit_to(
+            EventTarget::webview(label),
+            "browser:state",
+            snapshot.clone(),
+        );
     }
     session::schedule_save(app);
 }
@@ -240,13 +252,19 @@ fn emit_state(app: &AppHandle) {
 /// Coalesce bursts of page-driven changes (a navigation fires URL, title,
 /// loading and history updates back to back) into one emit per frame.
 fn schedule_emit(app: &AppHandle) {
-    if app.state::<Browser>().emit_pending.swap(true, Ordering::AcqRel) {
+    if app
+        .state::<Browser>()
+        .emit_pending
+        .swap(true, Ordering::AcqRel)
+    {
         return;
     }
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(16));
-        app.state::<Browser>().emit_pending.store(false, Ordering::Release);
+        app.state::<Browser>()
+            .emit_pending
+            .store(false, Ordering::Release);
         emit_state(&app);
     });
 }
@@ -267,7 +285,9 @@ pub fn on_native_change(app: &AppHandle, id: u32, native: NativeState) {
         let visit = (!tab.loading).then(|| (tab.url.clone(), tab.title.clone()));
         Some((profile, visit))
     });
-    let Some((profile, visit)) = changed else { return };
+    let Some((profile, visit)) = changed else {
+        return;
+    };
     if let Some((url, title)) = visit {
         crate::history::record(app, id, profile.as_deref(), &url, &title);
     }
@@ -281,7 +301,9 @@ pub fn content_left(app: &AppHandle) -> f64 {
 
 fn content_bounds(app: &AppHandle) -> tauri::Result<Rect> {
     let window = main_window(app)?;
-    let size = window.inner_size()?.to_logical::<f64>(window.scale_factor()?);
+    let size = window
+        .inner_size()?
+        .to_logical::<f64>(window.scale_factor()?);
     let left = content_left(app);
     Ok(Rect {
         position: LogicalPosition::new(left, INSET).into(),
@@ -320,7 +342,10 @@ fn pane_bounds(app: &AppHandle, pane: Pane, ratio: f64) -> tauri::Result<Rect> {
     if pane == Pane::Full {
         return Ok(full);
     }
-    let (position, size) = (full.position.to_logical::<f64>(1.0), full.size.to_logical::<f64>(1.0));
+    let (position, size) = (
+        full.position.to_logical::<f64>(1.0),
+        full.size.to_logical::<f64>(1.0),
+    );
     // The panes share the width minus one gap, as wide as the window inset.
     let room = (size.width - INSET).max(0.0);
     let left = (room * ratio).round();
@@ -346,7 +371,9 @@ fn place(app: &AppHandle, webview: &Webview, pane: Pane, ratio: f64) -> tauri::R
 /// The split's terminal tab, if it has one (it's shown by the shared
 /// terminal view).
 fn split_terminal(app: &AppHandle, split: &Split) -> Option<u32> {
-    [split.left, split.right].into_iter().find(|&id| is_terminal_tab(app, id))
+    [split.left, split.right]
+        .into_iter()
+        .find(|&id| is_terminal_tab(app, id))
 }
 
 /// Apply the current layout to every content view (hidden ones too, so
@@ -362,7 +389,9 @@ fn layout_tabs(app: &AppHandle) -> tauri::Result<()> {
         }
     }
     if let Some(webview) = app.get_webview(TERM_WEBVIEW) {
-        let pane = split.as_ref().and_then(|s| Some(pane_in(Some(s), split_terminal(app, s)?)));
+        let pane = split
+            .as_ref()
+            .and_then(|s| Some(pane_in(Some(s), split_terminal(app, s)?)));
         place(app, &webview, pane.unwrap_or(Pane::Full), ratio)?;
     }
     if exploring(app) {
@@ -393,9 +422,12 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
     };
 
     let window = builder.build()?;
-    let size = window.inner_size()?.to_logical::<f64>(window.scale_factor()?);
+    let size = window
+        .inner_size()?
+        .to_logical::<f64>(window.scale_factor()?);
 
-    let ui = WebviewBuilder::new(UI_WEBVIEW, WebviewUrl::App("index.html".into())).transparent(true);
+    let ui =
+        WebviewBuilder::new(UI_WEBVIEW, WebviewUrl::App("index.html".into())).transparent(true);
     #[cfg(not(target_os = "macos"))]
     let ui = ui.auto_resize();
     let _ui = window.add_child(ui, LogicalPosition::new(0.0, 0.0), size)?;
@@ -429,7 +461,11 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
 /// size (OAuth sign-in, payment flows) get a real window that shares the
 /// opener's configuration, so `window.opener` messaging works. Everything
 /// else opens as a tab.
-pub fn on_new_window(app: &AppHandle, url: Url, features: NewWindowFeatures) -> NewWindowResponse<tauri::Wry> {
+pub fn on_new_window(
+    app: &AppHandle,
+    url: Url,
+    features: NewWindowFeatures,
+) -> NewWindowResponse<tauri::Wry> {
     if features.size().is_some() {
         match open_popup(app, &url, features) {
             Ok(window) => return NewWindowResponse::Create { window },
@@ -451,13 +487,17 @@ fn open_popup(
     static NEXT_POPUP: AtomicU32 = AtomicU32::new(1);
     let label = format!("popup-{}", NEXT_POPUP.fetch_add(1, Ordering::Relaxed));
     let popup_app = app.clone();
-    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External("about:blank".parse().unwrap()))
-        .window_features(features)
-        .title(url.host_str().unwrap_or("Ternt"))
-        .on_document_title_changed(|window, title| {
-            let _ = window.set_title(&title);
-        })
-        .on_new_window(move |url, features| on_new_window(&popup_app, url, features));
+    let builder = WebviewWindowBuilder::new(
+        app,
+        label,
+        WebviewUrl::External("about:blank".parse().unwrap()),
+    )
+    .window_features(features)
+    .title(url.host_str().unwrap_or("Ternt"))
+    .on_document_title_changed(|window, title| {
+        let _ = window.set_title(&title);
+    })
+    .on_new_window(move |url, features| on_new_window(&popup_app, url, features));
     #[cfg(target_os = "macos")]
     let builder = builder.user_agent(USER_AGENT);
     builder.build()
@@ -494,7 +534,9 @@ pub fn profile_bytes(hex: &str) -> Option<[u8; 16]> {
 /// still uses the store, so callers close those first.
 fn remove_profile(app: &AppHandle, profile: String) {
     crate::history::clear(app, Some(&profile));
-    let Some(bytes) = profile_bytes(&profile) else { return };
+    let Some(bytes) = profile_bytes(&profile) else {
+        return;
+    };
     let app = app.clone();
     std::thread::spawn(move || {
         // Let the webview closes queued before this land first.
@@ -598,7 +640,9 @@ fn unload_tab(app: &AppHandle, id: u32) -> tauri::Result<()> {
 /// Open a web tab at the top of Today and show it. Must not be called from
 /// the main thread (it blocks on it).
 pub fn open_tab(app: &AppHandle, url: Url) -> tauri::Result<u32> {
-    let id = with(app, |s| s.add_tab(TabKind::Web, url.to_string(), String::new()));
+    let id = with(app, |s| {
+        s.add_tab(TabKind::Web, url.to_string(), String::new())
+    });
     if let Err(err) = activate(app, id) {
         with(app, |s| s.tabs.retain(|t| t.id != id));
         emit_state(app);
@@ -631,7 +675,8 @@ fn ensure_term_webview(app: &AppHandle) -> tauri::Result<Webview> {
         return Ok(webview);
     }
     let bounds = content_bounds(app)?;
-    let builder = WebviewBuilder::new(TERM_WEBVIEW, WebviewUrl::App("term.html".into())).focused(false);
+    let builder =
+        WebviewBuilder::new(TERM_WEBVIEW, WebviewUrl::App("term.html".into())).focused(false);
     let webview = main_window(app)?.add_child(builder, bounds.position, bounds.size)?;
     #[cfg(target_os = "macos")]
     {
@@ -649,7 +694,9 @@ fn ensure_view(app: &AppHandle, id: u32) -> tauri::Result<Option<Webview>> {
     };
     Ok(Some(match kind {
         TabKind::Web if !loaded => load_tab(app, id)?,
-        TabKind::Web => app.get_webview(&tab_label(id)).map_or_else(|| load_tab(app, id), Ok)?,
+        TabKind::Web => app
+            .get_webview(&tab_label(id))
+            .map_or_else(|| load_tab(app, id), Ok)?,
         TabKind::Terminal => ensure_term_webview(app)?,
     }))
 }
@@ -658,7 +705,10 @@ fn ensure_view(app: &AppHandle, id: u32) -> tauri::Result<Option<Webview>> {
 /// Called after the new ones are shown, so there's no empty frame.
 fn set_shown(app: &AppHandle, views: &[&Webview]) -> tauri::Result<()> {
     let labels: Vec<String> = views.iter().map(|v| v.label().to_string()).collect();
-    let before = std::mem::replace(&mut *app.state::<Browser>().shown.lock().unwrap(), labels.clone());
+    let before = std::mem::replace(
+        &mut *app.state::<Browser>().shown.lock().unwrap(),
+        labels.clone(),
+    );
     for label in before.iter().filter(|l| !labels.contains(l)) {
         if let Some(webview) = app.get_webview(label) {
             webview.hide()?;
@@ -696,7 +746,9 @@ fn activate(app: &AppHandle, id: u32) -> tauri::Result<()> {
     } else {
         next_view.set_focus()?;
     }
-    let shown: Vec<&Webview> = std::iter::once(&next_view).chain(partner_view.as_ref()).collect();
+    let shown: Vec<&Webview> = std::iter::once(&next_view)
+        .chain(partner_view.as_ref())
+        .collect();
     set_shown(app, &shown)?;
     emit_state(app);
     Ok(())
@@ -753,11 +805,19 @@ pub fn close_tab_by_id(app: &AppHandle, id: u32) -> tauri::Result<()> {
             crate::pty::kill(app, id);
             // The shared terminal view stays up only if a terminal is now showing.
             let showing_terminal = with(app, |s| {
-                s.active.is_some_and(|a| s.shown_with(a).iter().any(|&t| s.tab(t).is_some_and(|t| t.kind == TabKind::Terminal)))
+                s.active.is_some_and(|a| {
+                    s.shown_with(a)
+                        .iter()
+                        .any(|&t| s.tab(t).is_some_and(|t| t.kind == TabKind::Terminal))
+                })
             });
             if let Some(webview) = app.get_webview(TERM_WEBVIEW).filter(|_| !showing_terminal) {
                 webview.hide()?;
-                app.state::<Browser>().shown.lock().unwrap().retain(|l| l != TERM_WEBVIEW);
+                app.state::<Browser>()
+                    .shown
+                    .lock()
+                    .unwrap()
+                    .retain(|l| l != TERM_WEBVIEW);
             }
         }
     }
@@ -779,7 +839,9 @@ pub fn clear_today(app: &AppHandle) -> tauri::Result<()> {
         let ids: Vec<u32> = s
             .tabs
             .iter()
-            .filter(|t| t.zone == Zone::Today && t.space == s.active_space && t.kind == TabKind::Web)
+            .filter(|t| {
+                t.zone == Zone::Today && t.space == s.active_space && t.kind == TabKind::Web
+            })
             .map(|t| t.id)
             .collect();
         (ids, s.active)
@@ -810,18 +872,31 @@ pub fn reopen_closed_tab(app: &AppHandle, id: Option<u32>) -> tauri::Result<()> 
 
 pub fn duplicate_tab(app: &AppHandle, id: u32) -> tauri::Result<()> {
     match tab_menu_info(app, id) {
-        Some(TabMenuInfo { kind: TabKind::Web, url, .. }) => match Url::parse(&url) {
+        Some(TabMenuInfo {
+            kind: TabKind::Web,
+            url,
+            ..
+        }) => match Url::parse(&url) {
             Ok(url) => open_tab(app, url).map(|_| ()),
             Err(_) => Ok(()),
         },
-        Some(TabMenuInfo { kind: TabKind::Terminal, .. }) => open_terminal(app).map(|_| ()),
+        Some(TabMenuInfo {
+            kind: TabKind::Terminal,
+            ..
+        }) => open_terminal(app).map(|_| ()),
         None => Ok(()),
     }
 }
 
 /// Move a tab into a zone/folder at a position (sidebar drag and drop, and
 /// the tab context menu). `index: None` appends; Today prepends instead.
-pub fn move_tab_to(app: &AppHandle, id: u32, zone: Zone, folder: Option<u32>, index: Option<usize>) {
+pub fn move_tab_to(
+    app: &AppHandle,
+    id: u32,
+    zone: Zone,
+    folder: Option<u32>,
+    index: Option<usize>,
+) {
     let index = index.unwrap_or(if zone == Zone::Today { 0 } else { usize::MAX });
     let split_before = active_split(app);
     if with(app, |s| s.move_tab(id, zone, folder, index)) {
@@ -837,7 +912,9 @@ pub fn move_tab_to(app: &AppHandle, id: u32, zone: Zone, folder: Option<u32>, in
 
 /// Show `other` beside the active tab (the active tab on the left).
 pub fn split_with(app: &AppHandle, other: u32) -> tauri::Result<()> {
-    let created = with(app, |s| s.active.is_some_and(|active| s.create_split(active, other)));
+    let created = with(app, |s| {
+        s.active.is_some_and(|active| s.create_split(active, other))
+    });
     if created {
         refresh_active(app)?;
     }
@@ -846,7 +923,10 @@ pub fn split_with(app: &AppHandle, other: u32) -> tauri::Result<()> {
 
 /// Open a terminal beside the active web page (⌥⌘\).
 pub fn split_with_new_terminal(app: &AppHandle) -> tauri::Result<()> {
-    let Some(active) = with(app, |s| s.active.filter(|&a| s.tab(a).is_some_and(|t| t.kind == TabKind::Web))) else {
+    let Some(active) = with(app, |s| {
+        s.active
+            .filter(|&a| s.tab(a).is_some_and(|t| t.kind == TabKind::Web))
+    }) else {
         // Nothing to split, or a terminal (one per split): a plain terminal.
         return open_terminal(app).map(|_| ());
     };
@@ -877,7 +957,9 @@ pub fn on_view_focused(app: &AppHandle, tab: Option<u32>, terminal: bool) {
             let split = s.split_of(active)?.clone();
             let partner = split.partner(active)?;
             let target = if terminal {
-                [split.left, split.right].into_iter().find(|&t| s.tab(t).is_some_and(|t| t.kind == TabKind::Terminal))
+                [split.left, split.right]
+                    .into_iter()
+                    .find(|&t| s.tab(t).is_some_and(|t| t.kind == TabKind::Terminal))
             } else {
                 tab
             };
@@ -930,7 +1012,9 @@ pub fn reload_active(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn back_active(app: &AppHandle) -> tauri::Result<()> {
-    let Some(webview) = active_webview(app) else { return Ok(()) };
+    let Some(webview) = active_webview(app) else {
+        return Ok(());
+    };
     #[cfg(target_os = "macos")]
     crate::native::go_back(&webview);
     #[cfg(not(target_os = "macos"))]
@@ -939,7 +1023,9 @@ pub fn back_active(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn forward_active(app: &AppHandle) -> tauri::Result<()> {
-    let Some(webview) = active_webview(app) else { return Ok(()) };
+    let Some(webview) = active_webview(app) else {
+        return Ok(());
+    };
     #[cfg(target_os = "macos")]
     crate::native::go_forward(&webview);
     #[cfg(not(target_os = "macos"))]
@@ -1025,7 +1111,10 @@ pub fn delete_space(app: &AppHandle, id: u32) -> tauri::Result<()> {
             TabKind::Terminal => crate::pty::kill(app, tab.id),
         }
     }
-    if let Some(profile) = space.profile.filter(|p| !with(app, |s| s.profile_in_use(p))) {
+    if let Some(profile) = space
+        .profile
+        .filter(|p| !with(app, |s| s.profile_in_use(p)))
+    {
         remove_profile(app, profile);
     }
     emit_state(app);
@@ -1123,7 +1212,11 @@ pub fn request_rename(app: &AppHandle, kind: &str, id: u32) -> tauri::Result<()>
     if let Some(ui) = app.get_webview(UI_WEBVIEW) {
         ui.set_focus()?;
     }
-    app.emit_to(EventTarget::webview(UI_WEBVIEW), "browser:rename", Rename { kind, id })
+    app.emit_to(
+        EventTarget::webview(UI_WEBVIEW),
+        "browser:rename",
+        Rename { kind, id },
+    )
 }
 
 // --- Folders ----------------------------------------------------------------
@@ -1165,7 +1258,10 @@ fn update_dim(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
     if let Some(ui) = app.get_webview(UI_WEBVIEW) {
         let bounds = content_bounds(app)?;
-        let (position, size) = (bounds.position.to_logical::<f64>(1.0), bounds.size.to_logical::<f64>(1.0));
+        let (position, size) = (
+            bounds.position.to_logical::<f64>(1.0),
+            bounds.size.to_logical::<f64>(1.0),
+        );
         let frame = exploring(app).then_some((position.x, position.y, size.width, size.height));
         crate::native::set_dim(&ui, frame, CONTENT_RADIUS);
     }
@@ -1182,7 +1278,8 @@ pub fn toggle_explore(app: &AppHandle) -> tauri::Result<()> {
         end_explore(app, ExploreEnd::Commit);
         return Ok(());
     }
-    let (origin, origin_space, collapsed) = with(app, |s| (s.active, s.active_space, s.sidebar_collapsed));
+    let (origin, origin_space, collapsed) =
+        with(app, |s| (s.active, s.active_space, s.sidebar_collapsed));
     *app.state::<Browser>().explore.lock().unwrap() = Some(Explore {
         origin,
         origin_space,
@@ -1217,7 +1314,10 @@ pub fn end_explore(app: &AppHandle, end: ExploreEnd) {
                 if with(app, |s| s.space(explore.origin_space).is_some()) {
                     with(app, |s| s.active_space = explore.origin_space);
                 }
-                match explore.origin.filter(|&id| with(app, |s| s.tab(id).is_some())) {
+                match explore
+                    .origin
+                    .filter(|&id| with(app, |s| s.tab(id).is_some()))
+                {
                     Some(id) => activate(app, id)?,
                     None => deactivate(app)?,
                 }
@@ -1289,7 +1389,9 @@ pub async fn new_tab(app: AppHandle, url: String) -> Result<u32, String> {
 #[tauri::command]
 /// `command`, if given, runs in the new terminal's shell.
 pub async fn new_terminal(app: AppHandle, command: Option<String>) -> Result<u32, String> {
-    let command = command.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+    let command = command
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty());
     open_terminal_running(&app, command).map_err(err)
 }
 
@@ -1328,7 +1430,13 @@ pub async fn explore_end(app: AppHandle, open: Option<u32>, cancel: bool) {
 
 /// `index` is the position within the target group after removing the tab.
 #[tauri::command]
-pub async fn move_tab(app: AppHandle, id: u32, zone: Zone, folder: Option<u32>, index: Option<usize>) {
+pub async fn move_tab(
+    app: AppHandle,
+    id: u32,
+    zone: Zone,
+    folder: Option<u32>,
+    index: Option<usize>,
+) {
     move_tab_to(&app, id, zone, folder, index);
 }
 
@@ -1496,7 +1604,10 @@ mod tests {
     fn profile_choices_parse() {
         assert_eq!(ProfileChoice::parse("shared"), Some(ProfileChoice::Shared));
         assert_eq!(ProfileChoice::parse("new"), Some(ProfileChoice::New));
-        assert_eq!(ProfileChoice::parse("space-12"), Some(ProfileChoice::SameAs(12)));
+        assert_eq!(
+            ProfileChoice::parse("space-12"),
+            Some(ProfileChoice::SameAs(12))
+        );
         assert_eq!(ProfileChoice::parse("space-"), None);
         assert_eq!(ProfileChoice::parse("space-x"), None);
         assert_eq!(ProfileChoice::parse(""), None);

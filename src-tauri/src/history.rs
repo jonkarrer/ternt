@@ -53,7 +53,14 @@ pub struct History {
 
 impl History {
     /// Note that `tab` is showing `url`. Returns whether anything changed.
-    pub fn record(&mut self, tab: u32, profile: Option<&str>, url: &str, title: &str, now: u64) -> bool {
+    pub fn record(
+        &mut self,
+        tab: u32,
+        profile: Option<&str>,
+        url: &str,
+        title: &str,
+        now: u64,
+    ) -> bool {
         if !(url.starts_with("https://") || url.starts_with("http://")) {
             return false;
         }
@@ -61,7 +68,10 @@ impl History {
         if new_visit {
             self.last_url.insert(tab, url.to_string());
         }
-        let found = self.entries.iter_mut().find(|e| e.url == url && e.profile.as_deref() == profile);
+        let found = self
+            .entries
+            .iter_mut()
+            .find(|e| e.url == url && e.profile.as_deref() == profile);
         match found {
             Some(entry) => {
                 let retitled = !title.is_empty() && entry.title != title;
@@ -92,7 +102,8 @@ impl History {
 
     /// Drop the least useful entries, keeping 90% of the cap.
     fn prune(&mut self, now: u64) {
-        self.entries.sort_by(|a, b| frecency(b, now).total_cmp(&frecency(a, now)));
+        self.entries
+            .sort_by(|a, b| frecency(b, now).total_cmp(&frecency(a, now)));
         self.entries.truncate(MAX_ENTRIES * 9 / 10);
     }
 
@@ -121,7 +132,10 @@ impl History {
                 (relevance > 0.0).then(|| (relevance * (1.0 + frecency(e, now).ln_1p()), e))
             })
             .collect();
-        scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.last_visit.cmp(&a.1.last_visit)));
+        scored.sort_by(|a, b| {
+            b.0.total_cmp(&a.0)
+                .then(b.1.last_visit.cmp(&a.1.last_visit))
+        });
         scored
             .into_iter()
             .take(limit)
@@ -144,7 +158,10 @@ fn bare(url: &str) -> &str {
 fn relevance(entry: &Entry, query: &str) -> f64 {
     let url = bare(&entry.url).to_lowercase();
     let title = entry.title.to_lowercase();
-    if !query.split_whitespace().all(|w| url.contains(w) || title.contains(w)) {
+    if !query
+        .split_whitespace()
+        .all(|w| url.contains(w) || title.contains(w))
+    {
         return 0.0;
     }
     if url.starts_with(query) {
@@ -163,7 +180,9 @@ fn frecency(entry: &Entry, now: u64) -> f64 {
 }
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 // --- App state and persistence ----------------------------------------------
@@ -184,7 +203,9 @@ fn path(app: &AppHandle) -> Option<PathBuf> {
 
 /// Read the saved history. Called at startup, before any page loads.
 pub fn load(app: &AppHandle) {
-    let Some(data) = path(app).and_then(|p| std::fs::read(p).ok()) else { return };
+    let Some(data) = path(app).and_then(|p| std::fs::read(p).ok()) else {
+        return;
+    };
     match serde_json::from_slice::<History>(&data) {
         Ok(saved) => *app.state::<Store>().history.lock().unwrap() = saved,
         Err(err) => eprintln!("ignoring unreadable history: {err}"),
@@ -212,19 +233,30 @@ pub fn save_now(app: &AppHandle) {
 }
 
 fn schedule_save(app: &AppHandle) {
-    if app.state::<Store>().save_pending.swap(true, Ordering::AcqRel) {
+    if app
+        .state::<Store>()
+        .save_pending
+        .swap(true, Ordering::AcqRel)
+    {
         return;
     }
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(SAVE_DELAY);
-        app.state::<Store>().save_pending.store(false, Ordering::Release);
+        app.state::<Store>()
+            .save_pending
+            .store(false, Ordering::Release);
         save_now(&app);
     });
 }
 
 pub fn record(app: &AppHandle, tab: u32, profile: Option<&str>, url: &str, title: &str) {
-    let changed = app.state::<Store>().history.lock().unwrap().record(tab, profile, url, title, now());
+    let changed =
+        app.state::<Store>()
+            .history
+            .lock()
+            .unwrap()
+            .record(tab, profile, url, title, now());
     if changed {
         schedule_save(app);
     }
@@ -274,14 +306,29 @@ mod tests {
     fn same_page_in_same_tab_is_one_visit() {
         let mut h = History::default();
         visit(&mut h, 1, "https://a.com/", "", 0);
-        assert!(visit(&mut h, 1, "https://a.com/", "A title", 0), "late title is an update");
-        assert!(!visit(&mut h, 1, "https://a.com/", "A title", 0), "nothing new");
-        assert_eq!((h.entries[0].visits, h.entries[0].title.as_str()), (1, "A title"));
+        assert!(
+            visit(&mut h, 1, "https://a.com/", "A title", 0),
+            "late title is an update"
+        );
+        assert!(
+            !visit(&mut h, 1, "https://a.com/", "A title", 0),
+            "nothing new"
+        );
+        assert_eq!(
+            (h.entries[0].visits, h.entries[0].title.as_str()),
+            (1, "A title")
+        );
         visit(&mut h, 1, "https://b.com/", "", 0);
         visit(&mut h, 1, "https://a.com/", "", 0);
         visit(&mut h, 2, "https://a.com/", "", 0);
-        assert_eq!(h.entries[0].visits, 3, "returning, or another tab, is a new visit");
-        assert_eq!(h.entries[0].title, "A title", "an empty title doesn't erase one");
+        assert_eq!(
+            h.entries[0].visits, 3,
+            "returning, or another tab, is a new visit"
+        );
+        assert_eq!(
+            h.entries[0].title, "A title",
+            "an empty title doesn't erase one"
+        );
     }
 
     #[test]
@@ -292,7 +339,11 @@ mod tests {
         visit(&mut h, 3, "https://www.github.com/", "GitHub", 0);
         assert_eq!(
             urls(h.search(None, "github", NOW, 10)),
-            ["https://www.github.com/", "https://news.site/", "https://example.com/github-notes"]
+            [
+                "https://www.github.com/",
+                "https://news.site/",
+                "https://example.com/github-notes"
+            ]
         );
         assert!(h.search(None, "", NOW, 10).is_empty());
         assert!(h.search(None, "nothing", NOW, 10).is_empty());
@@ -303,7 +354,10 @@ mod tests {
         let mut h = History::default();
         visit(&mut h, 1, "https://docs.rs/tauri", "tauri - Rust", 0);
         visit(&mut h, 2, "https://docs.rs/serde", "serde - Rust", 0);
-        assert_eq!(urls(h.search(None, "rust tauri", NOW, 10)), ["https://docs.rs/tauri"]);
+        assert_eq!(
+            urls(h.search(None, "rust tauri", NOW, 10)),
+            ["https://docs.rs/tauri"]
+        );
     }
 
     #[test]
@@ -316,16 +370,29 @@ mod tests {
         visit(&mut h, 9, "https://a.com/once", "page", 0);
         assert_eq!(
             urls(h.search(None, "page", NOW, 10)),
-            ["https://a.com/often", "https://a.com/once", "https://a.com/old"]
+            [
+                "https://a.com/often",
+                "https://a.com/once",
+                "https://a.com/old"
+            ]
         );
     }
 
     #[test]
     fn profiles_are_separate() {
         let mut h = History::default();
-        h.record(1, Some("work"), "https://mail.google.com/", "Work mail", NOW);
+        h.record(
+            1,
+            Some("work"),
+            "https://mail.google.com/",
+            "Work mail",
+            NOW,
+        );
         h.record(2, None, "https://mail.google.com/", "Personal mail", NOW);
-        assert_eq!(h.search(Some("work"), "mail", NOW, 10)[0].title, "Work mail");
+        assert_eq!(
+            h.search(Some("work"), "mail", NOW, 10)[0].title,
+            "Work mail"
+        );
         assert_eq!(h.search(None, "mail", NOW, 10)[0].title, "Personal mail");
         h.clear(Some("work"));
         assert!(h.search(Some("work"), "mail", NOW, 10).is_empty());
@@ -341,7 +408,13 @@ mod tests {
             h.record(1, None, "https://other.com/", "", NOW);
         }
         for i in 0..MAX_ENTRIES {
-            h.record(2, None, &format!("https://x.com/{i}"), "", NOW - 30 * 86_400);
+            h.record(
+                2,
+                None,
+                &format!("https://x.com/{i}"),
+                "",
+                NOW - 30 * 86_400,
+            );
         }
         assert!(h.entries.len() <= MAX_ENTRIES);
         assert!(h.entries.iter().any(|e| e.url == "https://keep.com/"));

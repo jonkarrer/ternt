@@ -29,12 +29,21 @@ pub enum Status {
     Idle,
     /// A manual check found nothing (shown briefly).
     UpToDate,
-    Available { version: String },
+    Available {
+        version: String,
+    },
     /// `progress` is 0–1, or `None` when the size is unknown.
-    Downloading { version: String, progress: Option<f64> },
+    Downloading {
+        version: String,
+        progress: Option<f64>,
+    },
     /// Swapping the bundle; the app relaunches next.
-    Installing { version: String },
-    Failed { message: String },
+    Installing {
+        version: String,
+    },
+    Failed {
+        message: String,
+    },
 }
 
 #[derive(Default)]
@@ -52,7 +61,12 @@ fn set_status(app: &AppHandle, status: Status) {
 }
 
 fn status(app: &AppHandle) -> Status {
-    app.state::<Updates>().status.lock().unwrap().clone().unwrap_or(Status::Idle)
+    app.state::<Updates>()
+        .status
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or(Status::Idle)
 }
 
 /// Check in the background now and then periodically. Debug builds only
@@ -75,7 +89,10 @@ pub fn start(app: &AppHandle) {
 
 fn updater(app: &AppHandle) -> tauri_plugin_updater::Result<tauri_plugin_updater::Updater> {
     let mut builder = app.updater_builder();
-    if let Some(url) = std::env::var("TERNT_UPDATE_URL").ok().and_then(|u| Url::parse(&u).ok()) {
+    if let Some(url) = std::env::var("TERNT_UPDATE_URL")
+        .ok()
+        .and_then(|u| Url::parse(&u).ok())
+    {
         builder = builder.endpoints(vec![url])?;
     }
     builder.build()
@@ -84,7 +101,10 @@ fn updater(app: &AppHandle) -> tauri_plugin_updater::Result<tauri_plugin_updater
 /// Look for an update. `manual` checks report "up to date" too.
 pub async fn check(app: &AppHandle, manual: bool) -> Result<(), String> {
     // Don't disturb an install in progress.
-    if matches!(status(app), Status::Downloading { .. } | Status::Installing { .. }) {
+    if matches!(
+        status(app),
+        Status::Downloading { .. } | Status::Installing { .. }
+    ) {
         return Ok(());
     }
     let found = updater(app).map_err(|e| e.to_string())?.check().await;
@@ -105,7 +125,12 @@ pub async fn check(app: &AppHandle, manual: bool) -> Result<(), String> {
             });
         }
         Ok(None) => {}
-        Err(err) if manual => set_status(app, Status::Failed { message: err.to_string() }),
+        Err(err) if manual => set_status(
+            app,
+            Status::Failed {
+                message: err.to_string(),
+            },
+        ),
         Err(err) => return Err(err.to_string()),
     }
     Ok(())
@@ -117,7 +142,13 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
         return Err("no update to install".into());
     };
     let version = update.version.clone();
-    set_status(app, Status::Downloading { version: version.clone(), progress: Some(0.0) });
+    set_status(
+        app,
+        Status::Downloading {
+            version: version.clone(),
+            progress: Some(0.0),
+        },
+    );
 
     let mut received = 0u64;
     let mut last_percent = 0u64;
@@ -130,16 +161,34 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
                 let percent = progress.map_or(received / 1_000_000, |p| (p * 100.0) as u64);
                 if percent != last_percent {
                     last_percent = percent;
-                    set_status(app, Status::Downloading { version: version.clone(), progress });
+                    set_status(
+                        app,
+                        Status::Downloading {
+                            version: version.clone(),
+                            progress,
+                        },
+                    );
                 }
             },
-            || set_status(app, Status::Installing { version: version.clone() }),
+            || {
+                set_status(
+                    app,
+                    Status::Installing {
+                        version: version.clone(),
+                    },
+                )
+            },
         )
         .await;
     if let Err(err) = result {
         // Keep the update so the button can retry.
         *app.state::<Updates>().pending.lock().unwrap() = Some(update);
-        set_status(app, Status::Failed { message: err.to_string() });
+        set_status(
+            app,
+            Status::Failed {
+                message: err.to_string(),
+            },
+        );
         return Err(err.to_string());
     }
 

@@ -19,16 +19,22 @@ pub fn open(app: &AppHandle) -> tauri::Result<()> {
         }
         return window.set_focus();
     }
-    let builder = WebviewWindowBuilder::new(app, SETTINGS_WINDOW, WebviewUrl::App("settings.html".into()))
-        .title("Settings")
-        .inner_size(720.0, 540.0)
-        .resizable(false)
-        .minimizable(false)
-        .maximizable(false)
-        .center();
+    let builder = WebviewWindowBuilder::new(
+        app,
+        SETTINGS_WINDOW,
+        WebviewUrl::App("settings.html".into()),
+    )
+    .title("Settings")
+    .inner_size(720.0, 540.0)
+    .resizable(false)
+    .minimizable(false)
+    .maximizable(false)
+    .center();
     // The tab bar sits in the title bar, as in Arc and macOS settings.
     #[cfg(target_os = "macos")]
-    let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
     builder.build()?;
     Ok(())
 }
@@ -51,7 +57,10 @@ pub fn close_if_focused(app: &AppHandle) -> bool {
 pub async fn reveal_data_dir(app: AppHandle) -> Result<(), String> {
     let dir = crate::session::data_dir(&app).ok_or("no data folder")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    std::process::Command::new("open").arg(&dir).spawn().map_err(|e| e.to_string())?;
+    std::process::Command::new("open")
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -69,12 +78,18 @@ pub fn default_browser(app: AppHandle) -> DefaultBrowser {
     #[cfg(target_os = "macos")]
     {
         let is_default = crate::native::is_default_browser(&app.config().identifier);
-        DefaultBrowser { is_default, can_ask: !is_default }
+        DefaultBrowser {
+            is_default,
+            can_ask: !is_default,
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = app;
-        DefaultBrowser { is_default: false, can_ask: false }
+        DefaultBrowser {
+            is_default: false,
+            can_ask: false,
+        }
     }
 }
 

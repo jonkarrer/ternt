@@ -55,7 +55,8 @@ pub fn run() {
                 .skip(1)
                 .filter_map(|arg| tauri::Url::parse(&arg).ok())
                 .collect();
-            if urls.is_empty() && !first_launch && saved.as_ref().is_some_and(|s| s.tabs.is_empty()) {
+            if urls.is_empty() && !first_launch && saved.as_ref().is_some_and(|s| s.tabs.is_empty())
+            {
                 palette::open(app.handle(), palette::Mode::NewTab)?;
             }
             let handle = app.handle().clone();

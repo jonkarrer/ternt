@@ -17,7 +17,8 @@ use std::{
 
 use serde::Serialize;
 use tauri::{
-    AppHandle, Emitter, EventTarget, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl,
+    AppHandle, Emitter, EventTarget, LogicalPosition, LogicalSize, Manager, Url, Webview,
+    WebviewUrl,
     webview::{PageLoadEvent, WebviewBuilder},
     window::WindowBuilder,
 };
@@ -96,17 +97,27 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
         .min_inner_size(420.0, 300.0)
         .center();
     #[cfg(target_os = "macos")]
-    let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
     let window = builder.build()?;
-    let size = window.inner_size()?.to_logical::<f64>(window.scale_factor()?);
+    let size = window
+        .inner_size()?
+        .to_logical::<f64>(window.scale_factor()?);
 
     let bar = WebviewBuilder::new(bar_label(&label), WebviewUrl::App("little.html".into()));
-    window.add_child(bar, LogicalPosition::new(0.0, 0.0), LogicalSize::new(size.width, BAR_HEIGHT))?;
+    window.add_child(
+        bar,
+        LogicalPosition::new(0.0, 0.0),
+        LogicalSize::new(size.width, BAR_HEIGHT),
+    )?;
 
     let popup_app = app.clone();
     let page = WebviewBuilder::new(page_label(&label), WebviewUrl::External(url))
         .zoom_hotkeys_enabled(true)
-        .on_new_window(move |url, features| crate::browser::on_new_window(&popup_app, url, features))
+        .on_new_window(move |url, features| {
+            crate::browser::on_new_window(&popup_app, url, features)
+        })
         .on_page_load(|webview, payload| {
             let loading = matches!(payload.event(), PageLoadEvent::Started);
             let url = payload.url().to_string();
@@ -146,7 +157,11 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
             std::thread::spawn(move || layout(&app, &label));
         }
         tauri::WindowEvent::Destroyed => {
-            app.state::<Littles>().0.lock().unwrap().remove(&window_label);
+            app.state::<Littles>()
+                .0
+                .lock()
+                .unwrap()
+                .remove(&window_label);
         }
         _ => {}
     });
@@ -155,8 +170,12 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
 
 /// Keep the bar on top and the page filling the rest.
 fn layout(app: &AppHandle, label: &str) {
-    let Some(window) = app.get_window(label) else { return };
-    let Ok(size) = window.inner_size() else { return };
+    let Some(window) = app.get_window(label) else {
+        return;
+    };
+    let Ok(size) = window.inner_size() else {
+        return;
+    };
     let size = size.to_logical::<f64>(window.scale_factor().unwrap_or(1.0));
     if let Some(bar) = app.get_webview(&bar_label(label)) {
         let _ = bar.set_bounds(tauri::Rect {
@@ -178,11 +197,17 @@ fn update(app: &AppHandle, webview: &str, change: impl FnOnce(&mut LittleState))
     let littles = app.state::<Littles>();
     let state = {
         let mut littles = littles.0.lock().unwrap();
-        let Some(state) = littles.get_mut(&window) else { return };
+        let Some(state) = littles.get_mut(&window) else {
+            return;
+        };
         change(state);
         state.clone()
     };
-    let _ = app.emit_to(EventTarget::webview(bar_label(&window)), "little:state", state);
+    let _ = app.emit_to(
+        EventTarget::webview(bar_label(&window)),
+        "little:state",
+        state,
+    );
 }
 
 /// ⌘W closes a Little Ternt window when it's in front. Returns whether it did.
@@ -200,7 +225,14 @@ pub fn close_if_focused(app: &AppHandle) -> bool {
 /// Move the page into a tab of the active space (it reloads there) and
 /// close the window.
 pub fn open_in_ternt(app: &AppHandle, window: &str) -> tauri::Result<()> {
-    let Some(url) = app.state::<Littles>().0.lock().unwrap().get(window).map(|s| s.url.clone()) else {
+    let Some(url) = app
+        .state::<Littles>()
+        .0
+        .lock()
+        .unwrap()
+        .get(window)
+        .map(|s| s.url.clone())
+    else {
         return Ok(());
     };
     if let Some(w) = app.get_window(window) {
@@ -216,7 +248,12 @@ pub fn open_in_ternt(app: &AppHandle, window: &str) -> tauri::Result<()> {
 
 #[tauri::command]
 pub fn little_state(app: AppHandle, webview: Webview) -> Option<LittleState> {
-    app.state::<Littles>().0.lock().unwrap().get(window_of(webview.label())).cloned()
+    app.state::<Littles>()
+        .0
+        .lock()
+        .unwrap()
+        .get(window_of(webview.label()))
+        .cloned()
 }
 
 #[tauri::command]

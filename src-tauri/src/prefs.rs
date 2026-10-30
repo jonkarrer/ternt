@@ -33,7 +33,10 @@ const MAX_ACCOUNT_FIELD: usize = 200;
 impl Account {
     fn tidy(self) -> Self {
         let tidy = |s: String| s.trim().chars().take(MAX_ACCOUNT_FIELD).collect();
-        Self { name: tidy(self.name), email: tidy(self.email) }
+        Self {
+            name: tidy(self.name),
+            email: tidy(self.email),
+        }
     }
 }
 
@@ -56,7 +59,9 @@ fn path(app: &AppHandle) -> Option<PathBuf> {
 }
 
 pub fn load(app: &AppHandle) {
-    let Some(data) = path(app).and_then(|p| std::fs::read(p).ok()) else { return };
+    let Some(data) = path(app).and_then(|p| std::fs::read(p).ok()) else {
+        return;
+    };
     match serde_json::from_slice(&data) {
         Ok(prefs) => *app.state::<Store>().0.lock().unwrap() = prefs,
         Err(err) => eprintln!("ignoring unreadable prefs: {err}"),
@@ -92,7 +97,11 @@ pub fn set_prefs(app: AppHandle, mut prefs: Prefs) {
     prefs.account = prefs.account.tidy();
     *app.state::<Store>().0.lock().unwrap() = prefs.clone();
     save(&app, &prefs);
-    let _ = app.emit_to(EventTarget::webview(crate::settings::SETTINGS_WINDOW), "prefs:changed", prefs);
+    let _ = app.emit_to(
+        EventTarget::webview(crate::settings::SETTINGS_WINDOW),
+        "prefs:changed",
+        prefs,
+    );
 }
 
 #[cfg(test)]
@@ -110,7 +119,11 @@ mod tests {
 
     #[test]
     fn account_fields_are_trimmed_and_capped() {
-        let account = Account { name: "  Jo  ".into(), email: "x".repeat(500) }.tidy();
+        let account = Account {
+            name: "  Jo  ".into(),
+            email: "x".repeat(500),
+        }
+        .tidy();
         assert_eq!(account.name, "Jo");
         assert_eq!(account.email.len(), MAX_ACCOUNT_FIELD);
     }

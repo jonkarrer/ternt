@@ -76,7 +76,6 @@ impl Tab {
     pub fn is_kept(&self) -> bool {
         self.zone != Zone::Today
     }
-
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -285,7 +284,11 @@ impl State {
     }
 
     pub fn effective_sidebar_width(&self) -> f64 {
-        if self.sidebar_collapsed { 0.0 } else { self.sidebar_width }
+        if self.sidebar_collapsed {
+            0.0
+        } else {
+            self.sidebar_width
+        }
     }
 
     /// A space's data store: `Some(id)` for a separate profile, `None` for
@@ -301,7 +304,9 @@ impl State {
 
     /// Whether any space still uses a profile (its data must be kept).
     pub fn profile_in_use(&self, profile: &str) -> bool {
-        self.spaces.iter().any(|s| s.profile.as_deref() == Some(profile))
+        self.spaces
+            .iter()
+            .any(|s| s.profile.as_deref() == Some(profile))
     }
 
     /// Whether `tab` belongs to the group `(zone, space, folder)`. Favorites
@@ -310,7 +315,8 @@ impl State {
         tab.zone == zone
             && tab.folder == folder
             && if zone == Zone::Favorite {
-                self.space(tab.space).is_some() && self.profile_of(tab.space) == self.profile_of(space)
+                self.space(tab.space).is_some()
+                    && self.profile_of(tab.space) == self.profile_of(space)
             } else {
                 tab.space == space
             }
@@ -356,7 +362,12 @@ impl State {
         let folder = folder.filter(|f| {
             zone == Zone::Pinned && self.folders.iter().any(|x| x.id == *f && x.space == space)
         });
-        let before = (self.tabs[from].zone, self.tabs[from].space, self.tabs[from].folder, from);
+        let before = (
+            self.tabs[from].zone,
+            self.tabs[from].space,
+            self.tabs[from].folder,
+            from,
+        );
 
         let mut tab = self.tabs.remove(from);
         tab.zone = zone;
@@ -408,7 +419,10 @@ impl State {
     pub fn neighbor(&self, id: u32) -> Option<u32> {
         let order = self.visible_order(self.active_space);
         let index = order.iter().position(|&t| t == id)?;
-        order.get(index + 1).or_else(|| index.checked_sub(1).and_then(|i| order.get(i))).copied()
+        order
+            .get(index + 1)
+            .or_else(|| index.checked_sub(1).and_then(|i| order.get(i)))
+            .copied()
     }
 
     /// Remove a Today tab (recording it for "reopen"). Kept tabs are left in
@@ -494,7 +508,11 @@ impl State {
             self.move_tab(right, zone, folder, index);
             self.active_space = active;
         }
-        self.splits.push(Split { left, right, ratio: 0.5 });
+        self.splits.push(Split {
+            left,
+            right,
+            ratio: 0.5,
+        });
         true
     }
 
@@ -533,7 +551,11 @@ impl State {
             };
             l.space == r.space && l.zone != Zone::Favorite && r.zone != Zone::Favorite
         };
-        let keep: Vec<bool> = self.splits.iter().map(|split| together(self, split)).collect();
+        let keep: Vec<bool> = self
+            .splits
+            .iter()
+            .map(|split| together(self, split))
+            .collect();
         let mut keep = keep.into_iter();
         self.splits.retain(|_| keep.next().unwrap_or(false));
     }
@@ -545,11 +567,31 @@ impl State {
         // The first color and icon no space has yet, else the next in turn.
         let n = self.spaces.len();
         let fresh = |options: &[&str], used: Vec<&str>| {
-            options.iter().find(|o| !used.contains(o)).copied().unwrap_or(options[n % options.len()]).to_string()
+            options
+                .iter()
+                .find(|o| !used.contains(o))
+                .copied()
+                .unwrap_or(options[n % options.len()])
+                .to_string()
         };
-        let color = fresh(&SPACE_COLORS, self.spaces.iter().map(|s| s.color.as_str()).collect());
-        let icon = fresh(&DEFAULT_SPACE_ICONS, self.spaces.iter().filter_map(|s| s.icon.as_deref()).collect());
-        self.spaces.push(Space { id, name: format!("Space {}", n + 1), color, profile, icon: Some(icon) });
+        let color = fresh(
+            &SPACE_COLORS,
+            self.spaces.iter().map(|s| s.color.as_str()).collect(),
+        );
+        let icon = fresh(
+            &DEFAULT_SPACE_ICONS,
+            self.spaces
+                .iter()
+                .filter_map(|s| s.icon.as_deref())
+                .collect(),
+        );
+        self.spaces.push(Space {
+            id,
+            name: format!("Space {}", n + 1),
+            color,
+            profile,
+            icon: Some(icon),
+        });
         id
     }
 
@@ -560,7 +602,9 @@ impl State {
         if icon.is_some_and(|i| i.len() > MAX_ICON_BYTES) {
             return false;
         }
-        let Some(space) = self.space_mut(id) else { return false };
+        let Some(space) = self.space_mut(id) else {
+            return false;
+        };
         let icon = icon.map(String::from);
         if space.icon == icon {
             return false;
@@ -579,7 +623,12 @@ impl State {
             .get(&space)
             .copied()
             .filter(|id| order.contains(id))
-            .or_else(|| order.iter().copied().find(|id| self.tab(*id).is_some_and(|t| t.zone != Zone::Favorite)))
+            .or_else(|| {
+                order
+                    .iter()
+                    .copied()
+                    .find(|id| self.tab(*id).is_some_and(|t| t.zone != Zone::Favorite))
+            })
     }
 
     /// The space `delta` positions from the active one, wrapping.
@@ -598,7 +647,11 @@ impl State {
         }
         let index = self.spaces.iter().position(|s| s.id == id)?;
         let space = self.spaces.remove(index);
-        let heir = self.spaces.iter().find(|s| s.profile == space.profile).map(|s| s.id);
+        let heir = self
+            .spaces
+            .iter()
+            .find(|s| s.profile == space.profile)
+            .map(|s| s.id);
         let (removed, kept): (Vec<Tab>, Vec<Tab>) = std::mem::take(&mut self.tabs)
             .into_iter()
             .map(|mut t| {
@@ -619,13 +672,22 @@ impl State {
     /// Point a space at a profile. Returns the old profile and the loaded
     /// tabs that must reload under the new one (its favorites included: they
     /// follow their space), or `None` if nothing changed.
-    pub fn set_space_profile(&mut self, id: u32, profile: Option<String>) -> Option<(Option<String>, Vec<u32>)> {
+    pub fn set_space_profile(
+        &mut self,
+        id: u32,
+        profile: Option<String>,
+    ) -> Option<(Option<String>, Vec<u32>)> {
         let space = self.space_mut(id)?;
         if space.profile == profile {
             return None;
         }
         let old = std::mem::replace(&mut space.profile, profile);
-        let affected = self.tabs.iter().filter(|t| t.loaded && t.space == id).map(|t| t.id).collect();
+        let affected = self
+            .tabs
+            .iter()
+            .filter(|t| t.loaded && t.space == id)
+            .map(|t| t.id)
+            .collect();
         Some((old, affected))
     }
 
@@ -659,7 +721,11 @@ impl State {
         }
         for (group, names) in groups.iter_mut().zip(space_names).skip(1) {
             let id = group.profile.as_deref().unwrap_or_default();
-            group.name = self.profile_names.get(id).cloned().unwrap_or_else(|| names.join(", "));
+            group.name = self
+                .profile_names
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| names.join(", "));
         }
         groups
     }
@@ -675,7 +741,10 @@ impl State {
         if name.is_empty() {
             self.profile_names.remove(profile).is_some()
         } else {
-            self.profile_names.insert(profile.into(), name.into()).as_deref() != Some(name)
+            self.profile_names
+                .insert(profile.into(), name.into())
+                .as_deref()
+                != Some(name)
         }
     }
 
@@ -742,13 +811,21 @@ impl State {
             .map(|t| {
                 let id = state.next_tab_id;
                 state.next_tab_id += 1;
-                let space = t.space.filter(|s| state.space(*s).is_some()).unwrap_or(first_space);
-                let mut zone = t.zone.unwrap_or(if t.pinned { Zone::Favorite } else { Zone::Today });
+                let space = t
+                    .space
+                    .filter(|s| state.space(*s).is_some())
+                    .unwrap_or(first_space);
+                let mut zone = t.zone.unwrap_or(if t.pinned {
+                    Zone::Favorite
+                } else {
+                    Zone::Today
+                });
                 if t.kind == TabKind::Terminal {
                     zone = Zone::Today;
                 }
                 let folder = t.folder.filter(|f| {
-                    zone == Zone::Pinned && state.folders.iter().any(|x| x.id == *f && x.space == space)
+                    zone == Zone::Pinned
+                        && state.folders.iter().any(|x| x.id == *f && x.space == space)
                 });
                 let mut tab = Tab::new(id, t.kind, space, t.url, t.title);
                 tab.zone = zone;
@@ -871,7 +948,9 @@ mod tests {
     }
 
     fn titles(state: &State, ids: &[u32]) -> Vec<String> {
-        ids.iter().map(|id| state.tab(*id).unwrap().title.clone()).collect()
+        ids.iter()
+            .map(|id| state.tab(*id).unwrap().title.clone())
+            .collect()
     }
 
     #[test]
@@ -907,7 +986,10 @@ mod tests {
         assert_eq!(titles(&s, &s.visible_order(1)), ["b", "a", "c"]);
         assert!(s.move_tab(a, Zone::Pinned, None, 0));
         assert_eq!(titles(&s, &s.visible_order(1)), ["a", "b", "c"]);
-        assert!(!s.move_tab(a, Zone::Pinned, None, 0), "no-op move reports no change");
+        assert!(
+            !s.move_tab(a, Zone::Pinned, None, 0),
+            "no-op move reports no change"
+        );
     }
 
     #[test]
@@ -950,7 +1032,10 @@ mod tests {
         s.tab_mut(mail).unwrap().loaded = true;
         let (old, affected) = s.set_space_profile(work, Some("w".into())).unwrap();
         assert_eq!((old, affected), (None, vec![mail]));
-        assert!(s.set_space_profile(work, Some("w".into())).is_none(), "no-op");
+        assert!(
+            s.set_space_profile(work, Some("w".into())).is_none(),
+            "no-op"
+        );
         assert!(!s.visible_order(1).contains(&mail));
         assert!(s.profile_in_use("w"));
     }
@@ -968,9 +1053,17 @@ mod tests {
             id
         });
         s.remove_space(work).unwrap();
-        assert_eq!(s.tab(a).unwrap().space, work2, "kept by the space sharing the profile");
+        assert_eq!(
+            s.tab(a).unwrap().space,
+            work2,
+            "kept by the space sharing the profile"
+        );
         let (removed, space) = s.remove_space(solo).unwrap();
-        assert_eq!(removed.iter().map(|t| t.id).collect::<Vec<_>>(), [b], "last of its profile: removed");
+        assert_eq!(
+            removed.iter().map(|t| t.id).collect::<Vec<_>>(),
+            [b],
+            "last of its profile: removed"
+        );
         assert!(!s.profile_in_use(space.profile.as_deref().unwrap()));
     }
 
@@ -1035,7 +1128,10 @@ mod tests {
         assert_eq!(removed.iter().map(|t| t.id).collect::<Vec<_>>(), [w]);
         assert!(s.tab(fav).is_some());
         assert!(s.folders.is_empty());
-        assert!(s.remove_space(1).is_none(), "the last space can't be removed");
+        assert!(
+            s.remove_space(1).is_none(),
+            "the last space can't be removed"
+        );
     }
 
     #[test]
@@ -1066,7 +1162,10 @@ mod tests {
         assert_eq!(r.spaces.len(), 2);
         assert_eq!(r.active_space, work);
         let rw = r.tabs.iter().find(|t| t.title == "w").unwrap();
-        assert_eq!((rw.zone, rw.space, rw.folder), (Zone::Pinned, work, Some(f)));
+        assert_eq!(
+            (rw.zone, rw.space, rw.folder),
+            (Zone::Pinned, work, Some(f))
+        );
         assert_eq!(r.active, Some(rw.id));
         assert!(r.tabs.iter().all(|t| !t.loaded));
         let ra = r.tabs.iter().find(|t| t.title == "a").unwrap();
@@ -1096,13 +1195,20 @@ mod tests {
         s.space_mut(clients).unwrap().name = "Clients".into();
         let solo = s.add_space(Some("s".into()));
         s.space_mut(solo).unwrap().name = "Solo".into();
-        let groups: Vec<(String, String, Vec<u32>)> =
-            s.profile_groups().into_iter().map(|g| (g.choice, g.name, g.spaces)).collect();
+        let groups: Vec<(String, String, Vec<u32>)> = s
+            .profile_groups()
+            .into_iter()
+            .map(|g| (g.choice, g.name, g.spaces))
+            .collect();
         assert_eq!(
             groups,
             [
                 ("shared".into(), "Default".into(), vec![1]),
-                (format!("space-{work}"), "Work, Clients".into(), vec![work, clients]),
+                (
+                    format!("space-{work}"),
+                    "Work, Clients".into(),
+                    vec![work, clients]
+                ),
                 (format!("space-{solo}"), "Solo".into(), vec![solo]),
             ]
         );
@@ -1115,17 +1221,30 @@ mod tests {
     #[test]
     fn space_icons_are_one_emoji_and_saved() {
         let mut s = State::default();
-        assert_eq!(s.space(1).unwrap().icon.as_deref(), Some("sym:home"), "Home starts with a symbol");
+        assert_eq!(
+            s.space(1).unwrap().icon.as_deref(),
+            Some("sym:home"),
+            "Home starts with a symbol"
+        );
         let second = s.add_space(None);
-        assert_eq!(s.space(second).unwrap().icon.as_deref(), Some("sym:briefcase"), "new spaces get the next one");
+        assert_eq!(
+            s.space(second).unwrap().icon.as_deref(),
+            Some("sym:briefcase"),
+            "new spaces get the next one"
+        );
         assert!(s.set_space_icon(1, Some(" 🏠 ")));
         assert_eq!(s.space(1).unwrap().icon.as_deref(), Some("🏠"));
         assert!(!s.set_space_icon(1, Some("🏠")), "same icon: no change");
-        assert!(s.set_space_icon(1, Some("👩🏽‍💻")), "ZWJ sequences with skin tones fit");
+        assert!(
+            s.set_space_icon(1, Some("👩🏽‍💻")),
+            "ZWJ sequences with skin tones fit"
+        );
         assert!(!s.set_space_icon(1, Some(&"x".repeat(MAX_ICON_BYTES + 1))));
         assert!(!s.set_space_icon(99, Some("🏠")), "no such space");
 
-        let r = State::restore(serde_json::from_str(&serde_json::to_string(&s.save()).unwrap()).unwrap());
+        let r = State::restore(
+            serde_json::from_str(&serde_json::to_string(&s.save()).unwrap()).unwrap(),
+        );
         assert_eq!(r.space(1).unwrap().icon.as_deref(), Some("👩🏽‍💻"));
 
         assert!(s.set_space_icon(1, Some("  ")), "blank clears it");
@@ -1142,7 +1261,9 @@ mod tests {
         assert!(!s.rename_profile("gone", "x"), "only profiles in use");
         assert_eq!(s.profile_groups()[1].name, "Job");
 
-        let r = State::restore(serde_json::from_str(&serde_json::to_string(&s.save()).unwrap()).unwrap());
+        let r = State::restore(
+            serde_json::from_str(&serde_json::to_string(&s.save()).unwrap()).unwrap(),
+        );
         assert_eq!(r.profile_groups()[1].name, "Job");
 
         assert!(s.rename_profile("w", ""), "empty: back to the space name");
@@ -1161,13 +1282,25 @@ mod tests {
         let b = web(&mut s, "b");
         s.move_tab(a, Zone::Pinned, None, 99);
         s.move_tab(b, Zone::Pinned, None, 99);
-        assert_eq!(titles(&s, &s.visible_order(1)), ["a", "b"], "a too-large index appends");
+        assert_eq!(
+            titles(&s, &s.visible_order(1)),
+            ["a", "b"],
+            "a too-large index appends"
+        );
         let work = s.add_space(None);
         let foreign = s.add_folder(work, "elsewhere".into()).unwrap();
         s.move_tab(a, Zone::Pinned, Some(foreign), 0);
-        assert_eq!(s.tab(a).unwrap().folder, None, "can't file into another space's folder");
+        assert_eq!(
+            s.tab(a).unwrap().folder,
+            None,
+            "can't file into another space's folder"
+        );
         s.move_tab(a, Zone::Today, Some(foreign), 0);
-        assert_eq!(s.tab(a).unwrap().folder, None, "only pinned tabs have folders");
+        assert_eq!(
+            s.tab(a).unwrap().folder,
+            None,
+            "only pinned tabs have folders"
+        );
     }
 
     #[test]
@@ -1274,10 +1407,16 @@ mod tests {
         assert_eq!(s.set_split_ratio(a, 0.7), Some(0.7));
         assert_eq!(s.set_split_ratio(999, 0.5), None);
 
-        let r = State::restore(serde_json::from_str(&serde_json::to_string(&s.save()).unwrap()).unwrap());
+        let r = State::restore(
+            serde_json::from_str(&serde_json::to_string(&s.save()).unwrap()).unwrap(),
+        );
         let split = &r.splits[0];
         assert_eq!(
-            (r.tab(split.left).unwrap().title.as_str(), r.tab(split.right).unwrap().title.as_str(), split.ratio),
+            (
+                r.tab(split.left).unwrap().title.as_str(),
+                r.tab(split.right).unwrap().title.as_str(),
+                split.ratio
+            ),
             ("a", "b", 0.7)
         );
     }
@@ -1325,8 +1464,14 @@ mod tests {
             "active":5,"activeSpace":7,"lastActive":[[1,8]],
             "sidebarWidth":240.0,"sidebarCollapsed":false}"#;
         let r = State::restore(serde_json::from_str(json).unwrap());
-        assert_eq!(r.active_space, 1, "unknown active space falls back to the first");
-        assert!(r.folders.is_empty(), "folders of unknown spaces are dropped");
+        assert_eq!(
+            r.active_space, 1,
+            "unknown active space falls back to the first"
+        );
+        assert!(
+            r.folders.is_empty(),
+            "folders of unknown spaces are dropped"
+        );
         assert_eq!((r.tabs[0].space, r.tabs[0].folder), (1, None));
         assert_eq!(r.tabs[1].zone, Zone::Today, "terminals only live in Today");
         assert_eq!(r.active, None);

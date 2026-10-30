@@ -32,7 +32,11 @@ fn path(app: &AppHandle) -> Option<PathBuf> {
 /// identifier, same app data dir).
 pub fn data_dir(app: &AppHandle) -> Option<PathBuf> {
     let dir = app.path().app_data_dir().ok()?;
-    Some(if cfg!(debug_assertions) { dir.join("dev") } else { dir })
+    Some(if cfg!(debug_assertions) {
+        dir.join("dev")
+    } else {
+        dir
+    })
 }
 
 pub fn load(app: &AppHandle) -> Option<Saved> {

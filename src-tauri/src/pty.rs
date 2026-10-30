@@ -76,7 +76,9 @@ fn size(cols: u16, rows: u16) -> PtySize {
 }
 
 fn spawn(app: &AppHandle, id: u32, cols: u16, rows: u16) -> Result<Session, String> {
-    let pair = native_pty_system().openpty(size(cols, rows)).map_err(|e| e.to_string())?;
+    let pair = native_pty_system()
+        .openpty(size(cols, rows))
+        .map_err(|e| e.to_string())?;
 
     // The user's login shell, like Terminal.app.
     let mut cmd = CommandBuilder::new_default_prog();
@@ -99,11 +101,16 @@ fn spawn(app: &AppHandle, id: u32, cols: u16, rows: u16) -> Result<Session, Stri
     });
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = Arc::new(Mutex::new(pair.master.take_writer().map_err(|e| e.to_string())?));
+    let writer = Arc::new(Mutex::new(
+        pair.master.take_writer().map_err(|e| e.to_string())?,
+    ));
     // The tty buffers this until the shell reads it, so no need to wait.
     let startup = {
         let mut queue = STARTUP_INPUT.lock().unwrap();
-        queue.iter().position(|(tab, _)| *tab == id).map(|i| queue.remove(i).1)
+        queue
+            .iter()
+            .position(|(tab, _)| *tab == id)
+            .map(|i| queue.remove(i).1)
     };
     if let Some(text) = startup {
         let _ = writer.lock().unwrap().write_all(text.as_bytes());
@@ -140,7 +147,9 @@ fn spawn(app: &AppHandle, id: u32, cols: u16, rows: u16) -> Result<Session, Stri
             let (chunk, channel) = {
                 let mut pipe = out.lock();
                 loop {
-                    let ready = !pipe.data.is_empty() && pipe.unacked < MAX_UNACKED && pipe.channel.is_some();
+                    let ready = !pipe.data.is_empty()
+                        && pipe.unacked < MAX_UNACKED
+                        && pipe.channel.is_some();
                     if ready || (pipe.closed && pipe.data.is_empty()) {
                         break;
                     }
@@ -170,7 +179,14 @@ fn spawn(app: &AppHandle, id: u32, cols: u16, rows: u16) -> Result<Session, Stri
 
 /// The shell exited on its own: close its tab, like a terminal app would.
 fn on_exit(app: &AppHandle, id: u32) {
-    if app.state::<Terminals>().0.lock().unwrap().remove(&id).is_some() {
+    if app
+        .state::<Terminals>()
+        .0
+        .lock()
+        .unwrap()
+        .remove(&id)
+        .is_some()
+    {
         let _ = crate::browser::close_tab_by_id(app, id);
     }
 }
@@ -234,7 +250,10 @@ pub fn pty_resize(app: AppHandle, id: u32, cols: u16, rows: u16) -> Result<(), S
     let terminals = app.state::<Terminals>();
     let sessions = terminals.0.lock().unwrap();
     let session = sessions.get(&id).ok_or("no such terminal")?;
-    session.master.resize(size(cols, rows)).map_err(|e| e.to_string())
+    session
+        .master
+        .resize(size(cols, rows))
+        .map_err(|e| e.to_string())
 }
 
 /// xterm.js has parsed `bytes` more bytes.

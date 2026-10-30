@@ -30,10 +30,14 @@ pub async fn debug_ready(app: AppHandle) -> Result<(), String> {
 /// `KEY=VALUE`) instead of the environment: relaunching after an update goes
 /// through LaunchServices, which keeps arguments but not the environment.
 pub fn load_env_from_args() {
-    let Some(path) = std::env::args().find_map(|a| a.strip_prefix("--ternt-test-env=").map(String::from)) else {
+    let Some(path) =
+        std::env::args().find_map(|a| a.strip_prefix("--ternt-test-env=").map(String::from))
+    else {
         return;
     };
-    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
     for (key, value) in text.lines().filter_map(|line| line.split_once('=')) {
         // SAFETY: called first thing in `run`, before any other thread exists.
         unsafe { std::env::set_var(key.trim(), value.trim()) };
@@ -47,7 +51,11 @@ pub fn debug_log(message: String) {
     println!("[test] {message}");
     if let Some(path) = std::env::var_os("TERNT_TEST_LOG") {
         use std::io::Write;
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
             let _ = writeln!(file, "[test] {message}");
         }
     }
@@ -73,11 +81,19 @@ pub async fn debug_resize(app: AppHandle, width: f64, height: f64) -> Result<(),
 /// Capture just one window (the main one unless `window` names another) to
 /// `$TERNT_SHOTS/<name>.png`.
 #[tauri::command]
-pub async fn debug_screenshot(app: AppHandle, name: String, window: Option<String>) -> Result<String, String> {
-    let window = app.get_window(window.as_deref().unwrap_or(MAIN_WINDOW)).ok_or("no window")?;
-    let ns_window = window.ns_window().map_err(|e| e.to_string())? as *const objc2::runtime::AnyObject;
+pub async fn debug_screenshot(
+    app: AppHandle,
+    name: String,
+    window: Option<String>,
+) -> Result<String, String> {
+    let window = app
+        .get_window(window.as_deref().unwrap_or(MAIN_WINDOW))
+        .ok_or("no window")?;
+    let ns_window =
+        window.ns_window().map_err(|e| e.to_string())? as *const objc2::runtime::AnyObject;
     let number: isize = unsafe { objc2::msg_send![&*ns_window, windowNumber] };
-    let dir = std::env::var("TERNT_SHOTS").unwrap_or_else(|_| std::env::temp_dir().display().to_string());
+    let dir =
+        std::env::var("TERNT_SHOTS").unwrap_or_else(|_| std::env::temp_dir().display().to_string());
     let path = format!("{dir}/{name}.png");
     let status = Command::new("screencapture")
         .args(["-x", "-o", "-l", &number.to_string(), &path])
@@ -93,7 +109,9 @@ pub async fn debug_screenshot(app: AppHandle, name: String, window: Option<Strin
 /// the popup path (WebKit blocks gesture-less `window.open` by default).
 #[tauri::command]
 pub async fn debug_allow_popups(app: AppHandle, label: String) -> Result<(), String> {
-    let webview = app.get_webview(&label).ok_or_else(|| format!("no webview {label}"))?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| format!("no webview {label}"))?;
     webview
         .with_webview(|platform| unsafe {
             let view = &*(platform.inner() as *const objc2::runtime::AnyObject);
@@ -130,13 +148,20 @@ pub fn debug_set(key: String, value: String) {
 
 #[tauri::command]
 pub fn debug_get(key: String) -> Option<String> {
-    VALUES.lock().unwrap().iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone())
+    VALUES
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| v.clone())
 }
 
 /// The clipboard's text, to verify Copy URL / Copy Link.
 #[tauri::command]
 pub fn debug_clipboard() -> Result<String, String> {
-    let out = Command::new("pbpaste").output().map_err(|e| e.to_string())?;
+    let out = Command::new("pbpaste")
+        .output()
+        .map_err(|e| e.to_string())?;
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
@@ -152,7 +177,9 @@ pub async fn debug_focused(app: AppHandle) -> Option<String> {
         .into_iter()
         .filter_map(|(label, webview)| {
             let (vtx, vrx) = std::sync::mpsc::channel();
-            webview.with_webview(move |p| vtx.send(p.inner() as usize).unwrap()).ok()?;
+            webview
+                .with_webview(move |p| vtx.send(p.inner() as usize).unwrap())
+                .ok()?;
             Some((label, vrx.recv().ok()?))
         })
         .collect();
@@ -167,7 +194,8 @@ pub async fn debug_focused(app: AppHandle) -> Option<String> {
             }
             let found = webviews.into_iter().find(|(_, view)| {
                 let view = *view as *const AnyObject;
-                let is_view: bool = objc2::msg_send![&*responder, isKindOfClass: objc2::class!(NSView)];
+                let is_view: bool =
+                    objc2::msg_send![&*responder, isKindOfClass: objc2::class!(NSView)];
                 is_view && objc2::msg_send![&*responder, isDescendantOf: &*view]
             });
             let _ = tx.send(found.map(|(label, _)| label));
@@ -189,7 +217,9 @@ pub struct ViewFrame {
 
 #[tauri::command]
 pub async fn debug_view(app: AppHandle, label: String) -> Result<ViewFrame, String> {
-    let webview = app.get_webview(&label).ok_or_else(|| format!("no webview {label}"))?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| format!("no webview {label}"))?;
     let (tx, rx) = std::sync::mpsc::channel();
     webview
         .with_webview(move |p| unsafe {

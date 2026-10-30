@@ -14,7 +14,11 @@ pub fn is_welcome(url: &str) -> bool {
     url.trim_end_matches('/') == URL.trim_end_matches('/')
 }
 
-pub fn respond(_ctx: UriSchemeContext<'_, tauri::Wry>, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
+pub fn respond(
+    _ctx: UriSchemeContext<'_, tauri::Wry>,
+    request: Request<Vec<u8>>,
+    responder: UriSchemeResponder,
+) {
     let (status, body, kind) = if is_welcome(&request.uri().to_string()) {
         (200, PAGE.as_bytes().to_vec(), "text/html; charset=utf-8")
     } else {
@@ -50,7 +54,13 @@ mod tests {
     fn page_is_self_contained_html() {
         assert!(PAGE.starts_with("<!doctype html>"));
         assert!(PAGE.contains("<title>Welcome to Ternt</title>"));
-        assert!(!PAGE.contains("<script"), "no scripts: tab webviews have no IPC");
-        assert!(!PAGE.contains("src=\"http"), "no remote assets: the page must work offline");
+        assert!(
+            !PAGE.contains("<script"),
+            "no scripts: tab webviews have no IPC"
+        );
+        assert!(
+            !PAGE.contains("src=\"http"),
+            "no remote assets: the page must work offline"
+        );
     }
 }
