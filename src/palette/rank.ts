@@ -216,7 +216,6 @@ export function buildItems(raw: string, ctx: Context): Item[] {
   const historyHits = ctx.history.filter(
     (h) =>
       !tabs.some((t) => t.url === h.url) &&
-      !closedHits.some((c) => c.x.url === h.url) &&
       lq.split(/\s+/).every((w) => `${h.url} ${h.title}`.toLowerCase().includes(w)),
   );
 
@@ -239,18 +238,29 @@ export function buildItems(raw: string, ctx: Context): Item[] {
   if (bestTab) top.push(tabItem(bestTab, "top"));
   // Otherwise a closed tab whose title matches as well.
   else if (closedHits[0] && score(closedHits[0].x.title, lq) >= 80) top.push(closedItem(closedHits.shift()!.x, "top"));
-  if (parsed?.kind !== "url" && historyHits[0] && bare(historyHits[0].url).startsWith(lq)) {
+  if (
+    parsed?.kind !== "url" &&
+    historyHits[0] &&
+    bare(historyHits[0].url).startsWith(lq) &&
+    !top.some((i) => i.url === historyHits[0].url)
+  ) {
     top.push(historyItem(historyHits.shift()!, "top"));
   }
   if (commandHits[0]?.s >= 70) top.push(commandItem(commandHits.shift()!.x, "top"));
   if (spaceHits[0]?.s >= 80) top.push(spaceItem(spaceHits.shift()!.x, "top"));
   if (open && parsed?.kind === "search") top.push(open);
 
+  // Each page once: not again below the top, and a page offered as closed
+  // isn't repeated as history.
+  const shown = (url: string) => top.some((i) => i.url === url);
+  const closedRest = closedHits.filter((r) => !shown(r.x.url));
+  const historyRest = historyHits.filter((h) => !shown(h.url) && !closedRest.some((c) => c.x.url === h.url));
+
   return [
     ...top,
     ...tabHits.slice(0, SECTION_LIMIT).map((r) => tabItem(r.x, "Tabs")),
-    ...closedHits.slice(0, SECTION_LIMIT).map((r) => closedItem(r.x, "Recently Closed")),
-    ...historyHits.slice(0, SECTION_LIMIT).map((h) => historyItem(h, "History")),
+    ...closedRest.slice(0, SECTION_LIMIT).map((r) => closedItem(r.x, "Recently Closed")),
+    ...historyRest.slice(0, SECTION_LIMIT).map((h) => historyItem(h, "History")),
     ...commandHits.slice(0, SECTION_LIMIT).map((r) => commandItem(r.x, "Commands")),
     ...spaceHits.map((r) => spaceItem(r.x, "Spaces")),
   ];

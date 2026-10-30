@@ -23,12 +23,13 @@ await t.assert(hits[0].title === "Fixture Page 2", `the twice-visited page ranks
 await t.assert((await search("about")).length === 0, "non-web pages aren't recorded");
 for (const x of S().tabs.filter((x) => x.title !== "Fixture Home")) await t.invoke("close_tab", { id: x.id });
 
-// The bar suggests closed pages; open tabs show as tabs instead
+// The bar suggests closed pages (as Recently Closed, so not again as
+// history); open tabs show as tabs instead
 await openPalette();
 await type("fixture");
-await t.until(async () => (await rows()).includes("History"), "history section shows");
+await t.until(async () => (await rows()).some((r) => r.startsWith("Fixture Page 2")), "closed page offered");
 const listed = await rows();
-await t.assert(listed.some((r) => r.startsWith("Fixture Page 2")), "closed page offered from history");
+await t.assert(listed.filter((r) => r.startsWith("Fixture Page 2")).length === 1, "offered once");
 await t.assert(listed.filter((r) => r.startsWith("Fixture Home")).length <= 1, "open tab not repeated as history");
 await t.shot("history-suggest");
 

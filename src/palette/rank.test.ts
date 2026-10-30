@@ -21,8 +21,8 @@ function tab(title: string, url: string, extra: Partial<Tab> = {}): Tab {
   };
 }
 
-const home: Space = { id: 1, name: "Home", color: "blue", profile: null };
-const work: Space = { id: 2, name: "Work", color: "green", profile: "abc" };
+const home: Space = { id: 1, name: "Home", color: "blue", profile: null, icon: null };
+const work: Space = { id: 2, name: "Work", color: "green", profile: "abc", icon: null };
 
 function ctx(over: Partial<Context> = {}): Context {
   return { mode: "newTab", tabs: [], spaces: [home, work], activeId: null, activeSpace: 1, history: [], closed: [], ...over };
@@ -239,6 +239,14 @@ describe("recently closed", () => {
     const items = buildItems("linear", ctx({ closed, history }));
     expect(items[0].kind).toBe("closed");
     expect(items.filter((i) => i.url === "https://linear.app").length).toBe(1);
+  });
+
+  test("typing the start of a closed page's address still completes to it, once", () => {
+    const closed = [closedTab("Fixture Page 2", "http://localhost:8765/page2.html")];
+    const history: HistoryHit[] = [{ url: "http://localhost:8765/page2.html", title: "Fixture Page 2" }];
+    const items = buildItems("localh", ctx({ closed, history }));
+    expect(items[0].url).toBe("http://localhost:8765/page2.html");
+    expect(items.filter((i) => i.url === "http://localhost:8765/page2.html").length).toBe(1);
   });
 
   test("other spaces' closed tabs say where they were", () => {
