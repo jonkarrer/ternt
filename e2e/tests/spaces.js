@@ -46,6 +46,18 @@ const sidebar = document.querySelector(".sidebar");
 for (let i = 0; i < 4; i++) sidebar.dispatchEvent(new WheelEvent("wheel", { deltaX: 45, bubbles: true }));
 await t.until(() => S().activeSpace === home, "horizontal swipe switches space");
 
+// A mouse: each sideways wheel tick switches once (quick repeats count once),
+// and Shift turns the plain wheel sideways
+await t.sleep(300);
+const tick = (init) => sidebar.dispatchEvent(new WheelEvent("wheel", { deltaMode: WheelEvent.DOM_DELTA_LINE, bubbles: true, ...init }));
+tick({ deltaX: 1 });
+tick({ deltaX: 1 });
+await t.until(() => S().activeSpace === work, "a mouse tick switches to the next space");
+await t.sleep(400);
+await t.assert(S().activeSpace === work, "a quick second tick doesn't switch again");
+tick({ deltaY: -1, shiftKey: true });
+await t.until(() => S().activeSpace === home, "Shift + wheel switches back");
+
 // Opening a tab from another space switches to it
 await t.invoke("activate_tab", { id: find("Fixture Page 2").id });
 await t.until(() => S().activeSpace === work, "activating a tab follows it to its space");

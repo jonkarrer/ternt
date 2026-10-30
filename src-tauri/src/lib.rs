@@ -2,6 +2,7 @@ mod browser;
 #[cfg(all(debug_assertions, target_os = "macos"))]
 mod debug;
 mod history;
+mod icons;
 mod little;
 mod menu;
 mod model;
@@ -36,6 +37,7 @@ pub fn run() {
         .manage(updater::Updates::default())
         .manage(prefs::Store::default())
         .manage(little::Littles::default())
+        .manage(icons::Icons::default())
         .register_asynchronous_uri_scheme_protocol(welcome::SCHEME, welcome::respond)
         .setup(|app| {
             browser::create_main_window(app.handle())?;
@@ -91,6 +93,7 @@ pub fn run() {
             browser::space_color,
             browser::space_profile,
             browser::space_icon,
+            icons::site_icon,
             browser::rename_profile,
             browser::split_view,
             browser::set_split_ratio,

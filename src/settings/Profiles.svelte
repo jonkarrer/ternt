@@ -3,14 +3,18 @@
   import Avatar from "./Avatar.svelte";
   import ProfileDetail from "./ProfileDetail.svelte";
 
-  // The space profiles (the main one has the Ternt page): a list on the
-  // left, the selected one's page on the right.
+  // Profiles are where sign-ins live: each holds its own cookies, logins and
+  // history, for the spaces using it. Default first, then each separate
+  // one: a list on the left, the selected one's page on the right.
   let { browserState }: { browserState: BrowserState } = $props();
 
-  const profiles = $derived(browserState.profiles.filter((p): p is Profile & { profile: string } => p.profile != null));
-  let selectedKey = $state<string | null>(null);
-  /** Falls back to the first one when the selected profile goes away. */
-  const selected = $derived(profiles.find((p) => p.profile === selectedKey) ?? profiles[0]);
+  const DEFAULT = "default";
+  const keyOf = (p: Profile) => p.profile ?? DEFAULT;
+  let selectedKey = $state<string>(DEFAULT);
+  /** Falls back to Default when the selected profile goes away. */
+  const selected = $derived(
+    browserState.profiles.find((p) => keyOf(p) === selectedKey) ?? browserState.profiles[0],
+  );
 
   async function newSpace() {
     const id = await browser.createSpace();
@@ -23,9 +27,9 @@
 <div class="profiles">
   <aside>
     <ul>
-      {#each profiles as p (p.profile)}
+      {#each browserState.profiles as p (keyOf(p))}
         <li>
-          <button class="profile" class:selected={p === selected} onclick={() => (selectedKey = p.profile)}>
+          <button class="profile" class:selected={p === selected} onclick={() => (selectedKey = keyOf(p))}>
             <Avatar profile={p} {browserState} />
             <span class="who">
               <span class="name">{p.name}</span>
@@ -40,15 +44,10 @@
 
   {#if selected}
     <section class="detail">
-      {#key selected.profile}
+      {#key keyOf(selected)}
         <ProfileDetail {browserState} profile={selected} />
       {/key}
     </section>
-  {:else}
-    <div class="empty">
-      <strong>No space profiles yet</strong>
-      <span>Every space signs in with Ternt. A new space gets its own profile, with its own cookies, logins and history.</span>
-    </div>
   {/if}
 </div>
 
@@ -113,18 +112,5 @@
     min-width: 0;
     overflow-y: auto;
     padding: 24px 28px;
-  }
-  .empty {
-    flex: 1;
-    display: grid;
-    place-content: center;
-    gap: 6px;
-    padding: 0 48px;
-    text-align: center;
-    color: var(--text-muted);
-  }
-  .empty strong {
-    color: var(--text);
-    font-weight: 600;
   }
 </style>

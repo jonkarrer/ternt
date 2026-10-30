@@ -4064,6 +4064,8 @@ dependencies = [
  "objc2-foundation",
  "objc2-quartz-core",
  "portable-pty",
+ "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "tauri",

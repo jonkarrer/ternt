@@ -18,10 +18,30 @@ pub enum LinkTarget {
     Tab,
 }
 
+/// Who uses this Ternt (Settings → Account). Kept on this Mac only; the
+/// profiles hold the actual sign-ins.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Account {
+    pub name: String,
+    pub email: String,
+}
+
+/// Longest name or email kept, in characters.
+const MAX_ACCOUNT_FIELD: usize = 200;
+
+impl Account {
+    fn tidy(self) -> Self {
+        let tidy = |s: String| s.trim().chars().take(MAX_ACCOUNT_FIELD).collect();
+        Self { name: tidy(self.name), email: tidy(self.email) }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Prefs {
     pub external_links: LinkTarget,
+    pub account: Account,
 }
 
 #[derive(Default)]
@@ -68,7 +88,8 @@ pub fn get_prefs(app: AppHandle) -> Prefs {
 }
 
 #[tauri::command]
-pub fn set_prefs(app: AppHandle, prefs: Prefs) {
+pub fn set_prefs(app: AppHandle, mut prefs: Prefs) {
+    prefs.account = prefs.account.tidy();
     *app.state::<Store>().0.lock().unwrap() = prefs.clone();
     save(&app, &prefs);
     let _ = app.emit_to(EventTarget::webview(crate::settings::SETTINGS_WINDOW), "prefs:changed", prefs);
@@ -84,5 +105,13 @@ mod tests {
         assert_eq!(prefs.external_links, LinkTarget::Little);
         let prefs: Prefs = serde_json::from_str(r#"{"externalLinks":"tab","future":1}"#).unwrap();
         assert_eq!(prefs.external_links, LinkTarget::Tab);
+        assert_eq!(prefs.account, Account::default());
+    }
+
+    #[test]
+    fn account_fields_are_trimmed_and_capped() {
+        let account = Account { name: "  Jo  ".into(), email: "x".repeat(500) }.tidy();
+        assert_eq!(account.name, "Jo");
+        assert_eq!(account.email.len(), MAX_ACCOUNT_FIELD);
     }
 }

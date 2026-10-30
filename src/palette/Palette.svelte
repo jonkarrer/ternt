@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import Favicon from "../lib/Favicon.svelte";
+  import SpaceIcon from "../lib/SpaceIcon.svelte";
   import TabIcon from "../lib/TabIcon.svelte";
   import { browser, type ClosedTab, type HistoryHit, type Split, type PaletteRequest, type Space, type Tab } from "../lib/browser";
   import { buildItems, type Action, type Item } from "./rank";
@@ -170,7 +171,7 @@
                 {:else if item.kind === "run"}
                   <svg viewBox="0 0 16 16"><path d="m3.5 5 3 3-3 3M8.5 11.5h4" /></svg>
                 {:else if item.space}
-                  <svg viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="3" /><path d="M6 2.5v11" /></svg>
+                  <SpaceIcon icon={item.space.icon} name={item.space.name} color={item.space.color} size={15} />
                 {:else if item.tab}
                   <TabIcon tab={item.tab} />
                 {:else if item.kind === "command"}

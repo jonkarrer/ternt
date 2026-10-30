@@ -12,6 +12,9 @@ const HUES: Record<string, [hue: number, saturation: number]> = {
   gray: [220, 0],
 };
 
+/** Every space color, in the space menu's order. */
+export const SPACE_COLORS = Object.keys(HUES);
+
 /** CSS variables for a space's tint: `--hue` and `--sat`. */
 export function spaceStyle(color: string): string {
   const [hue, sat] = HUES[color] ?? HUES.blue;

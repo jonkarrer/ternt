@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import { fly } from "svelte/transition";
   import IconPicker from "./lib/IconPicker.svelte";
+  import SiteIcon from "./lib/SiteIcon.svelte";
+  import SpaceIcon from "./lib/SpaceIcon.svelte";
   import Omnibox from "./lib/Omnibox.svelte";
   import TabIcon from "./lib/TabIcon.svelte";
   import TabRow from "./lib/TabRow.svelte";
@@ -23,6 +25,8 @@
   const END = 1_000_000;
   /** Horizontal trackpad travel that switches spaces. */
   const SWIPE_DISTANCE = 120;
+  /** Mouse wheel ticks closer together than this (ms) switch only once. */
+  const NOTCH_INTERVAL = 250;
 
   type Mark =
     | { kind: "row"; tab: number; where: "before" | "after" }
@@ -62,11 +66,6 @@
   const favorites = $derived(
     browserState.tabs.filter((t) => t.zone === "favorite" && profileOf(t.space) === space?.profile),
   );
-  /** Other spaces signed in with this space's profile. */
-  const profileMates = $derived(
-    browserState.spaces.filter((s) => s.id !== activeSpace && s.profile === space?.profile).map((s) => s.name),
-  );
-  const profileName = $derived(browserState.profiles.find((p) => p.profile === space?.profile)?.name);
   const folders = $derived(browserState.folders.filter((f) => f.space === activeSpace));
   const loosePinned = $derived(pinnedIn(null));
   const today = $derived(browserState.tabs.filter((t) => t.zone === "today" && t.space === activeSpace));
@@ -350,13 +349,33 @@
 
   // --- Spaces --------------------------------------------------------------
 
-  // Two-finger horizontal swipe over the sidebar switches spaces.
+  // Over the sidebar, a two-finger horizontal swipe or a mouse's sideways
+  // scroll (tilt wheel, or Shift + wheel) switches spaces.
   let swipe = 0;
   let swipeLocked = false;
   let swipeTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastNotch = 0;
+
+  /** A mouse wheel's tick rather than a trackpad's stream: line-based, or
+   *  whole ticks of 120 (WebKit's legacy wheelDeltaX). */
+  function isNotch(event: WheelEvent): boolean {
+    const ticks = (event as WheelEvent & { wheelDeltaX?: number }).wheelDeltaX ?? 0;
+    return event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL || (ticks !== 0 && ticks % 120 === 0);
+  }
 
   function onwheel(event: WheelEvent) {
-    if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+    // Shift turns a plain wheel sideways (macOS usually does this already).
+    const sideways = event.shiftKey && event.deltaX === 0;
+    const dx = sideways ? event.deltaY : event.deltaX;
+    if (dx === 0 || (!sideways && Math.abs(dx) <= Math.abs(event.deltaY))) return;
+    const step = () => browser.menuAction(dx > 0 ? "next-space" : "previous-space");
+
+    if (isNotch(event)) {
+      // One space per tick, but not a run of spaces from one quick flick.
+      if (event.timeStamp - lastNotch > NOTCH_INTERVAL) step();
+      lastNotch = event.timeStamp;
+      return;
+    }
     clearTimeout(swipeTimer);
     // One switch per gesture: unlock once the wheel events stop.
     swipeTimer = setTimeout(() => {
@@ -364,9 +383,9 @@
       swipeLocked = false;
     }, 200);
     if (swipeLocked) return;
-    swipe += event.deltaX;
+    swipe += dx;
     if (Math.abs(swipe) > SWIPE_DISTANCE) {
-      browser.menuAction(swipe > 0 ? "next-space" : "previous-space");
+      step();
       swipeLocked = true;
     }
   }
@@ -446,7 +465,11 @@
                 browser.tabContextMenu(tab.id);
               }}
             >
-              <TabIcon {tab} />
+              {#if tab.kind === "web"}
+                <SiteIcon url={tab.url} loading={tab.loading} />
+              {:else}
+                <TabIcon {tab} />
+              {/if}
             </button>
           {:else}
             <span class="hint">Drop to add to Favorites</span>
@@ -457,7 +480,7 @@
       {#key activeSpace}
         <div class="space-body" in:fly={{ x: 24 * slide, duration: 160 }}>
           <div class="space-header">
-            {#if space?.icon}<span class="space-icon" aria-hidden="true">{space.icon}</span>{/if}
+            {#if space}<SpaceIcon icon={space.icon} name={space.name} color={space.color} />{/if}
             {#if renaming?.kind === "space" && renaming.id === space?.id}
               <input class="rename" value={space?.name} use:focusSelect onblur={commitRename} onkeydown={renameKeys} />
             {:else}
@@ -473,15 +496,6 @@
               >
                 {space?.name}
               </span>
-              {#if space?.profile}
-                <span
-                  class="profile"
-                  title="Own cookies and logins (profile “{profileName}”{profileMates.length
-                    ? `, shared with ${profileMates.join(', ')}`
-                    : ''}). Manage profiles in Settings (⌘,)."
-                  >{profileName && profileName !== space.name ? profileName : "Profile"}</span
-                >
-              {/if}
             {/if}
             <button
               class="icon small space-more"
@@ -497,6 +511,7 @@
             {#if space && pickingIcon === space.id}
               <IconPicker
                 current={space.icon}
+                color={space.color}
                 onpick={(icon) => {
                   browser.setSpaceIcon(space.id, icon);
                   pickingIcon = null;
@@ -621,11 +636,10 @@
         <div class="update-slot"><UpdateButton /></div>
         {#each browserState.spaces as s (s.id)}
           <button
-            class="space-dot"
+            class="space-switch"
             class:active={s.id === activeSpace}
-            class:has-icon={s.icon}
             style:--swatch={spaceSwatch(s.color)}
-            title="{s.name}{s.profile ? ' (separate profile)' : ''}"
+            title={s.name}
             aria-label="Switch to {s.name}"
             onclick={() => browser.activateSpace(s.id)}
             oncontextmenu={(e) => {
@@ -633,11 +647,7 @@
               browser.spaceContextMenu(s.id);
             }}
           >
-            {#if s.icon}
-              <span class="dot-icon">{s.icon}</span>
-            {:else if s.profile}
-              <span class="ring"></span>
-            {/if}
+            <SpaceIcon icon={s.icon} name={s.name} color={s.color} size={15} />
           </button>
         {/each}
         <button class="icon small" aria-label="New space" title="New space" onclick={() => browser.createSpace()}>
@@ -837,23 +847,8 @@
     white-space: nowrap;
     text-overflow: ellipsis;
   }
-  .profile {
-    padding: 1px 6px;
-    border-radius: 5px;
-    background: var(--fill-strong);
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-  }
   .space-header {
     position: relative;
-  }
-  .space-icon {
-    flex: none;
-    margin-right: -1px;
-    font-size: 14px;
-    line-height: 1;
   }
   .space-header .icon {
     visibility: hidden;
@@ -1026,51 +1021,26 @@
     gap: 10px;
     padding-top: 6px;
   }
-  .space-dot {
-    position: relative;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: var(--swatch);
+  /* Each space's icon, faded until it's the active one, which sits on a
+     pill of the space's color. */
+  .space-switch {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    margin: 0 -4px;
+    border-radius: 7px;
     opacity: 0.5;
     transition:
       opacity 120ms ease,
-      scale 120ms ease;
+      background 120ms ease;
   }
-  .space-dot:hover {
-    opacity: 0.8;
+  .space-switch:hover {
+    opacity: 0.85;
   }
-  .space-dot.active {
+  .space-switch.active {
     opacity: 1;
-    scale: 1.3;
-  }
-  /* An icon replaces the dot: full size, faded like the dots until active,
-     on a pill of the space's color. */
-  .space-dot.has-icon {
-    width: 22px;
-    height: 22px;
-    margin: 0 -3px;
-    background: transparent;
-    opacity: 0.55;
-  }
-  .space-dot.has-icon.active {
-    opacity: 1;
-    scale: 1;
-    background: color-mix(in srgb, var(--swatch) 30%, transparent);
-  }
-  .dot-icon {
-    display: grid;
-    place-items: center;
-    height: 100%;
-    font-size: 14px;
-    line-height: 1;
-  }
-  /* A ring marks spaces with their own profile. */
-  .ring {
-    position: absolute;
-    inset: -3px;
-    border-radius: 50%;
-    border: 1.5px solid var(--swatch);
+    background: color-mix(in srgb, var(--swatch) 24%, transparent);
   }
 
   /* Lives in the sidebar's right padding: the content view covers anything

@@ -27,8 +27,10 @@ for name in $tests; do
   start=$SECONDS
   rm -f $OUT/$name-*.png
   # Tests share a session file by prefix (`session-1` saves, `session-2`
-  # restores); the first test of a group starts from scratch.
-  key=${name%%-*}
+  # restores); the first test of a group starts from scratch. Only a
+  # numbered suffix makes a group: `space-icons` stands alone.
+  key=$name
+  [[ $name =~ ^(.+)-[0-9]+$ ]] && key=${BASH_REMATCH[1]}
   if [[ $name == $key || $name == *-1 ]]; then
     rm -f $OUT/$key.session.json $OUT/$key.history.json $OUT/$key.prefs.json
     # A missing session file is a first launch, which opens the welcome page;

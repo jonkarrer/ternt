@@ -1,13 +1,18 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { SYMBOLS } from "./spaceIcons";
+  import { spaceSwatch } from "./spaces";
 
-  // Emoji grid for a space's icon, opened under the space header (space
-  // menu → Change Icon…). Any emoji can be typed in the field too.
+  // A space's icon, picked under the space header (space menu → Change
+  // Icon…): a line symbol in the space's color, or an emoji. Any emoji can
+  // be typed in the field too.
   let {
     current,
+    color,
     onpick,
     onclose,
-  }: { current: string | null; onpick: (icon: string | null) => void; onclose: () => void } = $props();
+  }: { current: string | null; color: string; onpick: (icon: string | null) => void; onclose: () => void } =
+    $props();
 
   const ICONS = [
     "🏠", "💼", "💻", "🛠️", "🧪", "🚀", "⚡", "🔥",
@@ -48,7 +53,14 @@
 </script>
 
 <div class="picker" role="dialog" aria-label="Space icon" bind:this={panel}>
-  <div class="grid">
+  <div class="grid symbols" style:color={spaceSwatch(color)}>
+    {#each Object.entries(SYMBOLS) as [name, path] (name)}
+      <button class="symbol" class:current={`sym:${name}` === current} aria-label={name} onclick={() => onpick(`sym:${name}`)}>
+        <svg viewBox="0 0 16 16"><path d={path} /></svg>
+      </button>
+    {/each}
+  </div>
+  <div class="grid emojis">
     {#each ICONS as icon (icon)}
       <button class="emoji" class:current={icon === current} aria-label={icon} onclick={() => onpick(icon)}>{icon}</button>
     {/each}
@@ -62,7 +74,7 @@
       onkeydown={submitCustom}
       aria-label="Custom icon"
     />
-    <button class="remove" disabled={!current} onclick={() => onpick(null)}>Remove</button>
+    <button class="remove" disabled={!current} title="Show the space's initial" onclick={() => onpick(null)}>Remove</button>
   </div>
 </div>
 
@@ -92,16 +104,38 @@
     grid-template-columns: repeat(auto-fill, minmax(26px, 1fr));
     gap: 2px;
   }
+  .emojis {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 0.5px solid var(--separator);
+  }
+  .symbol {
+    display: grid;
+    place-items: center;
+    height: 26px;
+    border-radius: 6px;
+  }
+  .symbol svg {
+    width: 15px;
+    height: 15px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
   .emoji {
     height: 26px;
     border-radius: 6px;
     font-size: 16px;
     line-height: 26px;
   }
-  .emoji:hover {
+  .emoji:hover,
+  .symbol:hover {
     background: var(--fill-hover);
   }
-  .emoji.current {
+  .emoji.current,
+  .symbol.current {
     background: var(--fill-strong);
     box-shadow: inset 0 0 0 1.5px var(--accent);
   }

@@ -45,7 +45,7 @@ them run under `doppler run --`.
 | ⌘[ / ⌘] / ⌘R | Back / forward / reload |
 | ⌘S | Toggle sidebar |
 | ⌘F | Explore tabs: j/k or ↑/↓ move, h/l or ←/→ switch space, Space peeks, Enter opens, Esc goes back |
-| ⌃1–⌃9, ⌘⌥← / ⌘⌥→ | Switch spaces (or swipe two fingers across the sidebar) |
+| ⌃1–⌃9, ⌘⌥← / ⌘⌥→ | Switch spaces (or swipe two fingers across the sidebar; with a mouse, scroll sideways or Shift-scroll over it) |
 | ⌥⌘\ | Split view: a new terminal beside the current page |
 | ⌘, | Settings (⌘1–⌘6 switch its pages, ⌘W closes it) |
 
@@ -53,7 +53,8 @@ them run under `doppler run --`.
 
 Arc-style, top to bottom:
 
-- **Favorites**: icon tiles shared by every space with the same profile.
+- **Favorites**: tiles showing each site's app icon (its `apple-touch-icon`, else its largest icon),
+  shared by every space with the same profile.
 - **Pinned**: per space, optionally grouped in folders.
 - **Today**: per space, newest first, below a divider. Hover the divider for *Clear*, which
   closes the space's Today web tabs (terminals stay; ⇧⌘T reopens).
@@ -65,17 +66,22 @@ menu or command bar) ends it; closing either tab gives the other the whole area.
 pages or a page and a terminal, in the same space.
 
 **Spaces**: hover the space name for **…** (rename, icon, color, profile, delete; also a
-right-click on the name or on a space in the switcher). *Change Icon…* picks an emoji, or type any
-emoji; the icon shows next to the name and replaces the space's dot in the switcher.
+right-click on the name or on a space in the switcher). Every space has an icon, shown next to its
+name, in the switcher and in the command bar: new spaces start with a line symbol in the space's
+color; *Change Icon…* picks another symbol or an emoji (or type any emoji). *Remove* shows the
+space's initial.
 
 Drag tabs between sections, into folders, or to reorder. Closing a favorite or pinned tab
-unloads it (frees memory, keeps it in the sidebar). Right-click a tab, folder or space dot
+unloads it (frees memory, keeps it in the sidebar). Right-click a tab, folder or space icon
 for more. Double-click a space or folder name to rename it.
 
-**Profiles**: the main **Ternt** profile is the default cookie jar; each new space gets its own
-(macOS 14+), named after the space, so logins (Google, etc.) stay in their space; sign-in popups
-and favorites use their space's profile. Manage them in *Ternt → Settings…* (the Ternt and Profiles pages: rename a
-profile, move spaces between profiles, clear its history), or right-click a space dot → *Profile*.
+**Profiles** hold your sign-ins: cookies, logins (OAuth, Google, etc.) and history. The **Default**
+profile is for every space without its own; each new space gets its own (macOS 14+), named after the
+space, and several spaces can share one. Sign-in popups and favorites use their space's profile.
+Manage them in *Settings → Profiles* (rename a profile, move spaces between profiles, change a
+space's color, clear its history), or right-click a space icon → *Profile*. The sidebar just shows
+spaces: a profile is the identity sites see while you're in one (say, one Gmail for work, another
+for side projects).
 A profile no space uses any more is deleted.
 
 ## Little Ternt
@@ -87,8 +93,9 @@ space you're in. Read it and close it (⌘W), or click *Open in Ternt* to move t
 
 ## Settings
 
-*Ternt → Settings…* (⌘,) opens an Arc-style window with pages along the top: **Ternt** (the main
-profile, shown first), **General** (version, updates), **Profiles** (each space's own profile),
+*Ternt → Settings…* (⌘,) opens an Arc-style window with pages along the top: **Account** (your
+name and email, kept on this Mac, and a summary of your profiles), **General** (version, updates),
+**Profiles** (Default and each separate profile),
 **Links** (default browser, where links from other apps open), **Shortcuts** and **Advanced**
 (data folder).
 

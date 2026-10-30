@@ -22,7 +22,7 @@
   function setLinks(externalLinks: Prefs["externalLinks"]) {
     if (!prefs) return;
     prefs = { ...prefs, externalLinks };
-    browser.setPrefs(prefs);
+    browser.updatePrefs({ externalLinks });
   }
 
   async function makeDefault() {

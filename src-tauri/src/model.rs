@@ -89,7 +89,8 @@ pub struct Space {
     /// to share the default one.
     #[serde(default)]
     pub profile: Option<String>,
-    /// An emoji shown in the space switcher instead of the color dot.
+    /// An emoji, or a `sym:` line symbol (see `DEFAULT_SPACE_ICONS`). Without
+    /// one the space shows its initial.
     #[serde(default)]
     pub icon: Option<String>,
 }
@@ -97,6 +98,20 @@ pub struct Space {
 /// Longest icon accepted, in bytes: room for one emoji with modifiers
 /// (flags, skin tones, ZWJ sequences), not a word.
 pub const MAX_ICON_BYTES: usize = 32;
+
+/// Line symbols new spaces start with, in order, skipping ones in use
+/// (`sym:` icons are drawn by `src/lib/spaceIcons.ts`, tinted with the
+/// space's color).
+pub const DEFAULT_SPACE_ICONS: [&str; 8] = [
+    "sym:home",
+    "sym:briefcase",
+    "sym:code",
+    "sym:book",
+    "sym:star",
+    "sym:leaf",
+    "sym:bolt",
+    "sym:globe",
+];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,7 +124,7 @@ pub struct Folder {
 
 /// The main profile's name: the default data store, shared by every space
 /// that doesn't have its own.
-pub const MAIN_PROFILE_NAME: &str = "Ternt";
+pub const MAIN_PROFILE_NAME: &str = "Default";
 
 /// A profile and the spaces using it (see `State::profile_groups`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -119,7 +134,7 @@ pub struct ProfileGroup {
     pub profile: Option<String>,
     /// How the space menu selects it: `shared` or `space-<id>`.
     pub choice: String,
-    /// "Ternt" for the main profile; a separate one is named after its
+    /// "Default" for the main profile; a separate one is named after its
     /// spaces unless renamed.
     pub name: String,
     /// Space ids, in space order.
@@ -215,7 +230,7 @@ impl Default for State {
                 name: "Home".into(),
                 color: SPACE_COLORS[0].into(),
                 profile: None,
-                icon: None,
+                icon: Some(DEFAULT_SPACE_ICONS[0].into()),
             }],
             folders: Vec::new(),
             profile_names: HashMap::new(),
@@ -527,18 +542,14 @@ impl State {
 
     pub fn add_space(&mut self, profile: Option<String>) -> u32 {
         let id = self.next_group_id();
-        let used: Vec<&str> = self.spaces.iter().map(|s| s.color.as_str()).collect();
-        let color = SPACE_COLORS
-            .iter()
-            .find(|c| !used.contains(c))
-            .unwrap_or(&SPACE_COLORS[self.spaces.len() % SPACE_COLORS.len()]);
-        self.spaces.push(Space {
-            id,
-            name: format!("Space {}", self.spaces.len() + 1),
-            color: (*color).into(),
-            profile,
-            icon: None,
-        });
+        // The first color and icon no space has yet, else the next in turn.
+        let n = self.spaces.len();
+        let fresh = |options: &[&str], used: Vec<&str>| {
+            options.iter().find(|o| !used.contains(o)).copied().unwrap_or(options[n % options.len()]).to_string()
+        };
+        let color = fresh(&SPACE_COLORS, self.spaces.iter().map(|s| s.color.as_str()).collect());
+        let icon = fresh(&DEFAULT_SPACE_ICONS, self.spaces.iter().filter_map(|s| s.icon.as_deref()).collect());
+        self.spaces.push(Space { id, name: format!("Space {}", n + 1), color, profile, icon: Some(icon) });
         id
     }
 
@@ -1090,20 +1101,23 @@ mod tests {
         assert_eq!(
             groups,
             [
-                ("shared".into(), "Ternt".into(), vec![1]),
+                ("shared".into(), "Default".into(), vec![1]),
                 (format!("space-{work}"), "Work, Clients".into(), vec![work, clients]),
                 (format!("space-{solo}"), "Solo".into(), vec![solo]),
             ]
         );
         // With every space separate, the main profile is still offered.
         s.space_mut(1).unwrap().profile = Some("h".into());
-        assert_eq!(s.profile_groups()[0].name, "Ternt");
+        assert_eq!(s.profile_groups()[0].name, "Default");
         assert!(s.profile_groups()[0].spaces.is_empty());
     }
 
     #[test]
     fn space_icons_are_one_emoji_and_saved() {
         let mut s = State::default();
+        assert_eq!(s.space(1).unwrap().icon.as_deref(), Some("sym:home"), "Home starts with a symbol");
+        let second = s.add_space(None);
+        assert_eq!(s.space(second).unwrap().icon.as_deref(), Some("sym:briefcase"), "new spaces get the next one");
         assert!(s.set_space_icon(1, Some(" 🏠 ")));
         assert_eq!(s.space(1).unwrap().icon.as_deref(), Some("🏠"));
         assert!(!s.set_space_icon(1, Some("🏠")), "same icon: no change");

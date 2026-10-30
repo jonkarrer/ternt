@@ -28,7 +28,8 @@ export interface Space {
   color: string;
   /** Set when the space has its own cookie jar. */
   profile: string | null;
-  /** An emoji shown instead of the color dot. */
+  /** An emoji or a `sym:` line symbol (src/lib/spaceIcons.ts); `null`
+   *  shows the space's initial. */
   icon: string | null;
 }
 
@@ -41,11 +42,11 @@ export interface Folder {
 
 /** A cookie jar and the spaces using it (see `profile_groups` in model.rs). */
 export interface Profile {
-  /** `null` for the main "Ternt" profile. */
+  /** `null` for the main "Default" profile. */
   profile: string | null;
   /** How `spaceProfile` selects it: `shared` or `space-<id>`. */
   choice: string;
-  /** "Ternt" for the main profile; others are named after their spaces unless renamed. */
+  /** "Default" for the main profile; others are named after their spaces unless renamed. */
   name: string;
   /** Space ids, in space order. */
   spaces: number[];
@@ -102,6 +103,8 @@ export type UpdateStatus =
 export interface Prefs {
   /** Where links opened from other apps go. */
   externalLinks: "little" | "tab";
+  /** Who uses this Ternt (Settings → Account). */
+  account: { name: string; email: string };
 }
 
 export type PaletteMode = "newTab" | "edit";
@@ -157,7 +160,14 @@ export const browser = {
   appVersion: () => invoke<string>("app_version"),
   revealDataDir: () => invoke("reveal_data_dir"),
   getPrefs: () => invoke<Prefs>("get_prefs"),
-  setPrefs: (prefs: Prefs) => invoke("set_prefs", { prefs }),
+  /** Change some prefs, keeping the rest as they are now. */
+  updatePrefs: async (change: Partial<Prefs>) => {
+    const prefs = { ...(await invoke<Prefs>("get_prefs")), ...change };
+    await invoke("set_prefs", { prefs });
+    return prefs;
+  },
+  /** A site's app icon as a data URL (src-tauri/src/icons.rs). */
+  siteIcon: (url: string) => invoke<string | null>("site_icon", { url }),
   defaultBrowser: () => invoke<{ isDefault: boolean; canAsk: boolean }>("default_browser"),
   /** macOS asks the user to confirm. */
   makeDefaultBrowser: () => invoke("make_default_browser"),

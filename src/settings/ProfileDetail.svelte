@@ -1,10 +1,11 @@
 <script lang="ts">
   import { browser, type BrowserState, type Profile } from "../lib/browser";
-  import { spaceSwatch } from "../lib/spaces";
+  import SpaceIcon from "../lib/SpaceIcon.svelte";
+  import { SPACE_COLORS, spaceSwatch } from "../lib/spaces";
   import Avatar from "./Avatar.svelte";
 
-  // One profile's page: its name, its spaces, its data. The Ternt page shows
-  // the main profile; Profiles shows the selected space profile.
+  // One profile's page (Settings → Profiles): its name, its spaces, its data.
+  // The Default profile can't be renamed.
   let { browserState, profile: selected }: { browserState: BrowserState; profile: Profile } = $props();
 
   const isMain = $derived(selected.profile == null);
@@ -53,7 +54,7 @@
   <div>
     {#if isMain}
       <div class="title">{selected.name}</div>
-      <div class="hint">The main profile, for every space that doesn't have its own.</div>
+      <div class="hint">The default cookie jar: every space without a profile of its own signs in here.</div>
     {:else}
       {#key selected.profile}
         <input
@@ -74,12 +75,24 @@
 <div class="card">
   {#each members as space (space.id)}
     <div class="row">
-      {#if space.icon}
-        <span class="space-icon">{space.icon}</span>
-      {:else}
-        <span class="dot" style:background={spaceSwatch(space.color)}></span>
-      {/if}
-      <span class="label">{space.name}</span>
+      <SpaceIcon icon={space.icon} name={space.name} color={space.color} />
+      <div class="label">
+        {space.name}
+        <div class="swatches" role="radiogroup" aria-label="Color for {space.name}">
+          {#each SPACE_COLORS as color (color)}
+            <button
+              class="swatch"
+              class:selected={space.color === color}
+              role="radio"
+              aria-checked={space.color === color}
+              aria-label={color}
+              title={color[0].toUpperCase() + color.slice(1)}
+              style:--swatch={spaceSwatch(color)}
+              onclick={() => browser.setSpaceColor(space.id, color)}
+            ></button>
+          {/each}
+        </div>
+      </div>
       <select
         aria-label="Profile for {space.name}"
         value={selected.choice}
@@ -161,18 +174,25 @@
     font-size: 11px;
     color: var(--text-muted);
   }
-  .dot {
-    flex: none;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
+  .swatches {
+    display: flex;
+    gap: 5px;
+    margin-top: 5px;
   }
-  .space-icon {
-    flex: none;
-    width: 10px;
-    font-size: 14px;
-    line-height: 1;
-    text-align: center;
+  .swatch {
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: var(--swatch);
+    box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.15);
+  }
+  .swatch:hover {
+    scale: 1.15;
+  }
+  .swatch.selected {
+    box-shadow:
+      0 0 0 1.5px var(--card),
+      0 0 0 3px var(--swatch);
   }
   .count {
     color: var(--text-muted);

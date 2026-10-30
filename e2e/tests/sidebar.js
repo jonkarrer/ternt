@@ -31,6 +31,10 @@ await t.until(() => titles() === "SPA,Fixture Page 2,Fixture Home", "dragging re
 // Pinned tabs render as tiles
 await t.invoke("move_tab", { id: S().tabs.find((x) => x.title === "Fixture Page 2").id, zone: "favorite", folder: null, index: null });
 await t.until(() => document.querySelectorAll(".favorites .fav").length === 1 && rows().length === 2, "favorite moves to the tile grid");
+await t.until(
+  () => document.querySelector(".favorites .fav img.site-icon")?.src.startsWith("data:image/svg+xml"),
+  "the tile shows the site's app icon (its apple-touch-icon link)",
+);
 await t.sleep(300);
 await t.shot("sidebar-pinned");
 
