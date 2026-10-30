@@ -138,7 +138,7 @@ pub fn run_action(app: &AppHandle, id: String) {
             "new-tab" => palette::open(&app, palette::Mode::NewTab),
             "open-location" => palette::open(&app, palette::Mode::Edit),
             "new-terminal" => browser::open_terminal(&app).map(|_| ()),
-            "close-tab" if settings::close_if_focused(&app) => Ok(()),
+            "close-tab" if settings::close_if_focused(&app) || crate::little::close_if_focused(&app) => Ok(()),
             "close-tab" => browser::close_active_tab(&app),
             "settings" => settings::open(&app),
             "reload" => browser::reload_active(&app),

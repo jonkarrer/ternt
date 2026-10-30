@@ -356,3 +356,39 @@ pub fn set_dim(ui: &Webview, frame: Option<(f64, f64, f64, f64)>, radius: f64) {
         parent.addSubview_positioned_relativeTo(&dim, NSWindowOrderingMode::Above, None);
     });
 }
+
+// --- Default browser ----------------------------------------------------------
+//
+// Launch Services' per-scheme handlers. Setting one makes macOS ask the user
+// to confirm. (Deprecated in favor of an NSWorkspace call that takes a block;
+// these still work and need no extra crates.)
+
+#[link(name = "CoreServices", kind = "framework")]
+unsafe extern "C" {
+    /// Returns a +1 CFString (a bundle id), or null.
+    fn LSCopyDefaultHandlerForURLScheme(scheme: *const NSString) -> *mut NSString;
+    fn LSSetDefaultHandlerForURLScheme(scheme: *const NSString, bundle_id: *const NSString) -> i32;
+}
+
+/// Whether `bundle_id` handles http links.
+pub fn is_default_browser(bundle_id: &str) -> bool {
+    let scheme = NSString::from_str("http");
+    let handler = unsafe { LSCopyDefaultHandlerForURLScheme(&*scheme) };
+    // Copy rule: we own the result; Retained releases it.
+    let Some(handler) = (unsafe { Retained::from_raw(handler) }) else {
+        return false;
+    };
+    handler.to_string().eq_ignore_ascii_case(bundle_id)
+}
+
+/// Make `bundle_id` the handler for http and https links.
+pub fn make_default_browser(bundle_id: &str) {
+    let id = NSString::from_str(bundle_id);
+    for scheme in ["http", "https"] {
+        let scheme = NSString::from_str(scheme);
+        let status = unsafe { LSSetDefaultHandlerForURLScheme(&*scheme, &*id) };
+        if status != 0 {
+            eprintln!("failed to become the default browser for {scheme}: {status}");
+        }
+    }
+}

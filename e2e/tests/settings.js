@@ -58,6 +58,16 @@ await t.until(async () => (await read(`document.querySelector(".empty")?.textCon
 await click(`.page-tab:nth-child(1)`);
 await t.until(async () => (await read(`document.querySelectorAll("main .dot").length`)) === "2", "Ternt now lists Home and Work");
 
+// Links: where links from other apps go, and the default browser
+await click(`.page-tab:nth-child(4)`);
+await t.until(async () => (await read(`document.querySelector("main").textContent`)).includes("default browser"), "Links shows the default browser");
+await t.until(async () => (await read(`document.querySelector("input[type=radio]:checked")?.parentElement.textContent`)).includes("Little Ternt"), "Little Ternt is the default choice");
+await t.eval("settings", `document.querySelectorAll("input[type=radio]")[1].click()`);
+await t.until(async () => (await t.invoke("get_prefs")).externalLinks === "tab", "choosing New tab saves the preference");
+await t.shot("settings-links", "settings");
+await t.eval("settings", `document.querySelectorAll("input[type=radio]")[0].click()`);
+await t.until(async () => (await t.invoke("get_prefs")).externalLinks === "little", "and back");
+
 // ⌘W closes Settings while it's in front, not a tab
 await t.invoke("new_tab", { url: `${t.F}/a.html` });
 const tabs = S().tabs.length;

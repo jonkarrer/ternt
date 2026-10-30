@@ -78,11 +78,19 @@ and favorites use their space's profile. Manage them in *Ternt → Settings…* 
 profile, move spaces between profiles, clear its history), or right-click a space dot → *Profile*.
 A profile no space uses any more is deleted.
 
+## Little Ternt
+
+Make Ternt your default browser (*Settings → Links → Make Default*) and links you click in other
+apps open in **Little Ternt**: a small window with the page's address on top, signed in with the
+space you're in. Read it and close it (⌘W), or click *Open in Ternt* to move the page into a tab.
+*Settings → Links* can send those links straight to a new tab instead.
+
 ## Settings
 
 *Ternt → Settings…* (⌘,) opens an Arc-style window with pages along the top: **Ternt** (the main
 profile, shown first), **General** (version, updates), **Profiles** (each space's own profile),
-**Links**, **Shortcuts** and **Advanced** (data folder).
+**Links** (default browser, where links from other apps open), **Shortcuts** and **Advanced**
+(data folder).
 
 ## Architecture
 
@@ -95,6 +103,7 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
 | `term` | `term.html` → `src/term/` | All terminal tabs (xterm.js), created on first use |
 | `palette` | `palette.html` → `src/palette/` | Command bar overlay, pre-created hidden |
 | `settings` | `settings.html` → `src/settings/` | Settings, its own window (`src-tauri/src/settings.rs`) |
+| `little-N-bar` / `little-N-page` | `little.html` → `src/little/` / the web | Little Ternt windows (`src-tauri/src/little.rs`) |
 
 - **Rust owns state and layout.** The model (spaces, zones, folders, ordering) is plain data in
   `src-tauri/src/model.rs`, unit-tested with `cargo test`; webviews mirror it via
@@ -106,6 +115,9 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
   `WKWebView` (`src-tauri/src/native.rs`).
 - **Terminals** stream raw PTY bytes over a Tauri channel with ack-based flow control
   (`src-tauri/src/pty.rs`).
+- **Preferences** (`prefs.json`, `src-tauri/src/prefs.rs`) sit next to the session.
+- **Links from other apps**: `src-tauri/Info.plist` claims http/https, so macOS can make Ternt the
+  default browser; links arrive as `RunEvent::Opened` (`src-tauri/src/little.rs`).
 - **Sessions** are saved to the app data dir (`session.json`), debounced and on exit. Debug
   builds use a `dev/` subfolder there, so `just dev` never leaves tabs in the installed app.
 - **Welcome page** (`src-tauri/welcome.html`, served on `ternt://welcome` by

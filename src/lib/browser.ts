@@ -98,6 +98,12 @@ export type UpdateStatus =
   | { state: "installing"; version: string }
   | { state: "failed"; message: string };
 
+/** App preferences (src-tauri/src/prefs.rs). */
+export interface Prefs {
+  /** Where links opened from other apps go. */
+  externalLinks: "little" | "tab";
+}
+
 export type PaletteMode = "newTab" | "edit";
 
 export interface PaletteRequest {
@@ -150,6 +156,11 @@ export const browser = {
   clearProfileHistory: (profile: string | null) => invoke("clear_profile_history", { profile }),
   appVersion: () => invoke<string>("app_version"),
   revealDataDir: () => invoke("reveal_data_dir"),
+  getPrefs: () => invoke<Prefs>("get_prefs"),
+  setPrefs: (prefs: Prefs) => invoke("set_prefs", { prefs }),
+  defaultBrowser: () => invoke<{ isDefault: boolean; canAsk: boolean }>("default_browser"),
+  /** macOS asks the user to confirm. */
+  makeDefaultBrowser: () => invoke("make_default_browser"),
   createFolder: () => invoke<number | null>("create_folder"),
   renameFolder: (id: number, name: string) => invoke("rename_folder", { id, name }),
   setFolderOpen: (id: number, open: boolean) => invoke("set_folder_open", { id, open }),

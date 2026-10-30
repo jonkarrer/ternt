@@ -50,7 +50,7 @@ const MAX_SIDEBAR_WIDTH: f64 = 480.0;
 /// WKWebView's default UA omits the Safari version token, which makes some
 /// sites (Google, notably) serve degraded pages.
 #[cfg(target_os = "macos")]
-const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
+pub const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 
 /// Navigation state read from a native webview.
 pub struct NativeState {
@@ -120,6 +120,40 @@ pub fn active_webview(app: &AppHandle) -> Option<Webview> {
 /// The active space's profile (for its history).
 pub fn active_profile(app: &AppHandle) -> Option<String> {
     with(app, |s| s.profile_of(s.active_space).map(String::from))
+}
+
+/// The active space's profile and name (Little Ternt windows sign in with
+/// it, and "Open in Ternt" moves the page there).
+pub fn active_space_profile(app: &AppHandle) -> (Option<String>, String) {
+    with(app, |s| {
+        let space = s.space(s.active_space);
+        (space.and_then(|x| x.profile.clone()), space.map(|x| x.name.clone()).unwrap_or_default())
+    })
+}
+
+/// Set once the saved session is back (or there was none).
+static RESTORED: AtomicBool = AtomicBool::new(false);
+
+pub fn mark_restored() {
+    RESTORED.store(true, Ordering::Release);
+}
+
+/// Block until the session is restored, so a tab opened at launch (a link
+/// from another app) lands after it. Gives up after a few seconds.
+pub fn wait_until_restored() {
+    for _ in 0..100 {
+        if RESTORED.load(Ordering::Acquire) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Bring the main window forward (after opening a tab from elsewhere).
+pub fn focus_main_window(app: &AppHandle) -> tauri::Result<()> {
+    let window = main_window(app)?;
+    window.unminimize()?;
+    window.set_focus()
 }
 
 pub fn active_tab(app: &AppHandle) -> Option<u32> {
@@ -395,7 +429,7 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
 /// size (OAuth sign-in, payment flows) get a real window that shares the
 /// opener's configuration, so `window.opener` messaging works. Everything
 /// else opens as a tab.
-fn on_new_window(app: &AppHandle, url: Url, features: NewWindowFeatures) -> NewWindowResponse<tauri::Wry> {
+pub fn on_new_window(app: &AppHandle, url: Url, features: NewWindowFeatures) -> NewWindowResponse<tauri::Wry> {
     if features.size().is_some() {
         match open_popup(app, &url, features) {
             Ok(window) => return NewWindowResponse::Create { window },
@@ -448,7 +482,7 @@ fn new_profile_id() -> String {
         .collect()
 }
 
-fn profile_bytes(hex: &str) -> Option<[u8; 16]> {
+pub fn profile_bytes(hex: &str) -> Option<[u8; 16]> {
     let mut out = [0u8; 16];
     for (i, byte) in out.iter_mut().enumerate() {
         *byte = u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()?;

@@ -2,11 +2,13 @@ mod browser;
 #[cfg(all(debug_assertions, target_os = "macos"))]
 mod debug;
 mod history;
+mod little;
 mod menu;
 mod model;
 #[cfg(target_os = "macos")]
 mod native;
 mod palette;
+mod prefs;
 mod pty;
 mod session;
 mod settings;
@@ -32,11 +34,14 @@ pub fn run() {
         .manage(pty::Terminals::default())
         .manage(history::Store::default())
         .manage(updater::Updates::default())
+        .manage(prefs::Store::default())
+        .manage(little::Littles::default())
         .register_asynchronous_uri_scheme_protocol(welcome::SCHEME, welcome::respond)
         .setup(|app| {
             browser::create_main_window(app.handle())?;
             app.set_menu(menu::build(app.handle())?)?;
             history::load(app.handle());
+            prefs::load(app.handle());
             updater::start(app.handle());
 
             // Restore the last session, then open any `ternt <url>...` args.
@@ -56,6 +61,7 @@ pub fn run() {
                 if let Some(Err(err)) = saved.map(|saved| browser::restore(&handle, saved)) {
                     eprintln!("failed to restore session: {err}");
                 }
+                browser::mark_restored();
                 // Welcome first, so a URL given on the command line ends up active.
                 if first_launch && let Err(err) = welcome::open(&handle) {
                     eprintln!("failed to open the welcome page: {err}");
@@ -117,6 +123,12 @@ pub fn run() {
             updater::install_update,
             updater::app_version,
             settings::reveal_data_dir,
+            settings::default_browser,
+            settings::make_default_browser,
+            prefs::get_prefs,
+            prefs::set_prefs,
+            little::little_state,
+            little::little_open_in_ternt,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_ready,
             #[cfg(all(debug_assertions, target_os = "macos"))]
@@ -145,14 +157,31 @@ pub fn run() {
             debug::debug_view,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_focus,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_open_external,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Saves are debounced; make sure the last change lands.
-            if let tauri::RunEvent::Exit = event {
-                session::save_now(app);
-                history::save_now(app);
+            match event {
+                // Saves are debounced; make sure the last change lands.
+                tauri::RunEvent::Exit => {
+                    session::save_now(app);
+                    history::save_now(app);
+                }
+                // Links from other apps (Ternt as the default browser).
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Opened { urls } => {
+                    let app = app.clone();
+                    std::thread::spawn(move || {
+                        for url in urls {
+                            if let Err(err) = little::open_external(&app, url) {
+                                eprintln!("failed to open a link: {err}");
+                            }
+                        }
+                    });
+                }
+                _ => {}
             }
         });
 }

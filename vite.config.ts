@@ -20,13 +20,14 @@ export default defineConfig({
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   build: {
     // One page per app webview: sidebar UI, command bar overlay, terminals,
-    // and the Settings window.
+    // the Settings window, and Little Ternt's bar.
     rolldownOptions: {
       input: {
         main: fileURLToPath(new URL("index.html", import.meta.url)),
         palette: fileURLToPath(new URL("palette.html", import.meta.url)),
         term: fileURLToPath(new URL("term.html", import.meta.url)),
         settings: fileURLToPath(new URL("settings.html", import.meta.url)),
+        little: fileURLToPath(new URL("little.html", import.meta.url)),
       },
     },
     target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",

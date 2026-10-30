@@ -104,10 +104,12 @@ pub async fn debug_allow_popups(app: AppHandle, label: String) -> Result<(), Str
         .map_err(|e| e.to_string())
 }
 
-/// Labels of all open windows, to verify popups.
+/// Labels of all open windows (popups, Settings, Little Ternt).
 #[tauri::command]
 pub fn debug_windows(app: AppHandle) -> Vec<String> {
-    app.webview_windows().into_keys().collect()
+    // Windows holding several webviews (main, Little Ternt) aren't
+    // webview windows.
+    app.windows().into_keys().collect()
 }
 
 #[tauri::command]
@@ -214,4 +216,11 @@ pub async fn debug_focus(app: AppHandle, label: String) -> Result<(), String> {
         .ok_or_else(|| format!("no webview {label}"))?
         .set_focus()
         .map_err(|e| e.to_string())
+}
+
+/// Open a link the way macOS hands one over from another app.
+#[tauri::command]
+pub async fn debug_open_external(app: AppHandle, url: String) -> Result<(), String> {
+    let url = tauri::Url::parse(&url).map_err(|e| e.to_string())?;
+    crate::little::open_external(&app, url).map_err(|e| e.to_string())
 }

@@ -54,3 +54,42 @@ pub async fn reveal_data_dir(app: AppHandle) -> Result<(), String> {
     std::process::Command::new("open").arg(&dir).spawn().map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// Whether Ternt opens web links from other apps.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DefaultBrowser {
+    is_default: bool,
+    /// Something else is (or nothing is known): the button can ask.
+    can_ask: bool,
+}
+
+#[tauri::command]
+pub fn default_browser(app: AppHandle) -> DefaultBrowser {
+    #[cfg(target_os = "macos")]
+    {
+        let is_default = crate::native::is_default_browser(&app.config().identifier);
+        DefaultBrowser { is_default, can_ask: !is_default }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        DefaultBrowser { is_default: false, can_ask: false }
+    }
+}
+
+/// Ask macOS to make Ternt the default browser (it confirms with the user).
+#[tauri::command]
+pub async fn make_default_browser(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let id = app.config().identifier.clone();
+        app.run_on_main_thread(move || crate::native::make_default_browser(&id))
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("not supported on this platform".into())
+    }
+}

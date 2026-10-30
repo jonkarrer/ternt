@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "App UI webviews (and the Settings window) only. Page webviews (tab-*) and popups get no IPC access.",
-  "webviews": ["ui", "palette", "term", "settings"],
+  "description": "App UI webviews (the Settings window, Little Ternt bars) only. Page webviews (tab-*) and popups get no IPC access.",
+  "webviews": ["ui", "palette", "term", "settings", "little-*-bar"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
