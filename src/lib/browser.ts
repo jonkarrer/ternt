@@ -28,6 +28,8 @@ export interface Space {
   color: string;
   /** Set when the space has its own cookie jar. */
   profile: string | null;
+  /** An emoji shown instead of the color dot. */
+  icon: string | null;
 }
 
 export interface Folder {
@@ -126,6 +128,8 @@ export const browser = {
   /** `choice`: `shared`, `new` or `space-<id>` (share that space's profile). */
   spaceProfile: (id: number, choice: string) => invoke("space_profile", { id, profile: choice }),
   setSpaceColor: (id: number, color: string) => invoke("space_color", { id, color }),
+  /** `null` or blank removes it. */
+  setSpaceIcon: (id: number, icon: string | null) => invoke("space_icon", { id, icon }),
   /** An empty name goes back to the names of its spaces. */
   renameProfile: (profile: string, name: string) => invoke("rename_profile", { profile, name }),
   clearProfileHistory: (profile: string | null) => invoke("clear_profile_history", { profile }),
@@ -162,6 +166,9 @@ export const browser = {
     listen<UpdateStatus>("update:status", (e) => cb(e.payload)),
   /** Explore mode (⌘F) started or ended. */
   onExplore: (cb: (on: boolean) => void): Promise<UnlistenFn> => listen<boolean>("browser:explore", (e) => cb(e.payload)),
+  /** Rust asks the sidebar to show the icon picker for a space. */
+  onIconPicker: (cb: (space: number) => void): Promise<UnlistenFn> =>
+    listen<number>("browser:icon-picker", (e) => cb(e.payload)),
   /** Rust asks the sidebar to start inline-renaming a space or folder. */
   onRename: (cb: (target: { kind: "space" | "folder"; id: number }) => void): Promise<UnlistenFn> =>
     listen<{ kind: "space" | "folder"; id: number }>("browser:rename", (e) => cb(e.payload)),

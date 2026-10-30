@@ -84,6 +84,7 @@ pub fn run() {
             browser::remove_space,
             browser::space_color,
             browser::space_profile,
+            browser::space_icon,
             browser::rename_profile,
             browser::reopen_closed,
             browser::clear_profile_history,

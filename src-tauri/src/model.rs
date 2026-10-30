@@ -89,7 +89,14 @@ pub struct Space {
     /// to share the default one.
     #[serde(default)]
     pub profile: Option<String>,
+    /// An emoji shown in the space switcher instead of the color dot.
+    #[serde(default)]
+    pub icon: Option<String>,
 }
+
+/// Longest icon accepted, in bytes: room for one emoji with modifiers
+/// (flags, skin tones, ZWJ sequences), not a word.
+pub const MAX_ICON_BYTES: usize = 32;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -175,6 +182,7 @@ impl Default for State {
                 name: "Home".into(),
                 color: SPACE_COLORS[0].into(),
                 profile: None,
+                icon: None,
             }],
             folders: Vec::new(),
             profile_names: HashMap::new(),
@@ -402,8 +410,25 @@ impl State {
             name: format!("Space {}", self.spaces.len() + 1),
             color: (*color).into(),
             profile,
+            icon: None,
         });
         id
+    }
+
+    /// Set or clear (`None`, blank) a space's icon. Returns whether anything
+    /// changed; icons longer than one emoji are refused.
+    pub fn set_space_icon(&mut self, id: u32, icon: Option<&str>) -> bool {
+        let icon = icon.map(str::trim).filter(|i| !i.is_empty());
+        if icon.is_some_and(|i| i.len() > MAX_ICON_BYTES) {
+            return false;
+        }
+        let Some(space) = self.space_mut(id) else { return false };
+        let icon = icon.map(String::from);
+        if space.icon == icon {
+            return false;
+        }
+        space.icon = icon;
+        true
     }
 
     /// Switch spaces. Returns the tab to show there: the one last shown in
@@ -926,6 +951,23 @@ mod tests {
         s.space_mut(1).unwrap().profile = Some("h".into());
         assert_eq!(s.profile_groups()[0].name, "Ternt");
         assert!(s.profile_groups()[0].spaces.is_empty());
+    }
+
+    #[test]
+    fn space_icons_are_one_emoji_and_saved() {
+        let mut s = State::default();
+        assert!(s.set_space_icon(1, Some(" 🏠 ")));
+        assert_eq!(s.space(1).unwrap().icon.as_deref(), Some("🏠"));
+        assert!(!s.set_space_icon(1, Some("🏠")), "same icon: no change");
+        assert!(s.set_space_icon(1, Some("👩🏽‍💻")), "ZWJ sequences with skin tones fit");
+        assert!(!s.set_space_icon(1, Some(&"x".repeat(MAX_ICON_BYTES + 1))));
+        assert!(!s.set_space_icon(99, Some("🏠")), "no such space");
+
+        let r = State::restore(serde_json::from_str(&serde_json::to_string(&s.save()).unwrap()).unwrap());
+        assert_eq!(r.space(1).unwrap().icon.as_deref(), Some("👩🏽‍💻"));
+
+        assert!(s.set_space_icon(1, Some("  ")), "blank clears it");
+        assert_eq!(s.space(1).unwrap().icon, None);
     }
 
     #[test]

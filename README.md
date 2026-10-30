@@ -57,6 +57,10 @@ Arc-style, top to bottom:
 - **Today**: per space, newest first, below a divider. Hover the divider for *Clear*, which
   closes the space's Today web tabs (terminals stay; ⇧⌘T reopens).
 
+**Spaces**: hover the space name for **…** (rename, icon, color, profile, delete; also a
+right-click on the name or on a space in the switcher). *Change Icon…* picks an emoji, or type any
+emoji; the icon shows next to the name and replaces the space's dot in the switcher.
+
 Drag tabs between sections, into folders, or to reorder. Closing a favorite or pinned tab
 unloads it (frees memory, keeps it in the sidebar). Right-click a tab, folder or space dot
 for more. Double-click a space or folder name to rename it.

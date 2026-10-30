@@ -259,6 +259,7 @@ pub async fn space_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
     let build = || -> tauri::Result<Menu<Wry>> {
         let menu = Menu::new(&app)?;
         menu.append(&item(&app, format!("ctx-rename-space:{id}"), "Rename Space…")?)?;
+        menu.append(&item(&app, format!("ctx-space-icon:{id}"), "Change Icon…")?)?;
         let colors = Submenu::new(&app, "Color", true)?;
         for option in SPACE_COLORS {
             let label = format!("{}{}", option[..1].to_uppercase(), &option[1..]);
@@ -330,6 +331,7 @@ fn run_context_action(app: &AppHandle, id: &str) -> tauri::Result<()> {
         "ctx-close" => browser::close_tab_by_id(app, target)?,
         // Spaces
         "ctx-rename-space" => browser::request_rename(app, "space", target)?,
+        "ctx-space-icon" => browser::request_icon_picker(app, target)?,
         "ctx-space-color" => browser::set_space_color(app, target, arg.unwrap_or_default()),
         "ctx-space-profile" => {
             if let Some(choice) = arg.and_then(browser::ProfileChoice::parse) {

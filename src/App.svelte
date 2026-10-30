@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { fly } from "svelte/transition";
+  import IconPicker from "./lib/IconPicker.svelte";
   import Omnibox from "./lib/Omnibox.svelte";
   import TabIcon from "./lib/TabIcon.svelte";
   import TabRow from "./lib/TabRow.svelte";
@@ -43,6 +44,8 @@
   let resizing = $state(false);
   let drag = $state<{ id: number; target: DropTarget | null } | null>(null);
   let renaming = $state<{ kind: "space" | "folder"; id: number } | null>(null);
+  /** The space whose icon picker is open (space menu → Change Icon…). */
+  let pickingIcon = $state<number | null>(null);
   /** Direction of the last space switch, for the slide-in. */
   let slide = $state(1);
   /** Explore mode (⌘F): the tab under the keyboard cursor, or null when off. */
@@ -87,6 +90,7 @@
     const unlisten = [
       browser.onState(applyState),
       browser.onRename((target) => (renaming = target)),
+      browser.onIconPicker((id) => (pickingIcon = id)),
       browser.onExplore((on) => {
         explore = on;
         cursor = on ? (browserState.active ?? exploreIds()[0] ?? null) : null;
@@ -399,6 +403,7 @@
       {#key activeSpace}
         <div class="space-body" in:fly={{ x: 24 * slide, duration: 160 }}>
           <div class="space-header">
+            {#if space?.icon}<span class="space-icon" aria-hidden="true">{space.icon}</span>{/if}
             {#if renaming?.kind === "space" && renaming.id === space?.id}
               <input class="rename" value={space?.name} use:focusSelect onblur={commitRename} onkeydown={renameKeys} />
             {:else}
@@ -407,6 +412,10 @@
                 role="heading"
                 aria-level="2"
                 ondblclick={() => space && (renaming = { kind: "space", id: space.id })}
+                oncontextmenu={(e) => {
+                  e.preventDefault();
+                  if (space) browser.spaceContextMenu(space.id);
+                }}
               >
                 {space?.name}
               </span>
@@ -420,9 +429,27 @@
                 >
               {/if}
             {/if}
+            <button
+              class="icon small space-more"
+              aria-label="Space options"
+              title="Rename, icon, color, profile…"
+              onclick={() => space && browser.spaceContextMenu(space.id)}
+            >
+              <svg viewBox="0 0 16 16"><path class="dots" d="M4 8h.01M8 8h.01M12 8h.01" /></svg>
+            </button>
             <button class="icon small" aria-label="New folder" title="New folder" onclick={() => browser.menuAction("new-folder")}>
               <svg viewBox="0 0 16 16"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11zM8 8v3M6.5 9.5h3" /></svg>
             </button>
+            {#if space && pickingIcon === space.id}
+              <IconPicker
+                current={space.icon}
+                onpick={(icon) => {
+                  browser.setSpaceIcon(space.id, icon);
+                  pickingIcon = null;
+                }}
+                onclose={() => (pickingIcon = null)}
+              />
+            {/if}
           </div>
 
           <!-- Pinned: this space's folders, then loose pinned tabs. -->
@@ -536,6 +563,7 @@
           <button
             class="space-dot"
             class:active={s.id === activeSpace}
+            class:has-icon={s.icon}
             style:--swatch={spaceSwatch(s.color)}
             title="{s.name}{s.profile ? ' (separate profile)' : ''}"
             aria-label="Switch to {s.name}"
@@ -545,7 +573,11 @@
               browser.spaceContextMenu(s.id);
             }}
           >
-            {#if s.profile}<span class="ring"></span>{/if}
+            {#if s.icon}
+              <span class="dot-icon">{s.icon}</span>
+            {:else if s.profile}
+              <span class="ring"></span>
+            {/if}
           </button>
         {/each}
         <button class="icon small" aria-label="New space" title="New space" onclick={() => browser.createSpace()}>
@@ -740,8 +772,21 @@
     text-transform: uppercase;
     letter-spacing: 0.03em;
   }
+  .space-header {
+    position: relative;
+  }
+  .space-icon {
+    flex: none;
+    margin-right: -1px;
+    font-size: 14px;
+    line-height: 1;
+  }
   .space-header .icon {
     visibility: hidden;
+  }
+  /* Round dots: a thicker stroke than the other icons. */
+  .space-more .dots {
+    stroke-width: 2.6;
   }
   .space-header:hover .icon {
     visibility: visible;
@@ -924,6 +969,27 @@
   .space-dot.active {
     opacity: 1;
     scale: 1.3;
+  }
+  /* An icon replaces the dot: full size, faded like the dots until active,
+     on a pill of the space's color. */
+  .space-dot.has-icon {
+    width: 22px;
+    height: 22px;
+    margin: 0 -3px;
+    background: transparent;
+    opacity: 0.55;
+  }
+  .space-dot.has-icon.active {
+    opacity: 1;
+    scale: 1;
+    background: color-mix(in srgb, var(--swatch) 30%, transparent);
+  }
+  .dot-icon {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    font-size: 14px;
+    line-height: 1;
   }
   /* A ring marks spaces with their own profile. */
   .ring {

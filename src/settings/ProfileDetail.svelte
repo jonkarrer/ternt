@@ -74,7 +74,11 @@
 <div class="card">
   {#each members as space (space.id)}
     <div class="row">
-      <span class="dot" style:background={spaceSwatch(space.color)}></span>
+      {#if space.icon}
+        <span class="space-icon">{space.icon}</span>
+      {:else}
+        <span class="dot" style:background={spaceSwatch(space.color)}></span>
+      {/if}
       <span class="label">{space.name}</span>
       <select
         aria-label="Profile for {space.name}"
@@ -162,6 +166,13 @@
     width: 10px;
     height: 10px;
     border-radius: 50%;
+  }
+  .space-icon {
+    flex: none;
+    width: 10px;
+    font-size: 14px;
+    line-height: 1;
+    text-align: center;
   }
   .count {
     color: var(--text-muted);

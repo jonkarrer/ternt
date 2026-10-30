@@ -814,6 +814,28 @@ pub fn delete_space(app: &AppHandle, id: u32) -> tauri::Result<()> {
     Ok(())
 }
 
+pub fn set_space_icon(app: &AppHandle, id: u32, icon: Option<&str>) {
+    if with(app, |s| s.set_space_icon(id, icon)) {
+        emit_state(app);
+    }
+}
+
+/// Ask the sidebar to show its icon picker for a space (switching to it,
+/// since the picker opens under the space's header).
+pub fn request_icon_picker(app: &AppHandle, id: u32) -> tauri::Result<()> {
+    if with(app, |s| s.space(id).is_none()) {
+        return Ok(());
+    }
+    if with(app, |s| s.active_space != id) {
+        switch_space(app, id)?;
+        emit_state(app);
+    }
+    if let Some(ui) = app.get_webview(UI_WEBVIEW) {
+        ui.set_focus()?;
+    }
+    app.emit_to(EventTarget::webview(UI_WEBVIEW), "browser:icon-picker", id)
+}
+
 pub fn set_space_color(app: &AppHandle, id: u32, color: &str) {
     if !SPACE_COLORS.contains(&color) {
         return;
@@ -1167,6 +1189,12 @@ pub async fn remove_space(app: AppHandle, id: u32) -> Result<(), String> {
 #[tauri::command]
 pub async fn space_color(app: AppHandle, id: u32, color: String) {
     set_space_color(&app, id, &color);
+}
+
+/// `None` or blank removes the icon.
+#[tauri::command]
+pub async fn space_icon(app: AppHandle, id: u32, icon: Option<String>) {
+    set_space_icon(&app, id, icon.as_deref());
 }
 
 #[tauri::command]
