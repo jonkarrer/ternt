@@ -2,8 +2,8 @@
   "nodes": {
     "devshell-lib": {
       "locked": {
-        "lastModified": 1793194240,
-        "narHash": "sha256-sbYObVsbMfitylaERoevPNuPWvRqjev03idBWOmocno=",
+        "lastModified": 1793372140,
+        "narHash": "sha256-qv125EQuyXLf1g+mGZSjAzXAxP3bVl0sd8+Bi2dnsg4=",
         "path": "/Users/jokar/devjon/configs/shells/shared",
         "type": "path"
       },
