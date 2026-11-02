@@ -1,0 +1,13 @@
+<!doctype html>
+<title>Fixture IPC</title>
+<!-- Google Docs declares a global function named ipc; Tauri's bridge used to
+     lock window.ipc, so this script failed and the title stayed as above. -->
+<script>
+  function ipc() {
+    return "page's own";
+  }
+  document.title = "ipc: " + ipc() + ", tauri: " + typeof window.__TAURI_INTERNALS__;
+</script>
+<body style="font: 20px system-ui; padding: 40px">
+  <h1>IPC</h1>
+</body>

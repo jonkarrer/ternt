@@ -592,7 +592,10 @@ fn open_popup(
     .on_new_window(move |url, features| on_new_window(&popup_app, url, features));
     #[cfg(target_os = "macos")]
     let builder = builder.user_agent(USER_AGENT);
-    builder.build()
+    let window = builder.build()?;
+    #[cfg(target_os = "macos")]
+    window.with_webview(crate::native::remove_injected_scripts)?;
+    Ok(window)
 }
 
 // --- Profiles (separate cookie jars per space) ----------------------------
@@ -697,6 +700,8 @@ fn load_tab(app: &AppHandle, id: u32) -> tauri::Result<Webview> {
 
     let bounds = content_bounds(app)?;
     let webview = main_window(app)?.add_child(builder, bounds.position, bounds.size)?;
+    #[cfg(target_os = "macos")]
+    webview.with_webview(crate::native::remove_injected_scripts)?;
     with(app, |s| {
         if let Some(tab) = s.tab_mut(id) {
             tab.loaded = true;

@@ -152,6 +152,8 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
         LogicalPosition::new(0.0, BAR_HEIGHT),
         LogicalSize::new(size.width, (size.height - BAR_HEIGHT).max(0.0)),
     )?;
+    #[cfg(target_os = "macos")]
+    page.with_webview(crate::native::remove_injected_scripts)?;
 
     let app = app.clone();
     let window_label = label.clone();

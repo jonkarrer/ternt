@@ -29,4 +29,12 @@ await t.assert(S().tabs.length === tabs && tab()?.url.endsWith("/links.html"), "
 
 await click(page, "next");
 await t.until(() => tab()?.title === "Fixture Page 2", "ordinary links still work");
+
+// Pages get none of Tauri's scripts: its bridge locked window.ipc, which
+// broke Google Docs, Sheets and Forms (they declare their own ipc).
+await t.invoke("navigate", { url: `${F}/ipc.html` });
+await t.until(() => tab()?.title.startsWith("ipc:"), "a page declaring its own global ipc runs");
+await t.assert(tab().title === "ipc: page's own, tauri: undefined", `and sees no Tauri internals (${tab().title})`);
+const fresh = await t.invoke("new_tab", { url: `${F}/ipc.html` });
+await t.until(() => S().tabs.find((x) => x.id === fresh)?.title === "ipc: page's own, tauri: undefined", "the same in a new tab's first page");
 await t.quit();

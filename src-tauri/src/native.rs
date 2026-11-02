@@ -466,3 +466,17 @@ pub fn download_finished(path: &std::path::Path) {
         let _: () = msg_send![center, postNotificationName: &*name, object: &*object];
     }
 }
+
+/// Remove the scripts Tauri adds to every webview (its IPC bridge) from a
+/// web page's view, before the page's document is created. Web pages never
+/// talk to Ternt, and the bridge defines a locked `window.ipc`: sites that
+/// declare their own global `ipc` (Google Docs, Sheets, Forms…) fail to load.
+/// Run it right after creating the view: its first page loads afterwards.
+pub fn remove_injected_scripts(webview: tauri::webview::PlatformWebview) {
+    unsafe {
+        let view = &*(webview.inner() as *const AnyObject);
+        let config: *mut AnyObject = msg_send![view, configuration];
+        let controller: *mut AnyObject = msg_send![&*config, userContentController];
+        let _: () = msg_send![&*controller, removeAllUserScripts];
+    }
+}
