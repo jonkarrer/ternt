@@ -114,6 +114,23 @@ await t.until(async () => {
   return p && near(p.h, full.h);
 }, "the remaining right pane is full height");
 
+// The terminal's sidebar row has split buttons too
+const rowButton = (label) => document.querySelector(`.tab[data-tab="${term}"] button[aria-label="${label}"]`);
+await t.assert(rowButton("Split right") && rowButton("Split down"), "the row shows split buttons");
+await t.assert(!document.querySelector(`.tab:not(.terminal) button[aria-label="Split right"]`), "web tabs don't");
+const before = ids().length;
+rowButton("Split down").click();
+await t.until(() => ids().length === before + 1, "clicking one splits the focused pane");
+await t.until(() => {
+  const n = panes().root;
+  const walk = (x) => x.kind === "split" && (x.direction === "down" || walk(x.first) || walk(x.second));
+  return walk(n);
+}, "in that direction");
+await t.sleep(300);
+await t.shot("panes-row-buttons");
+await t.invoke("menu_action", { id: "close-tab" });
+await t.until(() => ids().length === before, "⌘W closes it again");
+
 // `exit` closes a pane; the last one closes the tab
 await run(bottom, "exit");
 await t.until(() => ids().length === 1 && panes().focused === 0, "exiting a shell closes its pane");

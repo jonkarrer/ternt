@@ -3,6 +3,7 @@
   import Favicon from "../lib/Favicon.svelte";
   import SpaceIcon from "../lib/SpaceIcon.svelte";
   import TabIcon from "../lib/TabIcon.svelte";
+  import HelpSheet from "./HelpSheet.svelte";
   import { browser, type ClosedTab, type HistoryHit, type Split, type PaletteRequest, type Space, type Tab } from "../lib/browser";
   import { buildItems, type Action, type Item } from "./rank";
 
@@ -23,14 +24,15 @@
   let history = $state<HistoryHit[]>([]);
   let historySeq = 0;
 
+  const help = $derived(request?.mode === "help");
   const items = $derived(
-    request ? buildItems(query, { mode: request.mode, tabs, spaces, activeId, activeSpace, history, closed, splits }) : [],
+    request && !help ? buildItems(query, { mode: request.mode, tabs, spaces, activeId, activeSpace, history, closed, splits }) : [],
   );
 
   $effect(() => {
     const q = query.trim();
     const seq = ++historySeq;
-    if (!request || !q || q.startsWith(">")) {
+    if (!request || help || !q || q.startsWith(">")) {
       history = [];
       return;
     }
@@ -136,19 +138,25 @@
     style:--content-left="{request.contentLeft}px"
     onclick={(e) => e.target === e.currentTarget && close()}
   >
-    <div class="panel" role="dialog" aria-label="Command bar">
+    <div class="panel" class:help role="dialog" aria-label={help ? "Shortcuts and how-tos" : "Command bar"}>
       <input
         bind:this={input}
         bind:value={query}
         {onkeydown}
-        placeholder={request.mode === "newTab" ? "Search, open a URL, or type a command…" : "Enter URL…"}
+        placeholder={help
+          ? "Search shortcuts and how-tos…"
+          : request.mode === "newTab"
+            ? "Search, open a URL, or type a command…"
+            : "Enter URL…"}
         spellcheck="false"
         autocomplete="off"
         role="combobox"
         aria-expanded={items.length > 0}
         aria-controls="palette-results"
       />
-      {#if items.length}
+      {#if help}
+        <HelpSheet {query} />
+      {:else if items.length}
         <ul id="palette-results" role="listbox" bind:this={list}>
           {#each items as item, i (item.key)}
             {#if item.section !== "top" && item.section !== items[i - 1]?.section}
@@ -187,7 +195,12 @@
           {/each}
         </ul>
       {/if}
-      {#if request.mode === "newTab"}
+      {#if help}
+        <footer>
+          <span>Type to filter</span>
+          <span><kbd>esc</kbd> or <kbd>⌘H</kbd> close</span>
+        </footer>
+      {:else if request.mode === "newTab"}
         <footer>
           <span><kbd>↑</kbd><kbd>↓</kbd> select</span>
           <span><kbd>↵</kbd> run</span>
@@ -220,6 +233,10 @@
       0 24px 64px rgb(0 0 0 / 0.3);
     overflow: hidden;
     animation: rise 140ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  .panel.help {
+    top: 9vh;
+    width: min(820px, calc(100vw - var(--content-left) - var(--inset) - 48px));
   }
   input {
     display: block;

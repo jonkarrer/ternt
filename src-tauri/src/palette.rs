@@ -24,6 +24,8 @@ pub enum Mode {
     NewTab,
     /// Prefilled with the active tab's URL; results replace it.
     Edit,
+    /// Shortcuts and how-tos (⌘H), searchable.
+    Help,
 }
 
 #[derive(Clone, Serialize)]
@@ -63,7 +65,11 @@ pub fn open(app: &AppHandle, mode: Mode) -> tauri::Result<()> {
         browser::end_explore(app, browser::ExploreEnd::Commit);
     }
     let url = browser::active_tab_url(app);
-    let mode = if url.is_none() { Mode::NewTab } else { mode };
+    let mode = if url.is_none() && mode == Mode::Edit {
+        Mode::NewTab
+    } else {
+        mode
+    };
     let request = Request {
         mode,
         url: if mode == Mode::Edit { url } else { None },
@@ -84,6 +90,22 @@ pub fn open(app: &AppHandle, mode: Mode) -> tauri::Result<()> {
     crate::native::bring_to_front(&webview);
     webview.show()?;
     webview.set_focus()
+}
+
+/// ⌘H: show the help sheet, or close it if it's up.
+pub fn toggle_help(app: &AppHandle) -> tauri::Result<()> {
+    let showing = app
+        .state::<Palette>()
+        .0
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|r| r.mode == Mode::Help);
+    if showing {
+        close(app)
+    } else {
+        open(app, Mode::Help)
+    }
 }
 
 pub fn close(app: &AppHandle) -> tauri::Result<()> {

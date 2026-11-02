@@ -126,7 +126,7 @@ export interface Prefs {
   account: { name: string; email: string };
 }
 
-export type PaletteMode = "newTab" | "edit";
+export type PaletteMode = "newTab" | "edit" | "help";
 
 export interface PaletteRequest {
   mode: PaletteMode;

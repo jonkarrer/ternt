@@ -71,6 +71,7 @@ export const COMMANDS: Command[] = [
   { id: "split-down", label: "Split Down", shortcut: "⇧⌘D", keywords: "pane terminal horizontal", terminal: true },
   { id: "next-pane", label: "Next Pane", shortcut: "⌘]", keywords: "terminal split", terminal: true },
   { id: "previous-pane", label: "Previous Pane", shortcut: "⌘[", keywords: "terminal split", terminal: true },
+  { id: "help", label: "Shortcuts and How-Tos", shortcut: "⌘H", keywords: "help keyboard keys tips guide", suggest: true },
   { id: "toggle-sidebar", label: "Toggle Sidebar", shortcut: "⌘S", keywords: "hide show" },
   { id: "reload", label: "Reload Page", shortcut: "⌘R", keywords: "refresh", web: true },
   { id: "back", label: "Go Back", shortcut: "⌘[", web: true },

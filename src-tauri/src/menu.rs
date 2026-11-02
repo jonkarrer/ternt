@@ -31,7 +31,8 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::hide(app, None)?,
+            // ⌘H shows the help sheet instead.
+            &MenuItem::with_id(app, "hide-app", "Hide Ternt", true, None::<&str>)?,
             &PredefinedMenuItem::hide_others(app, None)?,
             &PredefinedMenuItem::show_all(app, None)?,
             &PredefinedMenuItem::separator(app)?,
@@ -224,13 +225,16 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         app,
         "Help",
         true,
-        &[&MenuItem::with_id(
-            app,
-            "welcome",
-            "Welcome to Ternt",
-            true,
-            None::<&str>,
-        )?],
+        &[
+            &MenuItem::with_id(
+                app,
+                "help",
+                "Shortcuts and How-Tos",
+                true,
+                Some("CmdOrCtrl+H"),
+            )?,
+            &MenuItem::with_id(app, "welcome", "Welcome to Ternt", true, None::<&str>)?,
+        ],
     )?;
 
     Menu::with_items(
@@ -261,6 +265,9 @@ pub fn run_action(app: &AppHandle, id: String) {
             }
             "close-tab" => browser::close_active_tab(&app),
             "settings" => settings::open(&app),
+            "help" => palette::toggle_help(&app),
+            #[cfg(target_os = "macos")]
+            "hide-app" => app.hide(),
             "reload" => browser::reload_active(&app),
             "back" if browser::cycle_pane(&app, -1) => Ok(()),
             "forward" if browser::cycle_pane(&app, 1) => Ok(()),

@@ -51,6 +51,7 @@ them run under `doppler run --`.
 | ⌃1–⌃9, ⌘⌥← / ⌘⌥→ | Switch spaces (or swipe two fingers across the sidebar; with a mouse, scroll sideways or Shift-scroll over it) |
 | ⌥⌘\ | Split view: a new terminal beside the current page |
 | ⌘, | Settings (⌘1–⌘6 switch its pages, ⌘W closes it) |
+| ⌘H | Shortcuts and how-tos, searchable (also in the Help menu). Hide Ternt is in the app menu without a shortcut |
 
 ## Sidebar
 

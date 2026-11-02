@@ -53,6 +53,12 @@
     }
   }
   let cancelled = false;
+
+  /** Terminals: split the tab's focused pane (switching to the tab first). */
+  async function splitPane(direction: "right" | "down") {
+    await browser.activateTab(tab.id);
+    browser.menuAction(direction === "right" ? "split-right" : "split-down");
+  }
   function startEdit(node: HTMLInputElement) {
     cancelled = false;
     node.focus();
@@ -114,6 +120,26 @@
       <path d="M8 3.5v9" />
       <rect class="side" x={split === "left" ? 3.5 : 9.5} y="5" width="3" height="6" rx="0.75" />
     </svg>
+  {/if}
+  {#if tab.kind === "terminal"}
+    <button
+      class="close split-pane"
+      aria-label="Split right"
+      title="Split Right (⌘D)"
+      onpointerdown={(e) => e.stopPropagation()}
+      onclick={() => splitPane("right")}
+    >
+      <svg viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="2" /><path d="M8 3v10" /></svg>
+    </button>
+    <button
+      class="close split-pane"
+      aria-label="Split down"
+      title="Split Down (⇧⌘D)"
+      onpointerdown={(e) => e.stopPropagation()}
+      onclick={() => splitPane("down")}
+    >
+      <svg viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="2" /><path d="M2.5 8h11" /></svg>
+    </button>
   {/if}
   <button
     class="close"
@@ -235,6 +261,15 @@
   .row:hover .close,
   .active .close {
     visibility: visible;
+  }
+  /* The split buttons sit tight against the close button. */
+  .split-pane {
+    margin-right: -7px;
+  }
+  .split-pane svg {
+    width: 15px;
+    height: 15px;
+    stroke-width: 1.4;
   }
   .split-glyph {
     flex: none;

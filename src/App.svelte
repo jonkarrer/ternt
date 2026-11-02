@@ -516,19 +516,19 @@
       onpointerleave={leavePeek}
     >
       <header class="titlebar" data-tauri-drag-region>
-        <button
-          class="tool"
-          aria-label={collapsed ? "Keep sidebar open (⌘S)" : "Hide sidebar (⌘S)"}
-          title={collapsed ? "Keep Sidebar Open (⌘S)" : "Hide Sidebar (⌘S)"}
-          onclick={() => browser.menuAction("toggle-sidebar")}
-        >
-          <svg viewBox="0 0 18 18">
-            <rect x="2" y="3.25" width="14" height="11.5" rx="2.75" />
-            <path d="M7 3.25v11.5" />
-            <path class="fine" d="M4.25 6.25h.75M4.25 8.5h.75" />
-          </svg>
-        </button>
         <div class="nav">
+          <button
+            class="tool"
+            aria-label={collapsed ? "Keep sidebar open (⌘S)" : "Hide sidebar (⌘S)"}
+            title={collapsed ? "Keep Sidebar Open (⌘S)" : "Hide Sidebar (⌘S)"}
+            onclick={() => browser.menuAction("toggle-sidebar")}
+          >
+            <svg viewBox="0 0 18 18">
+              <rect x="2" y="3.25" width="14" height="11.5" rx="2.75" />
+              <path d="M7 3.25v11.5" />
+              <path class="fine" d="M4.25 6.25h.75M4.25 8.5h.75" />
+            </svg>
+          </button>
           <button class="tool" aria-label="Back" title="Back (⌘[)" onclick={browser.goBack} disabled={!activeTab?.canGoBack}>
             <svg viewBox="0 0 18 18"><path d="M11 4 6 9l5 5" /></svg>
           </button>
@@ -908,7 +908,7 @@
     padding-left: 70px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
   }
   .nav {
     display: flex;
