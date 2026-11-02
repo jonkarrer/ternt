@@ -11,7 +11,7 @@ setopt null_glob
 E2E=${0:A:h}
 ROOT=${E2E:h}
 OUT=$E2E/.out
-mkdir -p $OUT
+mkdir -p $OUT && rm -rf $OUT/downloads
 
 (cd $ROOT/src-tauri && cargo build -q) || exit 1
 curl -s -o /dev/null localhost:1420 || { (cd $ROOT && bun run dev > $OUT/vite.log 2>&1 &); }

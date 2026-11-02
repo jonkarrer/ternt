@@ -13,8 +13,8 @@ No tabs are created for you: press ⌘T to open the first one.
 After that Ternt updates itself. It checks at launch, every hour, and when you come back to it
 (at most every 15 minutes); when a new version is out, a card pops up at the bottom of the sidebar.
 *Restart Now* downloads the update, swaps the app in place and relaunches (your tabs come back);
-*Later* leaves an **Update** button at the bottom left for when you're ready. *Ternt → Check for
-Updates…* checks right away.
+*Later* hides it for that version (*Settings → General* can still install it). *Ternt → Check for
+Updates…* checks right away and answers on the same card.
 
 ## Development
 
@@ -45,6 +45,7 @@ them run under `doppler run --`.
 | ⌘W / ⇧⌘T | Close tab (unloads pinned tabs; closes the focused pane of a split terminal) / reopen closed tab |
 | ⌃Tab / ⌃⇧Tab, ⌘1–⌘9 | Switch tabs |
 | ⌘[ / ⌘] / ⌘R | Back / forward / reload (in a split terminal, ⌘[ / ⌘] move between panes) |
+| ⌥⌘I | Developer Tools: the Web Inspector for the page, in its own window (right-click → Inspect Element works too) |
 | ⌘D / ⇧⌘D | Split the terminal: a new pane to the right / below |
 | ⌘S | Toggle sidebar (hidden, it slides out over the page when the pointer touches the window's left edge) |
 | ⌘F | Explore tabs: j/k or ↑/↓ move, h/l or ←/→ switch space, Space peeks, Enter opens, Esc goes back |
@@ -100,6 +101,10 @@ space's color, clear its history), or right-click a space icon → *Profile*. Th
 spaces: a profile is the identity sites see while you're in one (say, one Gmail for work, another
 for side projects).
 A profile no space uses any more is deleted.
+
+**Downloads** (download links, files a site sends to save) go to `~/Downloads`, numbered rather
+than overwriting, and the Dock's Downloads stack bounces when one finishes. Links for other apps
+(`mailto:`, `tel:`, Zoom, Slack…) open in those apps.
 
 ## Little Ternt
 
@@ -192,8 +197,8 @@ CI (`.github/workflows/ci.yml`) runs the unit tests on every push.
   screenshot only warns.
 - **Self-update** (`e2e/update.sh`, a few minutes, not part of `bun run test`): builds signed
   0.1.0 and 0.1.1 bundles, installs 0.1.0, serves 0.1.1 as the latest release from a local
-  server, then checks that the installed app pops up the update card and shows the Update button,
-  installs on click, swaps its bundle and relaunches as 0.1.1. Needs a signing key in `~/.tauri/`
+  server, then checks that the installed app pops up the update card, hides it on *Later*,
+  installs, swaps its bundle and relaunches as 0.1.1. Needs a signing key in `~/.tauri/`
   (any key: the test bundles trust its public half).
 
 Not covered (macOS won't let tests send real input): physical key presses and trackpad

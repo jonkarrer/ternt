@@ -23,6 +23,7 @@ export const SHORTCUTS: ShortcutGroup[] = [
   group("Pages", [
     ["⌘[  ⌘]", "Back / forward"],
     ["⌘R", "Reload"],
+    ["⌥⌘I", "Developer Tools (also right-click → Inspect Element)"],
     ["⌥⌘\\", "Split view: a new terminal beside the page"],
   ]),
   group("Terminals", [

@@ -20,7 +20,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Url};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::browser::UI_WEBVIEW;
+use crate::browser::{PEEK_WEBVIEW, UI_WEBVIEW};
 
 const FIRST_CHECK: Duration = Duration::from_secs(5);
 const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
@@ -63,7 +63,7 @@ pub struct Updates {
 
 fn set_status(app: &AppHandle, status: Status) {
     *app.state::<Updates>().status.lock().unwrap() = Some(status.clone());
-    for label in [UI_WEBVIEW, crate::settings::SETTINGS_WINDOW] {
+    for label in [UI_WEBVIEW, PEEK_WEBVIEW, crate::settings::SETTINGS_WINDOW] {
         let _ = app.emit_to(EventTarget::webview(label), "update:status", status.clone());
     }
 }

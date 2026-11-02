@@ -15,6 +15,7 @@
 //! state changes) take the lock, so holding it would deadlock.
 
 use std::{
+    path::PathBuf,
     sync::{
         Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -26,7 +27,7 @@ use serde::Serialize;
 use tauri::{
     AppHandle, Emitter, EventTarget, LogicalPosition, LogicalSize, Manager, Rect, Url, Webview,
     WebviewUrl, WebviewWindowBuilder, Window,
-    webview::{NewWindowFeatures, NewWindowResponse, WebviewBuilder},
+    webview::{DownloadEvent, NewWindowFeatures, NewWindowResponse, WebviewBuilder},
     window::WindowBuilder,
 };
 
@@ -485,6 +486,10 @@ pub fn on_new_window(
     url: Url,
     features: NewWindowFeatures,
 ) -> NewWindowResponse<tauri::Wry> {
+    if !is_web_link(&url) {
+        open_in_other_app(app, &url);
+        return NewWindowResponse::Deny;
+    }
     if features.size().is_some() {
         match open_popup(app, &url, features) {
             Ok(window) => return NewWindowResponse::Create { window },
@@ -498,6 +503,70 @@ pub fn on_new_window(
     NewWindowResponse::Deny
 }
 
+/// Whether a page can show `url` (rather than another app: mailto:, tel:,
+/// zoommtg:, slack:…). Ternt's own pages (the welcome page) count.
+fn is_web_link(url: &Url) -> bool {
+    matches!(
+        url.scheme(),
+        "http" | "https" | "about" | "data" | "blob" | "file" | "javascript"
+    ) || url.scheme() == crate::welcome::SCHEME
+}
+
+/// Hand a link for another app to macOS (Mail for mailto:, Zoom for
+/// zoommtg:…). WebKit alone would drop it: a dead click.
+fn open_in_other_app(app: &AppHandle, url: &Url) {
+    use tauri_plugin_opener::OpenerExt;
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    if crate::debug::testing() {
+        return crate::debug::record_other_app_link(url);
+    }
+    if let Err(err) = app.opener().open_url(url.as_str(), None::<&str>) {
+        eprintln!("no app opens {url}: {err}");
+    }
+}
+
+/// Navigation hook for every page view (tabs, popups, Little Ternt).
+pub fn on_navigation(app: &AppHandle, url: &Url) -> bool {
+    if is_web_link(url) {
+        return true;
+    }
+    open_in_other_app(app, url);
+    false
+}
+
+/// Where each download in progress is being saved, by URL (WebKit doesn't
+/// say when it finishes).
+static DOWNLOADS: Mutex<Vec<(Url, PathBuf)>> = Mutex::new(Vec::new());
+
+/// Download hook for every page view: files go to ~/Downloads (named as the
+/// site suggests, numbered rather than overwriting). Without it WebKit
+/// cancels downloads: another dead click.
+pub fn on_download(event: DownloadEvent<'_>) -> bool {
+    match event {
+        DownloadEvent::Requested { url, destination } => {
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            crate::debug::redirect_download(destination);
+            DOWNLOADS.lock().unwrap().push((url, destination.clone()));
+        }
+        DownloadEvent::Finished { url, success, .. } => {
+            let mut downloads = DOWNLOADS.lock().unwrap();
+            if let Some(i) = downloads.iter().position(|(u, _)| *u == url) {
+                let (_, path) = downloads.remove(i);
+                #[cfg(all(debug_assertions, target_os = "macos"))]
+                crate::debug::record_download(&path, success);
+                #[cfg(target_os = "macos")]
+                if success {
+                    crate::native::download_finished(&path);
+                }
+                #[cfg(not(target_os = "macos"))]
+                let _ = (path, success);
+            }
+        }
+        _ => {}
+    }
+    true
+}
+
 fn open_popup(
     app: &AppHandle,
     url: &Url,
@@ -506,12 +575,16 @@ fn open_popup(
     static NEXT_POPUP: AtomicU32 = AtomicU32::new(1);
     let label = format!("popup-{}", NEXT_POPUP.fetch_add(1, Ordering::Relaxed));
     let popup_app = app.clone();
+    let nav_app = app.clone();
     let builder = WebviewWindowBuilder::new(
         app,
         label,
         WebviewUrl::External("about:blank".parse().unwrap()),
     )
     .window_features(features)
+    .on_navigation(move |url| on_navigation(&nav_app, url))
+    .on_download(|_, event| on_download(event))
+    .devtools(true)
     .title(url.host_str().unwrap_or("Ternt"))
     .on_document_title_changed(|window, title| {
         let _ = window.set_title(&title);
@@ -579,8 +652,13 @@ fn load_tab(app: &AppHandle, id: u32) -> tauri::Result<Webview> {
     let url = Url::parse(&url).unwrap_or_else(|_| "about:blank".parse().unwrap());
 
     let popup_app = app.clone();
+    let nav_app = app.clone();
     let builder = WebviewBuilder::new(tab_label(id), WebviewUrl::External(url))
         .zoom_hotkeys_enabled(true)
+        // Web pages can be inspected in every build (⌥⌘I, Inspect Element).
+        .devtools(true)
+        .on_navigation(move |url| on_navigation(&nav_app, url))
+        .on_download(|_, event| on_download(event))
         .on_new_window(move |url, features| on_new_window(&popup_app, url, features));
 
     #[cfg(target_os = "macos")]
@@ -1104,6 +1182,26 @@ pub fn reload_active(app: &AppHandle) -> tauri::Result<()> {
     match active_webview(app) {
         Some(webview) => webview.reload(),
         None => Ok(()),
+    }
+}
+
+/// Show or hide the Web Inspector for the active page (⌥⌘I). It opens in
+/// its own window: docked, WebKit spreads it across the whole window, over
+/// the sidebar.
+pub fn toggle_devtools(app: &AppHandle) {
+    if let Some(webview) = active_webview(app) {
+        if webview.is_devtools_open() {
+            webview.close_devtools();
+        } else {
+            webview.open_devtools();
+            #[cfg(target_os = "macos")]
+            {
+                let app = app.clone();
+                crate::native::detach_inspector(&webview, move || {
+                    let _ = layout_tabs(&app);
+                });
+            }
+        }
     }
 }
 

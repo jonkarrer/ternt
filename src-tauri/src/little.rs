@@ -113,8 +113,12 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
     )?;
 
     let popup_app = app.clone();
+    let nav_app = app.clone();
     let page = WebviewBuilder::new(page_label(&label), WebviewUrl::External(url))
         .zoom_hotkeys_enabled(true)
+        .devtools(true)
+        .on_navigation(move |url| crate::browser::on_navigation(&nav_app, url))
+        .on_download(|_, event| crate::browser::on_download(event))
         .on_new_window(move |url, features| {
             crate::browser::on_new_window(&popup_app, url, features)
         })

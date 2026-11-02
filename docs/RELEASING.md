@@ -104,8 +104,8 @@ Add one with `doppler secrets set NAME` (it prompts, so the value stays out of s
    - `Ternt_<version>_universal.app.tar.gz`: the update installed copies download
    - `latest.json`: what installed copies check, at
      `https://github.com/jonkarrer/ternt/releases/latest/download/latest.json`
-3. Within a few seconds of launch (or via *Ternt → Check for Updates…*), installed copies show
-   an **Update** button at the bottom left of the sidebar.
+3. Within a few seconds of launch (or via *Ternt → Check for Updates…*), installed copies pop up
+   an update card at the bottom of the sidebar.
 
 If something fails halfway, nothing is published until the last step. The bump commit and tag
 stay local, and the built, notarized files stay in the bundle's `publish` folder: fix the cause
@@ -116,5 +116,5 @@ tag at HEAD. To redo a published release, delete it on GitHub first.
 ## Testing the updater without publishing
 
 `just test-update` (any Mac with Doppler access or the updater key) builds 0.1.0 and 0.1.1 test bundles,
-installs 0.1.0, serves 0.1.1 from a local server and checks the full update: button, download,
+installs 0.1.0, serves 0.1.1 from a local server and checks the full update: card, download,
 swap, relaunch as 0.1.1.

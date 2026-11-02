@@ -142,6 +142,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &MenuItem::with_id(app, "reload", "Reload Page", true, Some("CmdOrCtrl+R"))?,
             &MenuItem::with_id(app, "back", "Back", true, Some("CmdOrCtrl+["))?,
             &MenuItem::with_id(app, "forward", "Forward", true, Some("CmdOrCtrl+]"))?,
+            &MenuItem::with_id(
+                app,
+                "devtools",
+                "Developer Tools",
+                true,
+                Some("CmdOrCtrl+Alt+I"),
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::fullscreen(app, None)?,
         ],
@@ -269,6 +276,10 @@ pub fn run_action(app: &AppHandle, id: String) {
             #[cfg(target_os = "macos")]
             "hide-app" => app.hide(),
             "reload" => browser::reload_active(&app),
+            "devtools" => {
+                browser::toggle_devtools(&app);
+                Ok(())
+            }
             "back" if browser::cycle_pane(&app, -1) => Ok(()),
             "forward" if browser::cycle_pane(&app, 1) => Ok(()),
             "back" => browser::back_active(&app),

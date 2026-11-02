@@ -8,7 +8,6 @@
   import Omnibox from "./lib/Omnibox.svelte";
   import TabIcon from "./lib/TabIcon.svelte";
   import TabRow from "./lib/TabRow.svelte";
-  import UpdateButton from "./lib/UpdateButton.svelte";
   import UpdateCard from "./lib/UpdateCard.svelte";
   import {
     browser,
@@ -779,8 +778,6 @@
       {/if}
 
       <UpdateCard />
-      <!-- Empty (and collapsed) unless there's update news. -->
-      <div class="update-row"><UpdateButton /></div>
       <footer class="spaces">
         {#each browserState.spaces as s (s.id)}
           <button
@@ -1304,15 +1301,6 @@
     margin-left: -2px;
   }
 
-  /* The update button sits bottom left, the space switcher centered. */
-  .update-row {
-    flex: none;
-    display: flex;
-    padding: 0 2px;
-  }
-  .update-row:empty {
-    display: none;
-  }
   .spaces {
     display: flex;
     position: relative;

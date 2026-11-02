@@ -142,6 +142,10 @@ pub fn run() {
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_ready,
             #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_other_app_links,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_downloads,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_log,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_eval,

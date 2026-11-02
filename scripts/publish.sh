@@ -187,7 +187,7 @@ step "publishing $tag"
 git push origin HEAD:main $tag
 # A draft first, published once every file is up: installed copies never
 # see a latest.json whose update archive isn't there yet.
-notes="Download **Ternt_${version}_universal.dmg**, open it and drag Ternt to Applications. Installed copies update themselves: an Update button appears at the bottom left of the sidebar."
+notes="Download **Ternt_${version}_universal.dmg**, open it and drag Ternt to Applications. Installed copies update themselves: a card pops up at the bottom of the sidebar."
 release=$(TAG=$tag NAME="Ternt $version" NOTES=$notes bun -e \
   'const e = process.env; console.log(JSON.stringify({ tag_name: e.TAG, name: e.NAME, body: e.NOTES, draft: true }))' |
   github POST /repos/$REPO/releases --data-binary @-) || fail "couldn't create the release (does the token have Contents: read and write?); fix it and run just upload-resume"

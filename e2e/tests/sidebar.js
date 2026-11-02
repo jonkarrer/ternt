@@ -63,6 +63,5 @@ await t.sleep(100);
 const last = [...document.querySelectorAll(".tabs .tab")].at(-1).getBoundingClientRect();
 await t.assert(last.bottom <= footer.top + 1, "scrolling reaches the last tab");
 await t.shot("sidebar-short");
-await t.assert(!document.querySelector("footer.spaces .update"), "the update button isn't in the space switcher");
-await t.assert(document.querySelector(".update-row")?.nextElementSibling?.matches("footer.spaces"), "its row sits right above it");
+await t.assert(!document.querySelector("button.update, .update-row"), "no update pill (the card is all)");
 await t.quit();

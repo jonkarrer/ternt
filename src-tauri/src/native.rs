@@ -418,3 +418,51 @@ pub fn make_default_browser(bundle_id: &str) {
         }
     }
 }
+
+/// Move a page's Web Inspector into its own window once it shows (WebKit's
+/// private `_WKInspector`, as the inspector's own "Detach" button does). It
+/// opens asynchronously, so this checks for a moment off the main thread.
+/// Detaching resizes the page to the whole window: `then` lays it out again.
+pub fn detach_inspector(webview: &tauri::Webview, then: impl FnOnce() + Send + 'static) {
+    let webview = webview.clone();
+    std::thread::spawn(move || {
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let (tx, rx) = std::sync::mpsc::channel();
+            let sent = webview.with_webview(move |p| unsafe {
+                let view = &*(p.inner() as *const AnyObject);
+                let inspector: *mut AnyObject = msg_send![view, _inspector];
+                let done = inspector.as_ref().is_some_and(|inspector| {
+                    let visible: bool = msg_send![inspector, isVisible];
+                    if visible {
+                        let _: () = msg_send![inspector, detach];
+                    }
+                    visible
+                });
+                let _ = tx.send(done);
+            });
+            match (sent, rx.recv()) {
+                (Ok(()), Ok(true)) => return then(),
+                (Ok(()), Ok(false)) => {}
+                _ => return,
+            }
+        }
+    });
+}
+
+/// Tell Finder a download finished: the Dock's Downloads stack bounces, as
+/// it does for Safari.
+pub fn download_finished(path: &std::path::Path) {
+    let Some(path) = path.to_str() else {
+        return;
+    };
+    unsafe {
+        let center: *mut AnyObject = msg_send![
+            objc2::class!(NSDistributedNotificationCenter),
+            defaultCenter
+        ];
+        let name = NSString::from_str("com.apple.DownloadFileFinished");
+        let object = NSString::from_str(path);
+        let _: () = msg_send![center, postNotificationName: &*name, object: &*object];
+    }
+}

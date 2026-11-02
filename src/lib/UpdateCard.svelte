@@ -4,23 +4,66 @@
   import { updates, watchUpdates } from "./updates.svelte";
 
   // Pops up over the bottom of the sidebar when an update turns up, at launch
-  // or while Ternt is in use. Later puts it off for that version (the
-  // button at the bottom left stays).
+  // or while Ternt is in use, and stays through the download and restart
+  // (src-tauri/src/updater.rs). Later puts it off for that version; Settings →
+  // General can still install it. Also answers Check for Updates… (up to date,
+  // or why it failed: only checks the user asked for report failures).
   watchUpdates();
-  const version = $derived(updates.status.state === "available" ? updates.status.version : null);
+  const status = $derived(updates.status);
+  const version = $derived("version" in status ? status.version : null);
+  const failed = $derived(status.state === "failed");
+  const shown = $derived(
+    status.state !== "idle" && !(status.state === "available" && updates.dismissed === status.version),
+  );
+  const progress = $derived(
+    status.state === "downloading" ? (status.progress ?? 0) : status.state === "installing" ? 1 : 0,
+  );
+
+  function install() {
+    // A failed install keeps its update to retry; a failed check checks again.
+    if (failed && !updates.installing) browser.checkForUpdates();
+    else browser.installUpdate();
+  }
+  function later() {
+    updates.dismissed = version ?? updates.installing;
+    updates.installing = null;
+    if (failed) updates.status = { state: "idle" };
+  }
 </script>
 
-{#if version && updates.dismissed !== version}
-  <div class="update-card" role="status" transition:fly={{ y: 12, duration: 180 }}>
-    <svg viewBox="0 0 16 16"><path d="M8 3v7.5M4.5 7 8 10.5 11.5 7M4 13h8" /></svg>
+{#if shown}
+  <div class="update-card" class:failed role="status" transition:fly={{ y: 12, duration: 180 }}>
+    {#if status.state === "upToDate"}
+      <svg viewBox="0 0 16 16"><path d="m4 8.5 2.5 2.5L12 5.5" /></svg>
+    {:else}
+      <svg viewBox="0 0 16 16"><path d="M8 3v7.5M4.5 7 8 10.5 11.5 7M4 13h8" /></svg>
+    {/if}
     <div class="text">
-      <strong>Ternt {version} is ready</strong>
-      <span>Restart to update. Your tabs and spaces come back as they are.</span>
+      {#if status.state === "available"}
+        <strong>Ternt {status.version} is ready</strong>
+        <span>Restart to update. Your tabs and spaces come back as they are.</span>
+      {:else if status.state === "downloading"}
+        <strong>Updating to {status.version}…</strong>
+        <span>{status.progress == null ? "Downloading" : `Downloading ${Math.round(status.progress * 100)}%`}</span>
+      {:else if status.state === "installing"}
+        <strong>Restarting…</strong>
+        <span>Ternt {status.version} opens in a moment.</span>
+      {:else if status.state === "upToDate"}
+        <strong>Ternt is up to date</strong>
+        <span>You have the latest version.</span>
+      {:else if status.state === "failed"}
+        <strong>{updates.installing ? "The update failed" : "Couldn't check for updates"}</strong>
+        <span title={status.message}>{status.message}</span>
+      {/if}
     </div>
-    <div class="actions">
-      <button class="later" onclick={() => (updates.dismissed = version)}>Later</button>
-      <button class="restart" onclick={() => browser.installUpdate()}>Restart Now</button>
-    </div>
+    {#if status.state === "downloading" || status.state === "installing"}
+      <div class="progress" style:--progress={progress}></div>
+    {:else if status.state !== "upToDate"}
+      <div class="actions">
+        <button class="later" onclick={later}>{failed ? "Close" : "Later"}</button>
+        <button class="restart" onclick={install}>{failed ? "Try Again" : "Restart Now"}</button>
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -91,5 +134,23 @@
   }
   .restart:hover {
     filter: brightness(1.08);
+  }
+  .failed svg {
+    background: #d9534f;
+  }
+  .failed span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Download progress. */
+  .progress {
+    grid-column: 1 / -1;
+    height: 4px;
+    margin-top: 6px;
+    border-radius: 2px;
+    background: linear-gradient(var(--accent), var(--accent)) no-repeat 0 0 / calc(var(--progress) * 100%) 100%,
+      var(--fill-strong);
+    transition: background-size 120ms linear;
   }
 </style>

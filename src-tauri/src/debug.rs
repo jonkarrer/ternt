@@ -215,6 +215,10 @@ pub struct ViewFrame {
     height: f64,
     hidden: bool,
     stack: usize,
+    /// Whether it can be inspected (Inspect Element), and whether the Web
+    /// Inspector is open on it.
+    inspectable: bool,
+    devtools: bool,
 }
 
 #[tauri::command]
@@ -236,10 +240,11 @@ pub async fn debug_view(app: AppHandle, label: String) -> Result<ViewFrame, Stri
                     .position(|v| std::ptr::eq(&*v, ns_view))
                     .unwrap_or(0)
             });
-            let _ = tx.send((frame, hidden, stack));
+            let inspectable: bool = objc2::msg_send![view, isInspectable];
+            let _ = tx.send((frame, hidden, stack, inspectable));
         })
         .map_err(|e| e.to_string())?;
-    let (frame, hidden, stack) = rx.recv().map_err(|e| e.to_string())?;
+    let (frame, hidden, stack, inspectable) = rx.recv().map_err(|e| e.to_string())?;
     Ok(ViewFrame {
         x: frame.origin.x,
         y: frame.origin.y,
@@ -247,6 +252,8 @@ pub async fn debug_view(app: AppHandle, label: String) -> Result<ViewFrame, Stri
         height: frame.size.height,
         hidden,
         stack,
+        inspectable,
+        devtools: webview.is_devtools_open(),
     })
 }
 
@@ -264,4 +271,57 @@ pub async fn debug_focus(app: AppHandle, label: String) -> Result<(), String> {
 pub async fn debug_open_external(app: AppHandle, url: String) -> Result<(), String> {
     let url = tauri::Url::parse(&url).map_err(|e| e.to_string())?;
     crate::little::open_external(&app, url).map_err(|e| e.to_string())
+}
+
+/// Whether a test script is running (`TERNT_TEST`).
+pub fn testing() -> bool {
+    std::env::var_os("TERNT_TEST").is_some()
+}
+
+/// Links handed to other apps; tests record them instead of launching apps.
+static OTHER_APP_LINKS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// Finished downloads: (path, success).
+static DOWNLOADS: std::sync::Mutex<Vec<(String, bool)>> = std::sync::Mutex::new(Vec::new());
+
+pub fn record_other_app_link(url: &tauri::Url) {
+    OTHER_APP_LINKS.lock().unwrap().push(url.to_string());
+}
+
+/// Tests save downloads under `$TERNT_SHOTS/downloads`, not ~/Downloads.
+pub fn redirect_download(destination: &mut std::path::PathBuf) {
+    let (Some(out), Some(name)) = (std::env::var_os("TERNT_SHOTS"), destination.file_name()) else {
+        return;
+    };
+    let dir = std::path::Path::new(&out).join("downloads");
+    let _ = std::fs::create_dir_all(&dir);
+    *destination = dir.join(name);
+}
+
+pub fn record_download(path: &std::path::Path, success: bool) {
+    DOWNLOADS
+        .lock()
+        .unwrap()
+        .push((path.display().to_string(), success));
+}
+
+#[tauri::command]
+pub fn debug_other_app_links() -> Vec<String> {
+    OTHER_APP_LINKS.lock().unwrap().clone()
+}
+
+/// Finished downloads, with each file's contents (empty if it failed).
+#[tauri::command]
+pub fn debug_downloads() -> Vec<(String, bool, String)> {
+    DOWNLOADS
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(path, ok)| {
+            (
+                path.clone(),
+                *ok,
+                std::fs::read_to_string(path).unwrap_or_default(),
+            )
+        })
+        .collect()
 }
