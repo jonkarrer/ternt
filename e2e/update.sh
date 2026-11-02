@@ -4,8 +4,10 @@
 # local server, and lets the installed app find it, install it when its
 # button is clicked, and relaunch as 0.1.1 (see e2e/update/test.js).
 #
-# Needs the updater signing key: ~/.tauri/ternt.key (+ .password), or
-# TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
+# Needs an updater signing key: ~/.tauri/ternt.key (+ .password, .pub), or
+# TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD /
+# TAURI_SIGNING_PUBLIC_KEY. The test bundles trust that key's public half,
+# so any key works, not only the release key.
 # Debug bundles, so it takes a few minutes; output in e2e/.out/update/.
 # The hardened runtime is off for these test bundles only: outside `nix
 # develop`, a Nix shell's linker puts /nix/store libraries in the app, which
@@ -19,6 +21,7 @@ ARCH=$([[ $(uname -m) == arm64 ]] && echo aarch64 || echo x86_64)
 
 export TAURI_SIGNING_PRIVATE_KEY=${TAURI_SIGNING_PRIVATE_KEY:-$(cat ~/.tauri/ternt.key)}
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-$(cat ~/.tauri/ternt.key.password)}
+PUBKEY=${TAURI_SIGNING_PUBLIC_KEY:-$(cat ~/.tauri/ternt.key.pub)}
 export VITE_TERNT_TEST=1
 
 rm -rf $WORK && mkdir -p $WORK/install $WORK/server
@@ -27,7 +30,7 @@ BUNDLE=$ROOT/src-tauri/target/debug/bundle/macos
 build() {
   echo "== building $1"
   (cd $ROOT && bun node_modules/@tauri-apps/cli/tauri.js build --debug --bundles app \
-    --config "{\"version\":\"$1\",\"bundle\":{\"macOS\":{\"hardenedRuntime\":false}}}" > $WORK/build-$1.log 2>&1) || { tail -30 $WORK/build-$1.log; exit 1; }
+    --config "{\"version\":\"$1\",\"bundle\":{\"macOS\":{\"hardenedRuntime\":false}},\"plugins\":{\"updater\":{\"pubkey\":\"$PUBKEY\"}}}" > $WORK/build-$1.log 2>&1) || { tail -30 $WORK/build-$1.log; exit 1; }
 }
 
 build 0.1.0

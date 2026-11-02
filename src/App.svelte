@@ -8,6 +8,7 @@
   import TabIcon from "./lib/TabIcon.svelte";
   import TabRow from "./lib/TabRow.svelte";
   import UpdateButton from "./lib/UpdateButton.svelte";
+  import UpdateCard from "./lib/UpdateCard.svelte";
   import {
     browser,
     hostOf,
@@ -632,6 +633,7 @@
         </p>
       {/if}
 
+      <UpdateCard />
       <footer class="spaces">
         <div class="update-slot"><UpdateButton /></div>
         {#each browserState.spaces as s (s.id)}

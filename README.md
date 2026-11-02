@@ -10,9 +10,11 @@ open it and drag Ternt to Applications. Needs macOS 14 or later.
 The first launch opens a welcome page with the shortcuts (later: *Help → Welcome to Ternt*).
 No tabs are created for you: press ⌘T to open the first one.
 
-After that Ternt updates itself: when a new version is out, an **Update** button appears at the
-bottom left of the sidebar. Clicking it downloads the update, swaps the app in place and relaunches
-(your tabs come back). *Ternt → Check for Updates…* checks right away.
+After that Ternt updates itself. It checks at launch, every hour, and when you come back to it
+(at most every 15 minutes); when a new version is out, a card pops up at the bottom of the sidebar.
+*Restart Now* downloads the update, swaps the app in place and relaunches (your tabs come back);
+*Later* leaves an **Update** button at the bottom left for when you're ready. *Ternt → Check for
+Updates…* checks right away.
 
 ## Development
 
@@ -173,8 +175,9 @@ CI (`.github/workflows/ci.yml`) runs the unit tests on every push.
   screenshot only warns.
 - **Self-update** (`e2e/update.sh`, a few minutes, not part of `bun run test`): builds signed
   0.1.0 and 0.1.1 bundles, installs 0.1.0, serves 0.1.1 as the latest release from a local
-  server, then checks that the installed app shows the Update button, installs on click, swaps
-  its bundle and relaunches as 0.1.1. Needs the signing key in `~/.tauri/`.
+  server, then checks that the installed app pops up the update card and shows the Update button,
+  installs on click, swaps its bundle and relaunches as 0.1.1. Needs a signing key in `~/.tauri/`
+  (any key: the test bundles trust its public half).
 
 Not covered (macOS won't let tests send real input): physical key presses and trackpad
 gestures, native context menus opening (their actions are tested), and real OAuth providers.

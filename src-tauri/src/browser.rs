@@ -442,13 +442,15 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
     // lay them out exactly after each step.
     {
         let app = app.clone();
-        window.on_window_event(move |event| {
-            if let tauri::WindowEvent::Resized(_) = event
-                && (cfg!(not(target_os = "macos")) || active_split(&app).is_some())
+        window.on_window_event(move |event| match event {
+            tauri::WindowEvent::Resized(_)
+                if cfg!(not(target_os = "macos")) || active_split(&app).is_some() =>
             {
                 let app = app.clone();
                 std::thread::spawn(move || layout_tabs(&app));
             }
+            tauri::WindowEvent::Focused(true) => crate::updater::on_focus(&app),
+            _ => {}
         });
     }
     #[cfg(target_os = "macos")]

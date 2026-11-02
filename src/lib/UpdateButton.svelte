@@ -1,18 +1,12 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { fly } from "svelte/transition";
-  import { browser, type UpdateStatus } from "./browser";
+  import { browser } from "./browser";
+  import { updates, watchUpdates } from "./updates.svelte";
 
   // Bottom-left of the sidebar: appears when an update is available; a click
   // downloads it, swaps the app and relaunches (src-tauri/src/updater.rs).
-  let status = $state<UpdateStatus>({ state: "idle" });
-
-  onMount(() => {
-    const unlisten = browser.onUpdate((next) => (status = next));
-    // Subscribe first, then read, so no change slips in between.
-    unlisten.then(() => browser.updateStatus()).then((s) => (status = s));
-    return () => unlisten.then((off) => off());
-  });
+  watchUpdates();
+  const status = $derived(updates.status);
 
   const busy = $derived(status.state === "downloading" || status.state === "installing");
   const label = $derived.by(() => {

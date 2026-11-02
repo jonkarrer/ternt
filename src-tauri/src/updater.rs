@@ -3,14 +3,18 @@
 //! manifest; every update is signed with the project's updater key and
 //! verified against the public key in `tauri.conf.json` before install.
 //!
-//! Ternt checks shortly after launch and every few hours. When an update is
-//! available the sidebar shows a button (bottom left); clicking it downloads,
-//! swaps the app bundle in place and relaunches.
+//! Ternt checks shortly after launch, every hour, and when you come back to
+//! it (at most every 15 minutes). When an update turns up the sidebar pops
+//! up a card (Restart Now / Later) and keeps a button at the bottom left;
+//! either downloads, swaps the app bundle in place and relaunches.
 //!
 //! `TERNT_UPDATE_URL` replaces the manifest URL (local testing, see
 //! e2e/update.sh). Signatures are still checked against the built-in key.
 
-use std::{sync::Mutex, time::Duration};
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Url};
@@ -19,7 +23,9 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 use crate::browser::UI_WEBVIEW;
 
 const FIRST_CHECK: Duration = Duration::from_secs(5);
-const CHECK_EVERY: Duration = Duration::from_secs(4 * 60 * 60);
+const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
+/// Coming back to the app checks again when the last check is this old.
+const CHECK_ON_FOCUS_AFTER: Duration = Duration::from_secs(15 * 60);
 
 /// What the sidebar shows.
 #[derive(Clone, Debug, Serialize)]
@@ -51,6 +57,8 @@ pub struct Updates {
     status: Mutex<Option<Status>>,
     /// The update found by the last check, ready to install.
     pending: Mutex<Option<Update>>,
+    /// When the last check started.
+    last_check: Mutex<Option<Instant>>,
 }
 
 fn set_status(app: &AppHandle, status: Status) {
@@ -69,10 +77,15 @@ fn status(app: &AppHandle) -> Status {
         .unwrap_or(Status::Idle)
 }
 
-/// Check in the background now and then periodically. Debug builds only
-/// check when pointed at a test server, so dev runs and tests stay offline.
+/// Debug builds only check when pointed at a test server, so dev runs and
+/// tests stay offline.
+fn enabled() -> bool {
+    !cfg!(debug_assertions) || std::env::var_os("TERNT_UPDATE_URL").is_some()
+}
+
+/// Check in the background now and then periodically.
 pub fn start(app: &AppHandle) {
-    if cfg!(debug_assertions) && std::env::var_os("TERNT_UPDATE_URL").is_none() {
+    if !enabled() {
         return;
     }
     let app = app.clone();
@@ -83,6 +96,21 @@ pub fn start(app: &AppHandle) {
                 eprintln!("update check failed: {err}");
             }
             tokio::time::sleep(CHECK_EVERY).await;
+        }
+    });
+}
+
+/// The main window came forward: check if it's been a while.
+pub fn on_focus(app: &AppHandle) {
+    let last = *app.state::<Updates>().last_check.lock().unwrap();
+    // Before the first check, `start` has it covered.
+    if !enabled() || !last.is_some_and(|t| t.elapsed() >= CHECK_ON_FOCUS_AFTER) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = check(&app, false).await {
+            eprintln!("update check failed: {err}");
         }
     });
 }
@@ -107,6 +135,7 @@ pub async fn check(app: &AppHandle, manual: bool) -> Result<(), String> {
     ) {
         return Ok(());
     }
+    *app.state::<Updates>().last_check.lock().unwrap() = Some(Instant::now());
     let found = updater(app).map_err(|e| e.to_string())?.check().await;
     match found {
         Ok(Some(update)) => {

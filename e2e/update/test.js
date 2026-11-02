@@ -8,7 +8,12 @@ await t.log(`running version ${version}`);
 if (version === "0.1.0") {
   await t.until(() => button()?.textContent.includes("Update"), "the update button appears (bottom left)", 30000);
   await t.assert(button().title.includes("0.1.1"), "it names the new version");
+  const card = () => document.querySelector(".update-card");
+  await t.until(() => card()?.textContent.includes("Ternt 0.1.1 is ready"), "a card pops up in the sidebar");
+  await t.sleep(250);
   await t.shot("update-available");
+  [...card().querySelectorAll("button")].find((b) => b.textContent.includes("Later")).click();
+  await t.until(() => !card() && button(), "Later hides the card; the button stays");
   button().click();
   await t.until(() => /Updating|Restarting/.test(button()?.textContent ?? ""), "clicking starts the download");
   await t.log("waiting for the relaunch");
@@ -16,7 +21,7 @@ if (version === "0.1.0") {
   await t.assert(version === "0.1.1", `relaunched as the new version (${version})`);
   // The background check runs again and finds nothing newer.
   await t.sleep(8000);
-  await t.assert(!button(), "no update offered once current");
+  await t.assert(!button() && !document.querySelector(".update-card"), "no update offered once current");
   await t.invoke("check_for_updates");
   await t.until(() => button()?.textContent.includes("Up to date"), "a manual check says up to date");
   await t.shot("update-done");
