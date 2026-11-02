@@ -44,6 +44,11 @@ await t.invoke("navigate", { url: C });
 await t.until(() => S().active === workTab && cookie() === "beta", "favorite uses its profile's jar");
 await t.invoke("activate_space", { id: home });
 await t.until(() => S().activeSpace === home && favs() === 0, "Home doesn't show Work's favorites");
+// Picking it from Home (the command bar's tab switcher) goes to Work: it's signed in as Work
+await t.invoke("activate_tab", { id: workTab });
+await t.until(() => S().active === workTab && S().activeSpace === work, "another profile's favorite opens in its space");
+await t.invoke("activate_space", { id: home });
+await t.until(() => S().activeSpace === home, "back to Home");
 
 // A space can share another's profile
 const work2 = await t.invoke("create_space");

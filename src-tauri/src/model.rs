@@ -423,10 +423,14 @@ impl State {
     }
 
     /// Make `id` the active tab, switching to its space if needed. Returns
-    /// the previously active tab, or `None` if `id` doesn't exist.
+    /// the previously active tab, or `None` if `id` doesn't exist. A
+    /// favorite keeps the space only if it shares the space's profile: one
+    /// from another profile is signed in as that profile, so its space shows.
     pub fn focus(&mut self, id: u32) -> Option<Option<u32>> {
         let tab = self.tab(id)?;
-        if tab.zone != Zone::Favorite {
+        let shared_here = tab.zone == Zone::Favorite
+            && self.profile_of(tab.space) == self.profile_of(self.active_space);
+        if !shared_here {
             self.active_space = tab.space;
         }
         self.last_active.insert(self.active_space, id);
@@ -1453,6 +1457,13 @@ mod tests {
         s.focus(fav);
         assert_eq!(s.active_space, other);
         assert_eq!(s.last_active.get(&other), Some(&fav));
+
+        // A space with its own profile doesn't show another profile's
+        // favorite: focusing it goes to the favorite's space.
+        let own = s.add_space(Some("p1".into()));
+        s.switch_space(own);
+        s.focus(fav);
+        assert_eq!(s.active_space, 1);
     }
 
     fn term(state: &mut State) -> u32 {
