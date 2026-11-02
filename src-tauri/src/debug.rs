@@ -204,8 +204,9 @@ pub async fn debug_focused(app: AppHandle) -> Option<String> {
     rx.recv().ok().flatten()
 }
 
-/// A webview's frame (logical px, window coordinates) and whether it's
-/// hidden, to check split view layouts.
+/// A webview's frame (logical px, window coordinates), whether it's
+/// hidden, and its place in the stack of views (0 at the bottom), to check
+/// split view layouts and what's drawn over what.
 #[derive(serde::Serialize)]
 pub struct ViewFrame {
     x: f64,
@@ -213,6 +214,7 @@ pub struct ViewFrame {
     width: f64,
     height: f64,
     hidden: bool,
+    stack: usize,
 }
 
 #[tauri::command]
@@ -226,16 +228,25 @@ pub async fn debug_view(app: AppHandle, label: String) -> Result<ViewFrame, Stri
             let view = &*(p.inner() as *const objc2::runtime::AnyObject);
             let hidden: bool = objc2::msg_send![view, isHidden];
             let frame: objc2_foundation::NSRect = objc2::msg_send![view, frame];
-            let _ = tx.send((frame, hidden));
+            let ns_view = &*(p.inner() as *const objc2_app_kit::NSView);
+            let stack = ns_view.superview().map_or(0, |parent| {
+                parent
+                    .subviews()
+                    .iter()
+                    .position(|v| std::ptr::eq(&*v, ns_view))
+                    .unwrap_or(0)
+            });
+            let _ = tx.send((frame, hidden, stack));
         })
         .map_err(|e| e.to_string())?;
-    let (frame, hidden) = rx.recv().map_err(|e| e.to_string())?;
+    let (frame, hidden, stack) = rx.recv().map_err(|e| e.to_string())?;
     Ok(ViewFrame {
         x: frame.origin.x,
         y: frame.origin.y,
         width: frame.size.width,
         height: frame.size.height,
         hidden,
+        stack,
     })
 }
 

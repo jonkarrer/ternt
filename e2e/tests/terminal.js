@@ -1,7 +1,7 @@
 const S = () => t.state();
 const tab = () => S().tabs.find((x) => x.id === S().active);
 const text = (id) => t.read("term", `window.__termText(${id})`);
-const run = (id, cmd) => t.invoke("pty_write", { id, data: cmd + "\r" });
+const run = (id, cmd) => t.invoke("pty_write", { id, pane: 0, data: cmd + "\r" });
 async function waitFor(id, needle, message, timeout = 10000) {
   const start = performance.now();
   for (;;) {

@@ -2,7 +2,7 @@
 // in, data out (no Tauri calls), so it's unit-tested in rank.test.ts; the
 // palette performs each item's `action`.
 import type { ClosedTab, HistoryHit, PaletteMode, Space, Split, Tab } from "../lib/browser";
-import { hostOf, parseInput } from "../lib/url";
+import { hostOf, parseInput, tabLabel } from "../lib/url";
 
 /** `top` holds the best matches, shown without a header. */
 export type Section = "top" | "Suggestions" | "Tabs" | "Recently Closed" | "History" | "Commands" | "Spaces";
@@ -41,6 +41,8 @@ export type Command = {
   suggest?: boolean;
   /** Only when the active tab is a web page. */
   web?: boolean;
+  /** Only when the active tab is a terminal. */
+  terminal?: boolean;
   /** Needs an active tab. `ctx-` actions get its id: `<id>:<tab>`. */
   tab?: boolean;
   /** Hidden when the active tab is already in this zone. */
@@ -65,6 +67,10 @@ export const COMMANDS: Command[] = [
   { id: "new-folder", label: "New Folder" },
   { id: "split-terminal", label: "Split View with New Terminal", shortcut: "⌥⌘\\", keywords: "side by side shell", web: true },
   { id: "unsplit", label: "Close Split View", keywords: "side by side", split: true },
+  { id: "split-right", label: "Split Right", shortcut: "⌘D", keywords: "pane terminal vertical", terminal: true },
+  { id: "split-down", label: "Split Down", shortcut: "⇧⌘D", keywords: "pane terminal horizontal", terminal: true },
+  { id: "next-pane", label: "Next Pane", shortcut: "⌘]", keywords: "terminal split", terminal: true },
+  { id: "previous-pane", label: "Previous Pane", shortcut: "⌘[", keywords: "terminal split", terminal: true },
   { id: "toggle-sidebar", label: "Toggle Sidebar", shortcut: "⌘S", keywords: "hide show" },
   { id: "reload", label: "Reload Page", shortcut: "⌘R", keywords: "refresh", web: true },
   { id: "back", label: "Go Back", shortcut: "⌘[", web: true },
@@ -139,6 +145,7 @@ export function buildItems(raw: string, ctx: Context): Item[] {
   const commands = COMMANDS.filter(
     (c) =>
       (!c.web || activeTab?.kind === "web") &&
+      (!c.terminal || activeTab?.kind === "terminal") &&
       (!c.tab || activeTab) &&
       (!c.unless || activeTab?.zone !== c.unless) &&
       (!c.split || ctx.splits.some((s) => s.left === activeId || s.right === activeId)),
@@ -154,7 +161,7 @@ export function buildItems(raw: string, ctx: Context): Item[] {
   const tabItem = (t: Tab, section: Section): Item => ({
     key: `tab-${t.id}`,
     kind: "tab",
-    label: t.title || hostOf(t.url),
+    label: tabLabel(t),
     detail: t.zone === "favorite" ? "Favorite" : t.space === activeSpace ? "Switch to tab" : spaceName(t.space),
     url: t.url,
     tab: t,
@@ -182,7 +189,7 @@ export function buildItems(raw: string, ctx: Context): Item[] {
   const closedItem = (c: ClosedTab, section: Section): Item => ({
     key: `closed-${c.id}`,
     kind: "closed",
-    label: c.title || hostOf(c.url),
+    label: tabLabel(c),
     detail: c.space === activeSpace ? `Closed · ${hostOf(c.url)}` : `Closed · ${spaceName(c.space)}`,
     url: c.url,
     section,
@@ -212,12 +219,14 @@ export function buildItems(raw: string, ctx: Context): Item[] {
     ];
   }
 
-  const tabHits = ranked(otherTabs, (t) => Math.max(score(t.title, lq), t.url.toLowerCase().includes(lq) ? 40 : 0));
+  // A renamed tab is found by its name and by its own title.
+  const titleScore = (t: Tab | ClosedTab) => Math.max(score(t.title, lq), t.name ? score(t.name, lq) : 0);
+  const tabHits = ranked(otherTabs, (t) => Math.max(titleScore(t), t.url.toLowerCase().includes(lq) ? 40 : 0));
   const commandHits = ranked(commands, (c) =>
     Math.max(score(c.label, lq), c.keywords && score(c.keywords, lq) >= 80 ? 50 : 0),
   );
   // Stable sort: equally good matches stay newest first.
-  const closedHits = ranked(closed, (c) => Math.max(score(c.title, lq), c.url.toLowerCase().includes(lq) ? 40 : 0));
+  const closedHits = ranked(closed, (c) => Math.max(titleScore(c), c.url.toLowerCase().includes(lq) ? 40 : 0));
   const spaceHits = ranked(otherSpaces, (s) => Math.max(score(s.name, lq), score("space", lq) >= 80 ? 50 : 0));
   // History: pages not already open, still matching every typed word (the
   // hits may be from the previous keystroke).
@@ -242,10 +251,10 @@ export function buildItems(raw: string, ctx: Context): Item[] {
     action: { type: "open", url: parsed.url, newTab },
   };
   if (open && parsed?.kind === "url") top.push(open);
-  const bestTab = tabHits[0] && score(tabHits[0].x.title, lq) > 0 ? tabHits.shift()!.x : undefined;
+  const bestTab = tabHits[0] && titleScore(tabHits[0].x) > 0 ? tabHits.shift()!.x : undefined;
   if (bestTab) top.push(tabItem(bestTab, "top"));
   // Otherwise a closed tab whose title matches as well.
-  else if (closedHits[0] && score(closedHits[0].x.title, lq) >= 80) top.push(closedItem(closedHits.shift()!.x, "top"));
+  else if (closedHits[0] && titleScore(closedHits[0].x) >= 80) top.push(closedItem(closedHits.shift()!.x, "top"));
   if (
     parsed?.kind !== "url" &&
     historyHits[0] &&

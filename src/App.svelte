@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { fly } from "svelte/transition";
   import IconPicker from "./lib/IconPicker.svelte";
   import SiteIcon from "./lib/SiteIcon.svelte";
@@ -12,6 +13,7 @@
   import {
     browser,
     hostOf,
+    tabLabel,
     DEFAULT_SIDEBAR_WIDTH,
     INSET,
     MAX_SIDEBAR_WIDTH,
@@ -46,11 +48,14 @@
     activeSpace: 0,
     sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
     sidebarCollapsed: false,
+    sidebarPeeking: false,
   });
   let sidebarWidth = $state(DEFAULT_SIDEBAR_WIDTH);
   let resizing = $state(false);
   let drag = $state<{ id: number; target: DropTarget | null } | null>(null);
-  let renaming = $state<{ kind: "space" | "folder"; id: number } | null>(null);
+  /** A folder being dragged: where it would land among the space's folders. */
+  let folderDrag = $state<{ id: number; index: number | null; mark: { id: number; where: "before" | "after" } | null } | null>(null);
+  let renaming = $state<{ kind: "space" | "folder" | "tab"; id: number } | null>(null);
   /** The space whose icon picker is open (space menu → Change Icon…). */
   let pickingIcon = $state<number | null>(null);
   /** Direction of the last space switch, for the slide-in. */
@@ -71,6 +76,17 @@
   const loosePinned = $derived(pinnedIn(null));
   const today = $derived(browserState.tabs.filter((t) => t.zone === "today" && t.space === activeSpace));
   const collapsed = $derived(browserState.sidebarCollapsed);
+  /** The collapsed sidebar, shown over the page while the pointer is on it:
+      the "peek" view (this page again) floats over the page and draws it. */
+  const PEEK_VIEW = getCurrentWebview().label === "peek";
+  const peeking = $derived(collapsed && browserState.sidebarPeeking);
+  let unpeekTimer: ReturnType<typeof setTimeout> | undefined;
+  function leavePeek() {
+    clearTimeout(unpeekTimer);
+    // Not while something in it is still in use.
+    if (!peeking || drag || folderDrag || renaming || pickingIcon != null) return;
+    unpeekTimer = setTimeout(() => browser.peekSidebar(false), 300);
+  }
 
   // --- Split view -------------------------------------------------------
   // Rust lays out the two panes; the sidebar webview, under them, draws their
@@ -157,7 +173,7 @@
       await Promise.all(unlisten);
       applyState(await browser.getState());
       // Test hooks: dev builds, and bundles built for the update test (e2e/update.sh).
-      if (import.meta.env.DEV || import.meta.env.VITE_TERNT_TEST) {
+      if (!PEEK_VIEW && (import.meta.env.DEV || import.meta.env.VITE_TERNT_TEST)) {
         const { installTestHooks } = await import("./lib/debug");
         installTestHooks(() => browserState);
       }
@@ -292,6 +308,63 @@
     return kind === "folder" ? mark.kind === "folder" && mark.id === key : mark.kind === "zone" && mark.zone === key;
   }
 
+  // Folders drag the same way, by their header, to reorder among the space's
+  // folders; a plain click opens or closes the folder.
+
+  function folderHitTest(x: number, y: number, id: number): NonNullable<typeof folderDrag> {
+    const over = document.elementFromPoint(x, y);
+    const group = over?.closest<HTMLElement>(".folder-group");
+    const from = folders.findIndex((f) => f.id === id);
+    if (group) {
+      const target = Number(group.dataset.folder);
+      if (target === id) return { id, index: null, mark: null };
+      const rect = group.getBoundingClientRect();
+      const after = y > rect.top + rect.height / 2;
+      let index = Number(group.dataset.folderIndex) + (after ? 1 : 0);
+      if (from < index) index -= 1;
+      return { id, index, mark: { id: target, where: after ? "after" : "before" } };
+    }
+    // Below the folders (loose pinned tabs): last.
+    if (over?.closest(".pinned-list") && folders.length > 1) {
+      const last = folders[folders.length - 1];
+      return { id, index: last.id === id ? null : END, mark: last.id === id ? null : { id: last.id, where: "after" } };
+    }
+    return { id, index: null, mark: null };
+  }
+
+  function startFolderDrag(event: PointerEvent, folder: { id: number; open: boolean }) {
+    if (event.button !== 0 || (event.target as Element).closest(".rename")) return;
+    const el = event.currentTarget as HTMLElement;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let dragging = false;
+    try {
+      el.setPointerCapture(event.pointerId);
+    } catch {
+      // Synthetic pointers (tests) can't be captured; moves still bubble here.
+    }
+    const move = (e: PointerEvent) => {
+      if (!dragging && Math.hypot(e.clientX - startX, e.clientY - startY) < 4) return;
+      dragging = true;
+      folderDrag = folderHitTest(e.clientX, e.clientY, folder.id);
+    };
+    const up = async () => {
+      el.removeEventListener("pointermove", move);
+      const index = folderDrag?.index;
+      folderDrag = null;
+      if (!dragging) browser.setFolderOpen(folder.id, !folder.open);
+      else if (index != null) await browser.moveFolder(folder.id, index);
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up, { once: true });
+    el.addEventListener("pointercancel", () => (folderDrag = null), { once: true });
+  }
+
+  function folderMark(id: number) {
+    const mark = folderDrag?.mark;
+    return mark?.id === id ? mark.where : null;
+  }
+
   // --- Explore mode (⌘F) ---------------------------------------------------
   // The cursor moves locally (no IPC per key); Space previews the tab, Enter
   // opens it, Escape returns to where exploring started.
@@ -405,6 +478,13 @@
     else browser.renameFolder(target.id, name);
   }
 
+  function renameTab(tab: Tab, name: string | null) {
+    renaming = null;
+    if (name == null) return;
+    // Its own title again means no name.
+    browser.renameTab(tab.id, name.trim() === tab.title ? "" : name);
+  }
+
   function renameKeys(event: KeyboardEvent) {
     if (event.key === "Enter") commitRename(event);
     if (event.key === "Escape") renaming = null;
@@ -417,25 +497,53 @@
   class="app"
   class:resizing
   class:exploring={explore}
-  class:dragging={drag != null}
+  class:dragging={drag != null || folderDrag != null}
+  class:peek-view={PEEK_VIEW}
   style:--sidebar="{collapsed ? 0 : sidebarWidth}px"
+  style:--peek-width="{sidebarWidth}px"
   style={spaceStyle(space?.color ?? "blue")}
 >
-  {#if !collapsed}
-    <aside class="sidebar" {onwheel}>
+  {#if collapsed && !peeking && !PEEK_VIEW}
+    <!-- The strip left of the page: touching it shows the sidebar. -->
+    <div class="peek-edge" role="presentation" onpointerenter={() => browser.peekSidebar(true)}></div>
+  {/if}
+  {#if PEEK_VIEW ? peeking : !collapsed}
+    <aside
+      class="sidebar"
+      class:peek={PEEK_VIEW}
+      {onwheel}
+      onpointerenter={() => clearTimeout(unpeekTimer)}
+      onpointerleave={leavePeek}
+    >
       <header class="titlebar" data-tauri-drag-region>
-        <button class="icon" aria-label="Hide sidebar (⌘S)" onclick={() => browser.menuAction("toggle-sidebar")}>
-          <svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M6.5 3v10" /></svg>
+        <button
+          class="tool"
+          aria-label={collapsed ? "Keep sidebar open (⌘S)" : "Hide sidebar (⌘S)"}
+          title={collapsed ? "Keep Sidebar Open (⌘S)" : "Hide Sidebar (⌘S)"}
+          onclick={() => browser.menuAction("toggle-sidebar")}
+        >
+          <svg viewBox="0 0 18 18">
+            <rect x="2" y="3.25" width="14" height="11.5" rx="2.75" />
+            <path d="M7 3.25v11.5" />
+            <path class="fine" d="M4.25 6.25h.75M4.25 8.5h.75" />
+          </svg>
         </button>
         <div class="nav">
-          <button class="icon" aria-label="Back" onclick={browser.goBack} disabled={!activeTab?.canGoBack}>
-            <svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" /></svg>
+          <button class="tool" aria-label="Back" title="Back (⌘[)" onclick={browser.goBack} disabled={!activeTab?.canGoBack}>
+            <svg viewBox="0 0 18 18"><path d="M11 4 6 9l5 5" /></svg>
           </button>
-          <button class="icon" aria-label="Forward" onclick={browser.goForward} disabled={!activeTab?.canGoForward}>
-            <svg viewBox="0 0 16 16"><path d="m6 3 5 5-5 5" /></svg>
+          <button class="tool" aria-label="Forward" title="Forward (⌘])" onclick={browser.goForward} disabled={!activeTab?.canGoForward}>
+            <svg viewBox="0 0 18 18"><path d="m7 4 5 5-5 5" /></svg>
           </button>
-          <button class="icon" aria-label="Reload" onclick={browser.reload} disabled={activeTab?.kind !== "web"}>
-            <svg viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5" /></svg>
+          <button
+            class="tool"
+            class:spinning={activeTab?.loading}
+            aria-label="Reload"
+            title="Reload (⌘R)"
+            onclick={browser.reload}
+            disabled={activeTab?.kind !== "web"}
+          >
+            <svg viewBox="0 0 18 18"><path d="M14.25 9a5.25 5.25 0 1 1-1.54-3.71" /><path d="M13.25 2.75v2.9h-2.9" /></svg>
           </button>
         </div>
       </header>
@@ -454,7 +562,7 @@
               class:dragging={drag?.id === tab.id}
               class:before={markFor(tab) === "before"}
               class:after={markFor(tab) === "after"}
-              title={tab.title || hostOf(tab.url)}
+              title={tabLabel(tab)}
               data-drop="row"
               data-tab={tab.id}
               data-zone="favorite"
@@ -522,107 +630,144 @@
             {/if}
           </div>
 
-          <!-- Pinned: this space's folders, then loose pinned tabs. -->
-          <div class="pinned-list" class:drop-into={isDropInto("zone", "pinned")} data-drop="zone" data-zone="pinned">
-            {#each folders as folder (folder.id)}
-              <div
-                class="row folder"
-                class:drop-into={isDropInto("folder", folder.id)}
-                role="button"
-                tabindex="0"
-                data-drop="folder"
-                data-folder={folder.id}
-                onclick={(e) => !(e.target as Element).closest(".rename") && browser.setFolderOpen(folder.id, !folder.open)}
-                onkeydown={(e) => e.target === e.currentTarget && e.key === "Enter" && browser.setFolderOpen(folder.id, !folder.open)}
-                oncontextmenu={(e) => {
-                  e.preventDefault();
-                  browser.folderContextMenu(folder.id);
-                }}
-              >
-                <svg class="chevron" class:open={folder.open} viewBox="0 0 16 16"><path d="m6 4 4 4-4 4" /></svg>
-                <svg viewBox="0 0 16 16"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11z" /></svg>
-                {#if renaming?.kind === "folder" && renaming.id === folder.id}
-                  <input class="rename" value={folder.name} use:focusSelect onblur={commitRename} onkeydown={renameKeys} />
-                {:else}
-                  <span class="title" role="none" ondblclick={() => (renaming = { kind: "folder", id: folder.id })}>
-                    {folder.name}
-                  </span>
+          <!-- Everything under the space name scrolls together when the window is
+               too short for it. -->
+          <div class="space-scroll">
+            <!-- Pinned: this space's folders, then loose pinned tabs. -->
+            <div class="pinned-list" class:drop-into={isDropInto("zone", "pinned")} data-drop="zone" data-zone="pinned">
+              {#each folders as folder, f (folder.id)}
+                {@const inside = pinnedIn(folder.id)}
+                <!-- A folder and its tabs, as one block: dragged together, and the drop
+                     target for tabs (rows inside take drops between them). -->
+                <div
+                  class="folder-group"
+                  class:open={folder.open}
+                  class:drop-into={isDropInto("folder", folder.id)}
+                  class:dragging={folderDrag?.id === folder.id}
+                  data-drop="folder"
+                  data-folder={folder.id}
+                  data-folder-index={f}
+                >
+                  {#if folderMark(folder.id)}
+                    <span class="folder-mark {folderMark(folder.id)}"></span>
+                  {/if}
+                  <div
+                    class="row folder"
+                    role="button"
+                    tabindex="0"
+                    aria-expanded={folder.open}
+                    onpointerdown={(e) => startFolderDrag(e, folder)}
+                    onkeydown={(e) => e.target === e.currentTarget && e.key === "Enter" && browser.setFolderOpen(folder.id, !folder.open)}
+                    oncontextmenu={(e) => {
+                      e.preventDefault();
+                      browser.folderContextMenu(folder.id);
+                    }}
+                  >
+                    <svg class="chevron" class:open={folder.open} viewBox="0 0 16 16"><path d="m6 4 4 4-4 4" /></svg>
+                    {#if folder.open}
+                      <svg class="folder-icon" viewBox="0 0 16 16"><path d="M2 12.5v-8h4l1.5 1.5H13v1.5M2 12.5h10l2-5.5H4z" /></svg>
+                    {:else}
+                      <svg class="folder-icon" viewBox="0 0 16 16"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z" /></svg>
+                    {/if}
+                    {#if renaming?.kind === "folder" && renaming.id === folder.id}
+                      <input class="rename" value={folder.name} use:focusSelect onblur={commitRename} onkeydown={renameKeys} />
+                    {:else}
+                      <span class="title" role="none" ondblclick={() => (renaming = { kind: "folder", id: folder.id })}>
+                        {folder.name}
+                      </span>
+                      {#if !folder.open && inside.length}
+                        <span class="count">{inside.length}</span>
+                      {/if}
+                    {/if}
+                  </div>
+                  {#if folder.open && !inside.length}
+                    <span class="folder-empty">Drag tabs here</span>
+                  {/if}
+                {#if folder.open}
+                  {#each inside as tab, i (tab.id)}
+                    <TabRow
+                      {tab}
+                      indent
+                      zone="pinned"
+                      folder={folder.id}
+                      index={i}
+                      active={tab.id === browserState.active}
+                      split={splitSide(tab.id)}
+                      beside={besideActive(tab.id)}
+                      cursor={tab.id === cursor}
+                      dragging={drag?.id === tab.id}
+                      mark={markFor(tab)}
+                      renaming={renaming?.kind === "tab" && renaming.id === tab.id}
+                      onstartrename={() => (renaming = { kind: "tab", id: tab.id })}
+                      onrename={(name) => renameTab(tab, name)}
+                      onpointerdown={(e) => startDrag(e, tab)}
+                    />
+                  {/each}
                 {/if}
-              </div>
-              {#if folder.open}
-                {#each pinnedIn(folder.id) as tab, i (tab.id)}
-                  <TabRow
-                    {tab}
-                    indent
-                    zone="pinned"
-                    folder={folder.id}
-                    index={i}
-                    active={tab.id === browserState.active}
-                    split={splitSide(tab.id)}
-                    beside={besideActive(tab.id)}
-                    cursor={tab.id === cursor}
-                    dragging={drag?.id === tab.id}
-                    mark={markFor(tab)}
-                    onpointerdown={(e) => startDrag(e, tab)}
-                  />
-                {/each}
+                </div>
+              {/each}
+              {#each loosePinned as tab, i (tab.id)}
+                <TabRow
+                  {tab}
+                  zone="pinned"
+                  index={i}
+                  active={tab.id === browserState.active}
+                  split={splitSide(tab.id)}
+                  beside={besideActive(tab.id)}
+                  cursor={tab.id === cursor}
+                  dragging={drag?.id === tab.id}
+                  mark={markFor(tab)}
+                  renaming={renaming?.kind === "tab" && renaming.id === tab.id}
+                  onstartrename={() => (renaming = { kind: "tab", id: tab.id })}
+                  onrename={(name) => renameTab(tab, name)}
+                  onpointerdown={(e) => startDrag(e, tab)}
+                />
+              {/each}
+              {#if drag && !folders.length && !loosePinned.length}
+                <span class="hint">Drop to pin to {space?.name}</span>
               {/if}
-            {/each}
-            {#each loosePinned as tab, i (tab.id)}
-              <TabRow
-                {tab}
-                zone="pinned"
-                index={i}
-                active={tab.id === browserState.active}
-                split={splitSide(tab.id)}
-                beside={besideActive(tab.id)}
-                cursor={tab.id === cursor}
-                dragging={drag?.id === tab.id}
-                mark={markFor(tab)}
-                onpointerdown={(e) => startDrag(e, tab)}
-              />
-            {/each}
-            {#if drag && !folders.length && !loosePinned.length}
-              <span class="hint">Drop to pin to {space?.name}</span>
-            {/if}
+            </div>
+
+            <!-- Arc's separator between Pinned and Today, with "Clear" on hover. -->
+            <div class="divider">
+              <span class="line"></span>
+              {#if today.some((t) => t.kind === "web")}
+                <button class="clear" title="Close this space's Today tabs" onclick={() => browser.menuAction("clear-today")}>
+                  <svg viewBox="0 0 16 16"><path d="M8 3.5v8m-3.5-3.5L8 11.5 11.5 8" /></svg>
+                  Clear
+                </button>
+              {/if}
+            </div>
+
+            <button class="row action" onclick={() => browser.openPalette("newTab")}>
+              <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg>
+              <span>New Tab</span>
+            </button>
+            <button class="row action" onclick={() => browser.newTerminal()}>
+              <svg viewBox="0 0 16 16"><path d="m4 5 3 3-3 3M9 11.5h3.5" /></svg>
+              <span>New Terminal</span>
+            </button>
+
+            <nav class="tabs" class:drop-into={isDropInto("zone", "today")} data-drop="zone" data-zone="today">
+              {#each today as tab, i (tab.id)}
+                <TabRow
+                  {tab}
+                  zone="today"
+                  index={i}
+                  active={tab.id === browserState.active}
+                  split={splitSide(tab.id)}
+                  beside={besideActive(tab.id)}
+                  cursor={tab.id === cursor}
+                  dragging={drag?.id === tab.id}
+                  mark={markFor(tab)}
+                  renaming={renaming?.kind === "tab" && renaming.id === tab.id}
+                  onstartrename={() => (renaming = { kind: "tab", id: tab.id })}
+                  onrename={(name) => renameTab(tab, name)}
+                  onpointerdown={(e) => startDrag(e, tab)}
+                />
+              {/each}
+            </nav>
           </div>
-
-          <!-- Arc's separator between Pinned and Today, with "Clear" on hover. -->
-          <div class="divider">
-            <span class="line"></span>
-            {#if today.some((t) => t.kind === "web")}
-              <button class="clear" title="Close this space's Today tabs" onclick={() => browser.menuAction("clear-today")}>
-                <svg viewBox="0 0 16 16"><path d="M8 3.5v8m-3.5-3.5L8 11.5 11.5 8" /></svg>
-                Clear
-              </button>
-            {/if}
-          </div>
-
-          <button class="row action" onclick={() => browser.openPalette("newTab")}>
-            <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg>
-            <span>New Tab</span>
-          </button>
-          <button class="row action" onclick={() => browser.newTerminal()}>
-            <svg viewBox="0 0 16 16"><path d="m4 5 3 3-3 3M9 11.5h3.5" /></svg>
-            <span>New Terminal</span>
-          </button>
-
-          <nav class="tabs" class:drop-into={isDropInto("zone", "today")} data-drop="zone" data-zone="today">
-            {#each today as tab, i (tab.id)}
-              <TabRow
-                {tab}
-                zone="today"
-                index={i}
-                active={tab.id === browserState.active}
-                split={splitSide(tab.id)}
-                beside={besideActive(tab.id)}
-                cursor={tab.id === cursor}
-                dragging={drag?.id === tab.id}
-                mark={markFor(tab)}
-                onpointerdown={(e) => startDrag(e, tab)}
-              />
-            {/each}
-          </nav>
         </div>
       {/key}
 
@@ -634,8 +779,9 @@
       {/if}
 
       <UpdateCard />
+      <!-- Empty (and collapsed) unless there's update news. -->
+      <div class="update-row"><UpdateButton /></div>
       <footer class="spaces">
-        <div class="update-slot"><UpdateButton /></div>
         {#each browserState.spaces as s (s.id)}
           <button
             class="space-switch"
@@ -658,6 +804,7 @@
       </footer>
     </aside>
 
+    {#if !collapsed}
     <div
       class="resize-handle"
       role="separator"
@@ -665,8 +812,10 @@
       aria-label="Resize sidebar"
       onpointerdown={startResize}
     ></div>
+    {/if}
   {/if}
 
+  {#if !PEEK_VIEW}
   <!-- Sits exactly under the active content view: draws its shadow, and the
        empty state when nothing is open. -->
   {#if activeSplit}
@@ -688,6 +837,7 @@
       {/if}
     </main>
   {/if}
+  {/if}
 </div>
 
 <style>
@@ -706,6 +856,37 @@
   }
   .app.dragging {
     cursor: grabbing;
+  }
+  /* The peek view floats over the page, cut to the sidebar's width (plus
+     room for its shadow): only the sidebar draws. */
+  .app.peek-view {
+    background: none;
+  }
+  .peek-edge {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: var(--inset);
+  }
+  .sidebar.peek {
+    width: var(--peek-width);
+    border-radius: 0 12px 12px 0;
+    background:
+      linear-gradient(
+        165deg,
+        hsl(var(--hue) var(--sat) var(--tint-l1) / var(--tint-a1)),
+        hsl(calc(var(--hue) + 25) var(--sat) var(--tint-l2) / var(--tint-a2))
+      ),
+      var(--surface);
+    box-shadow:
+      0 0 0 0.5px var(--ring),
+      4px 0 18px var(--shadow);
+    animation: peek-in 140ms ease-out;
+  }
+  @keyframes peek-in {
+    from {
+      translate: -16px 0;
+      opacity: 0;
+    }
   }
 
   .sidebar {
@@ -731,7 +912,49 @@
   }
   .nav {
     display: flex;
-    gap: 2px;
+    gap: 1px;
+  }
+
+  /* Title bar buttons: full-strength glyphs, softened until hovered. */
+  .tool {
+    width: 30px;
+    height: 28px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border-radius: 7px;
+    color: var(--text);
+    opacity: 0.66;
+    transition:
+      opacity 100ms ease,
+      background 100ms ease;
+  }
+  .tool svg {
+    width: 18px;
+    height: 18px;
+    stroke-width: 1.5;
+  }
+  .tool .fine {
+    stroke-width: 1.3;
+  }
+  .tool:hover:not(:disabled) {
+    opacity: 1;
+    background: var(--fill-hover);
+  }
+  .tool:active:not(:disabled) {
+    background: var(--fill-strong);
+  }
+  .tool:disabled {
+    opacity: 0.25;
+  }
+  /* The reload arrow turns while the page loads. */
+  .tool.spinning svg {
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      rotate: 360deg;
+    }
   }
 
   .icon {
@@ -887,10 +1110,23 @@
   .pinned-list {
     flex: none;
   }
+  /* Today fills what's left, so the whole area takes drops. */
   .tabs {
+    flex: 1 0 auto;
+  }
+  /* Bleeds into the sidebar's side padding, so focus rings, drop outlines
+     and the scrollbar aren't clipped against the rows. */
+  .space-scroll {
     flex: 1;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0 calc(-1 * var(--inset));
+    padding: 2px var(--inset) 6px;
     overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
   }
 
   .row {
@@ -910,9 +1146,53 @@
   .action {
     color: var(--text-muted);
   }
+  /* A folder and its tabs: an open folder is a tinted card, its tabs
+     indented under a guide line that drops from the folder icon. */
+  .folder-group {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-radius: 10px;
+    transition: background 120ms ease;
+  }
+  .folder-group.open {
+    padding-bottom: 3px;
+    background: var(--fill);
+  }
+  .folder-group.open::before {
+    content: "";
+    position: absolute;
+    left: 29.5px;
+    top: 34px;
+    bottom: 12px;
+    width: 1px;
+    background: var(--separator);
+  }
+  .folder-group.dragging {
+    opacity: 0.5;
+  }
+  .folder-mark {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--accent);
+  }
+  .folder-mark.before {
+    top: -3px;
+  }
+  .folder-mark.after {
+    bottom: -3px;
+  }
   .folder {
     gap: 6px;
     padding-left: 4px;
+    font-weight: 500;
+  }
+  .folder-icon {
+    color: var(--text-muted);
   }
   .folder .title {
     flex: 1;
@@ -920,6 +1200,21 @@
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
+  }
+  .count {
+    min-width: 18px;
+    padding: 1px 5px;
+    border-radius: 9px;
+    background: var(--fill-strong);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-align: center;
+  }
+  .folder-empty {
+    padding: 4px 10px 6px 40px;
+    color: var(--text-muted);
+    font-size: 12px;
   }
   .chevron {
     width: 12px;
@@ -1010,10 +1305,13 @@
   }
 
   /* The update button sits bottom left, the space switcher centered. */
-  .update-slot {
-    position: absolute;
-    left: 0;
-    bottom: 0;
+  .update-row {
+    flex: none;
+    display: flex;
+    padding: 0 2px;
+  }
+  .update-row:empty {
+    display: none;
   }
   .spaces {
     display: flex;

@@ -42,10 +42,11 @@ them run under `doppler run --`.
 | ⌘T | Command bar: open a URL, search Google, switch tabs or spaces, find pages from history or recently closed tabs, run commands (initials work: "nt" = New Terminal); `> cmd` runs `cmd` in a new terminal |
 | ⌘L | Edit the current URL |
 | ⌥⌘T | New terminal tab |
-| ⌘W / ⇧⌘T | Close tab (unloads pinned tabs) / reopen closed tab |
+| ⌘W / ⇧⌘T | Close tab (unloads pinned tabs; closes the focused pane of a split terminal) / reopen closed tab |
 | ⌃Tab / ⌃⇧Tab, ⌘1–⌘9 | Switch tabs |
-| ⌘[ / ⌘] / ⌘R | Back / forward / reload |
-| ⌘S | Toggle sidebar |
+| ⌘[ / ⌘] / ⌘R | Back / forward / reload (in a split terminal, ⌘[ / ⌘] move between panes) |
+| ⌘D / ⇧⌘D | Split the terminal: a new pane to the right / below |
+| ⌘S | Toggle sidebar (hidden, it slides out over the page when the pointer touches the window's left edge) |
 | ⌘F | Explore tabs: j/k or ↑/↓ move, h/l or ←/→ switch space, Space peeks, Enter opens, Esc goes back |
 | ⌃1–⌃9, ⌘⌥← / ⌘⌥→ | Switch spaces (or swipe two fingers across the sidebar; with a mouse, scroll sideways or Shift-scroll over it) |
 | ⌥⌘\ | Split view: a new terminal beside the current page |
@@ -57,15 +58,28 @@ Arc-style, top to bottom:
 
 - **Favorites**: tiles showing each site's app icon (its `apple-touch-icon`, else its largest icon),
   shared by every space with the same profile.
-- **Pinned**: per space, optionally grouped in folders.
+- **Pinned**: per space, optionally grouped in folders. An open folder is a tinted block with its
+  tabs indented under it; a closed one shows how many tabs it holds. Drag tabs to reorder them
+  (within a folder, or in and out of one), and drag a folder by its header to reorder folders.
 - **Today**: per space, newest first, below a divider. Hover the divider for *Clear*, which
   closes the space's Today web tabs (terminals stay; ⇧⌘T reopens).
+
+**Renaming tabs**: double-click a tab's title (or right-click → *Rename Tab…*) to give it a name;
+Enter saves, Escape cancels. The name replaces the page's or shell's own title in the sidebar, the
+top bar and the command bar (which still finds the tab by its title), is saved with the session and
+comes back with ⇧⌘T. Clear it to go back to the title.
 
 **Split view**: right-click a tab → *Open in Split View* shows it beside the current tab
 (⌥⌘\ opens a terminal beside the page). Click into a pane to make it the active tab; drag the gap
 between them to resize (double-click: back to half and half). *Close Split View* (tab menu, View
 menu or command bar) ends it; closing either tab gives the other the whole area. A split holds two
 pages or a page and a terminal, in the same space.
+
+**Terminal panes**: ⌘D splits a terminal tab side by side, ⇧⌘D stacks; panes nest, and the tab
+stays one row in the sidebar, named after the focused pane. Each pane runs its own shell, starting
+in the folder of the pane it split from. Click a pane (or ⌘[ / ⌘]) to focus it; the others fade a
+little. Drag the line between panes to resize. ⌘W or `exit` closes a pane; the last one closes the
+tab. The layout is saved with the session (with fresh shells on relaunch).
 
 **Spaces**: hover the space name for **…** (rename, icon, color, profile, delete; also a
 right-click on the name or on a space in the switcher). Every space has an icon, shown next to its
@@ -109,7 +123,8 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
 |---|---|---|
 | `ui` | `index.html` → `src/App.svelte` | Sidebar, transparent over native vibrancy |
 | `tab-<id>` | the web | One per *loaded* web tab, no IPC access |
-| `term` | `term.html` → `src/term/` | All terminal tabs (xterm.js), created on first use |
+| `term` | `term.html` → `src/term/` | All terminal tabs and their panes (xterm.js), created on first use |
+| `peek` | `index.html` again | The collapsed sidebar shown over the page on hover, pre-created hidden |
 | `palette` | `palette.html` → `src/palette/` | Command bar overlay, pre-created hidden |
 | `settings` | `settings.html` → `src/settings/` | Settings, its own window (`src-tauri/src/settings.rs`) |
 | `little-N-bar` / `little-N-page` | `little.html` → `src/little/` / the web | Little Ternt windows (`src-tauri/src/little.rs`) |
@@ -123,7 +138,8 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
 - **Navigation state** (URL, title, loading, back/forward) comes from KVO on each
   `WKWebView` (`src-tauri/src/native.rs`).
 - **Terminals** stream raw PTY bytes over a Tauri channel with ack-based flow control
-  (`src-tauri/src/pty.rs`).
+  (`src-tauri/src/pty.rs`), one PTY per pane. A tab's panes are a binary tree in the model
+  (`src-tauri/src/panes.rs`); the terminal view lays it out.
 - **Preferences** (`prefs.json`, `src-tauri/src/prefs.rs`) sit next to the session.
 - **Links from other apps**: `src-tauri/Info.plist` claims http/https, so macOS can make Ternt the
   default browser; links arrive as `RunEvent::Opened` (`src-tauri/src/little.rs`).
@@ -162,8 +178,8 @@ CI (`.github/workflows/ci.yml`) runs the unit tests on every push.
   and command bar ranking (`src/palette/rank.ts`, pure: data in, items with actions out).
 - **Type check** (`svelte-check`).
 - **Rust unit tests** (`cargo test`): the tab/space/folder model and profiles (`model.rs`),
-  history ranking and storage (`history.rs`), profile ids (`browser.rs`). Then clippy with
-  warnings as errors.
+  terminal pane trees (`panes.rs`), history ranking and storage (`history.rs`), profile ids
+  (`browser.rs`). Then clippy with warnings as errors.
 - **End-to-end** (`e2e/run.sh`, macOS): launches the debug build once per suite in
   `e2e/tests/` with `TERNT_TEST=<script>`. The script runs inside the sidebar webview and drives
   the app through its real commands and DOM events (`t` = `window.__ternt`, see

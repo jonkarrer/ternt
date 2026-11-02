@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export { hostOf, parseInput, type ParsedInput } from "./url";
+export { hostOf, parseInput, tabLabel, type ParsedInput } from "./url";
 
 export type Zone = "favorite" | "pinned" | "today";
 
@@ -9,7 +9,10 @@ export interface Tab {
   id: number;
   kind: "web" | "terminal";
   url: string;
+  /** The page's (or shell's) own title. */
   title: string;
+  /** A name the user gave it, shown instead (see `tabLabel`). */
+  name: string | null;
   zone: Zone;
   /** Owning space (ignored for favorites, which every space shares). */
   space: number;
@@ -20,6 +23,19 @@ export interface Tab {
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
+  /** Terminals: the shells it's split into (see panes.rs); `null` for web tabs. */
+  panes: Panes | null;
+}
+
+/** A terminal split into panes: side by side (`right`) or stacked (`down`). */
+export type PaneNode =
+  | { kind: "pane"; id: number }
+  | { kind: "split"; id: number; direction: "right" | "down"; ratio: number; first: PaneNode; second: PaneNode };
+
+export interface Panes {
+  root: PaneNode;
+  /** The pane with the keyboard; it names the tab. */
+  focused: number;
 }
 
 export interface Space {
@@ -66,6 +82,7 @@ export interface ClosedTab {
   kind: "web" | "terminal";
   url: string;
   title: string;
+  name: string | null;
   space: number;
 }
 
@@ -83,6 +100,8 @@ export interface BrowserState {
   activeSpace: number;
   sidebarWidth: number;
   sidebarCollapsed: boolean;
+  /** The collapsed sidebar is showing over the page (pointer on it). */
+  sidebarPeeking: boolean;
 }
 
 export interface HistoryHit {
@@ -174,6 +193,11 @@ export const browser = {
   createFolder: () => invoke<number | null>("create_folder"),
   renameFolder: (id: number, name: string) => invoke("rename_folder", { id, name }),
   setFolderOpen: (id: number, open: boolean) => invoke("set_folder_open", { id, open }),
+  /** `index` among the space's folders, counted without the moved one. */
+  moveFolder: (id: number, index: number) => invoke("move_folder", { id, index }),
+  /** An empty name goes back to the tab's own title. */
+  renameTab: (id: number, name: string) => invoke("rename_tab", { id, name }),
+  peekSidebar: (show: boolean) => invoke("peek_sidebar", { show }),
   folderContextMenu: (id: number) => invoke("folder_context_menu", { id }),
   navigate: (url: string) => invoke("navigate", { url }),
   goBack: () => invoke("go_back"),
@@ -206,7 +230,7 @@ export const browser = {
   onIconPicker: (cb: (space: number) => void): Promise<UnlistenFn> =>
     listen<number>("browser:icon-picker", (e) => cb(e.payload)),
   /** Rust asks the sidebar to start inline-renaming a space or folder. */
-  onRename: (cb: (target: { kind: "space" | "folder"; id: number }) => void): Promise<UnlistenFn> =>
+  onRename: (cb: (target: { kind: "space" | "folder" | "tab"; id: number }) => void): Promise<UnlistenFn> =>
     listen<{ kind: "space" | "folder"; id: number }>("browser:rename", (e) => cb(e.payload)),
 };
 

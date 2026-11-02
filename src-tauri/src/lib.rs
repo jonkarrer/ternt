@@ -9,6 +9,7 @@ mod model;
 #[cfg(target_os = "macos")]
 mod native;
 mod palette;
+mod panes;
 mod prefs;
 mod pty;
 mod session;
@@ -103,13 +104,18 @@ pub fn run() {
             browser::create_folder,
             browser::rename_folder,
             browser::set_folder_open,
+            browser::move_folder,
             browser::remove_folder,
             browser::set_tab_title,
+            browser::rename_tab,
+            browser::focus_pane,
+            browser::set_pane_ratio,
             browser::navigate,
             browser::go_back,
             browser::go_forward,
             browser::reload,
             browser::set_sidebar_width,
+            browser::peek_sidebar,
             menu::menu_action,
             menu::tab_context_menu,
             menu::space_context_menu,

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { browser, hostOf, type Tab } from "./browser";
+  import { browser, hostOf, tabLabel, type Tab } from "./browser";
 
   let { tab }: { tab: Tab | undefined } = $props();
 </script>
@@ -8,7 +8,7 @@
      prefilled with the full URL. -->
 <button class="omnibox" onclick={() => browser.openPalette("edit")}>
   {#if tab?.kind === "terminal"}
-    <span class="host">{tab.title}</span>
+    <span class="host">{tabLabel(tab)}</span>
   {:else if tab}
     <span class="host">{hostOf(tab.url)}</span>
   {:else}

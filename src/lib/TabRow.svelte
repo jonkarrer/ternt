@@ -1,6 +1,6 @@
 <script lang="ts">
   import TabIcon from "./TabIcon.svelte";
-  import { browser, hostOf, type Tab, type Zone } from "./browser";
+  import { browser, tabLabel, type Tab, type Zone } from "./browser";
 
   let {
     tab,
@@ -14,6 +14,9 @@
     zone,
     folder = null,
     index,
+    renaming = false,
+    onstartrename,
+    onrename,
     onpointerdown,
   }: {
     tab: Tab;
@@ -32,8 +35,29 @@
     zone: Zone;
     folder?: number | null;
     index: number;
+    /** Its title is being edited inline. */
+    renaming?: boolean;
+    /** Double-clicking the title starts renaming. */
+    onstartrename?: () => void;
+    /** Save a name (empty: back to its own title), or cancel (`null`). */
+    onrename?: (name: string | null) => void;
     onpointerdown: (event: PointerEvent) => void;
   } = $props();
+
+  function editKeys(event: KeyboardEvent) {
+    event.stopPropagation();
+    if (event.key === "Enter") (event.currentTarget as HTMLInputElement).blur();
+    if (event.key === "Escape") {
+      cancelled = true;
+      onrename?.(null);
+    }
+  }
+  let cancelled = false;
+  function startEdit(node: HTMLInputElement) {
+    cancelled = false;
+    node.focus();
+    node.select();
+  }
 
   function onkeydown(event: KeyboardEvent) {
     if (event.key === "Enter" || event.key === " ") {
@@ -55,7 +79,7 @@
   class:after={mark === "after"}
   role="button"
   tabindex="0"
-  title={tab.kind === "web" ? tab.url : tab.title}
+  title={tab.kind === "web" ? (tab.name ? `${tab.name}\n${tab.url}` : tab.url) : tabLabel(tab)}
   data-drop="row"
   data-tab={tab.id}
   data-zone={zone}
@@ -70,7 +94,20 @@
   {onkeydown}
 >
   <TabIcon {tab} />
-  <span class="title">{tab.title || hostOf(tab.url)}</span>
+  {#if renaming}
+    <input
+      class="rename"
+      aria-label="Tab name"
+      placeholder={tab.title || tab.url}
+      value={tab.name ?? tab.title}
+      use:startEdit
+      onpointerdown={(e) => e.stopPropagation()}
+      onkeydown={editKeys}
+      onblur={(e) => !cancelled && onrename?.(e.currentTarget.value)}
+    />
+  {:else}
+    <span class="title" role="none" ondblclick={() => onstartrename?.()}>{tabLabel(tab)}</span>
+  {/if}
   {#if split}
     <svg class="split-glyph" viewBox="0 0 16 16" aria-label="Split view, {split} side">
       <rect x="2" y="3.5" width="12" height="9" rx="2" />
@@ -108,8 +145,9 @@
   .row:hover {
     background: var(--fill-hover);
   }
+  /* Inside a folder: clear of the folder's guide line. */
   .indent {
-    padding-left: 30px;
+    padding-left: 40px;
   }
   .active {
     background: var(--tab-active);
@@ -158,6 +196,20 @@
   }
   .after::after {
     bottom: -2px;
+  }
+  .rename {
+    flex: 1;
+    min-width: 0;
+    height: 24px;
+    margin-left: -6px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 6px;
+    outline: 0;
+    background: var(--surface);
+    box-shadow: 0 0 0 1.5px var(--accent);
+    color: var(--text);
+    font: inherit;
   }
   .title {
     flex: 1;

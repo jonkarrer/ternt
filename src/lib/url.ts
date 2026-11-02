@@ -34,3 +34,6 @@ export function hostOf(url: string): string {
 export function isAppPage(url: string): boolean {
   return url.startsWith("ternt://");
 }
+
+/** What a tab is called: the name it was given, else its title, else its host. */
+export const tabLabel = (t: { name: string | null; title: string; url: string }) => t.name || t.title || hostOf(t.url);

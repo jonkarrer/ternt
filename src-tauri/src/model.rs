@@ -12,6 +12,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::panes::{Node, Panes};
+
 pub const DEFAULT_SIDEBAR_WIDTH: f64 = 240.0;
 const MAX_CLOSED_TABS: usize = 25;
 /// Space colors, offered in this order to new spaces. The UI maps each to a
@@ -41,7 +43,10 @@ pub struct Tab {
     pub id: u32,
     pub kind: TabKind,
     pub url: String,
+    /// The page's (or shell's) own title.
     pub title: String,
+    /// A name the user gave it, shown instead of the title.
+    pub name: Option<String>,
     pub zone: Zone,
     /// Owning space. For favorites, the space they were added from: they
     /// show in every space sharing its profile.
@@ -53,6 +58,8 @@ pub struct Tab {
     pub loading: bool,
     pub can_go_back: bool,
     pub can_go_forward: bool,
+    /// Terminals: the shells it's split into (one to start with).
+    pub panes: Option<Panes>,
 }
 
 impl Tab {
@@ -62,6 +69,7 @@ impl Tab {
             kind,
             url,
             title,
+            name: None,
             zone: Zone::Today,
             space,
             folder: None,
@@ -69,6 +77,7 @@ impl Tab {
             loading: false,
             can_go_back: false,
             can_go_forward: false,
+            panes: (kind == TabKind::Terminal).then(Panes::default),
         }
     }
 
@@ -180,8 +189,12 @@ pub struct ClosedTab {
     pub kind: TabKind,
     pub url: String,
     pub title: String,
+    pub name: Option<String>,
     pub space: u32,
 }
+
+/// Longest tab name kept, in characters.
+pub const MAX_TAB_NAME: usize = 200;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -198,6 +211,7 @@ pub struct Snapshot {
     active_space: u32,
     sidebar_width: f64,
     sidebar_collapsed: bool,
+    sidebar_peeking: bool,
 }
 
 pub struct State {
@@ -213,6 +227,9 @@ pub struct State {
     pub last_active: HashMap<u32, u32>,
     pub sidebar_width: f64,
     pub sidebar_collapsed: bool,
+    /// The collapsed sidebar shown over the page while the pointer is on it
+    /// (not saved).
+    pub sidebar_peeking: bool,
     pub closed: Vec<ClosedTab>,
     next_tab_id: u32,
     next_closed_id: u32,
@@ -239,6 +256,7 @@ impl Default for State {
             last_active: HashMap::new(),
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
             sidebar_collapsed: false,
+            sidebar_peeking: false,
             closed: Vec::new(),
             next_tab_id: 1,
             next_closed_id: 1,
@@ -260,6 +278,7 @@ impl State {
             active_space: self.active_space,
             sidebar_width: self.sidebar_width,
             sidebar_collapsed: self.sidebar_collapsed,
+            sidebar_peeking: self.sidebar_peeking,
         }
     }
 
@@ -439,6 +458,7 @@ impl State {
             kind: tab.kind,
             url: tab.url.clone(),
             title: tab.title.clone(),
+            name: tab.name.clone(),
             space: tab.space,
         });
         self.next_closed_id += 1;
@@ -446,6 +466,17 @@ impl State {
             self.closed.remove(0);
         }
         Some(tab)
+    }
+
+    /// Name a tab (trimmed and capped); an empty name goes back to its own
+    /// title.
+    pub fn rename_tab(&mut self, id: u32, name: &str) -> bool {
+        let Some(tab) = self.tab_mut(id) else {
+            return false;
+        };
+        let name: String = name.trim().chars().take(MAX_TAB_NAME).collect();
+        tab.name = (!name.is_empty()).then_some(name);
+        true
     }
 
     /// Take a closed tab back out of the list (`None`: the most recent),
@@ -762,6 +793,33 @@ impl State {
         Some(id)
     }
 
+    /// Move a folder to `index` among its space's folders (clamped; counted
+    /// without the folder itself).
+    pub fn move_folder(&mut self, id: u32, index: usize) -> bool {
+        let Some(from) = self.folders.iter().position(|f| f.id == id) else {
+            return false;
+        };
+        let folder = self.folders.remove(from);
+        let space = folder.space;
+        let at = self
+            .folders
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.space == space)
+            .map(|(i, _)| i)
+            .nth(index)
+            .or_else(|| {
+                // After the space's last folder (or where it was, if alone).
+                self.folders
+                    .iter()
+                    .rposition(|f| f.space == space)
+                    .map(|i| i + 1)
+            })
+            .unwrap_or(from.min(self.folders.len()));
+        self.folders.insert(at, folder);
+        true
+    }
+
     /// Delete a folder; its tabs stay pinned, outside any folder.
     pub fn remove_folder(&mut self, id: u32) -> bool {
         let before = self.folders.len();
@@ -830,6 +888,10 @@ impl State {
                 let mut tab = Tab::new(id, t.kind, space, t.url, t.title);
                 tab.zone = zone;
                 tab.folder = folder;
+                tab.name = t.name.filter(|n| !n.trim().is_empty());
+                if let (Some(panes), Some(saved)) = (&mut tab.panes, t.panes) {
+                    *panes = Panes::restore(saved);
+                }
                 state.tabs.push(tab);
                 id
             })
@@ -869,6 +931,12 @@ impl State {
                     zone: Some(t.zone),
                     space: Some(t.space),
                     folder: t.folder,
+                    name: t.name.clone(),
+                    panes: t
+                        .panes
+                        .as_ref()
+                        .filter(|p| p.len() > 1)
+                        .map(|p| p.root.clone()),
                 })
                 .collect(),
             active: self.active.and_then(index),
@@ -913,6 +981,12 @@ pub struct SavedTab {
     pub space: Option<u32>,
     #[serde(default)]
     pub folder: Option<u32>,
+    /// A name the user gave the tab.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Terminals split into panes: the layout (each pane gets a new shell).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panes: Option<Node>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1132,6 +1206,59 @@ mod tests {
             s.remove_space(1).is_none(),
             "the last space can't be removed"
         );
+    }
+
+    #[test]
+    fn tabs_keep_a_given_name_until_it_is_cleared() {
+        let mut s = State::default();
+        let a = web(&mut s, "a");
+        assert!(s.rename_tab(a, "  Inbox  "));
+        assert_eq!(s.tab(a).unwrap().name.as_deref(), Some("Inbox"));
+        let r = State::restore(
+            serde_json::from_str(&serde_json::to_string(&s.save()).unwrap()).unwrap(),
+        );
+        assert_eq!(
+            r.tabs[0].name.as_deref(),
+            Some("Inbox"),
+            "saved with the session"
+        );
+        s.remove_tab(a);
+        assert_eq!(
+            s.closed[0].name.as_deref(),
+            Some("Inbox"),
+            "kept for reopening"
+        );
+        let b = web(&mut s, "b");
+        assert!(s.rename_tab(b, &"x".repeat(500)));
+        assert_eq!(s.tab(b).unwrap().name.as_ref().unwrap().len(), MAX_TAB_NAME);
+        assert!(s.rename_tab(b, "   "));
+        assert_eq!(s.tab(b).unwrap().name, None, "empty: back to its own title");
+        assert!(!s.rename_tab(42, "x"));
+    }
+
+    #[test]
+    fn folders_reorder_within_their_space() {
+        let mut s = State::default();
+        let [a, b, c] = ["a", "b", "c"].map(|n| s.add_folder(1, n.into()).unwrap());
+        let work = s.add_space(None);
+        let w = s.add_folder(work, "w".into()).unwrap();
+        let order = |s: &State, space: u32| {
+            s.folders
+                .iter()
+                .filter(|f| f.space == space)
+                .map(|f| f.id)
+                .collect::<Vec<_>>()
+        };
+        assert!(s.move_folder(c, 0));
+        assert_eq!(order(&s, 1), [c, a, b]);
+        assert!(s.move_folder(c, 1));
+        assert_eq!(order(&s, 1), [a, c, b]);
+        assert!(s.move_folder(a, 99), "clamped to the end");
+        assert_eq!(order(&s, 1), [c, b, a]);
+        assert!(s.move_folder(w, 5));
+        assert_eq!(order(&s, work), [w], "a lone folder stays put");
+        assert_eq!(order(&s, 1), [c, b, a], "other spaces untouched");
+        assert!(!s.move_folder(42, 0));
     }
 
     #[test]
@@ -1434,6 +1561,37 @@ mod tests {
         assert_eq!(s.take_closed(Some(b)).map(|c| c.id), None, "taken once");
         assert_eq!(s.take_closed(None).unwrap().title, "a");
         assert!(s.take_closed(None).is_none());
+    }
+
+    #[test]
+    fn terminal_panes_are_saved_and_restored() {
+        use crate::panes::Direction;
+        let mut s = State::default();
+        s.add_tab(TabKind::Terminal, String::new(), "one".into());
+        let split = s.add_tab(TabKind::Terminal, String::new(), "two".into());
+        let panes = s.tab_mut(split).unwrap().panes.as_mut().unwrap();
+        panes.split(Direction::Right);
+        panes.split(Direction::Down);
+        let saved = s.save();
+        assert!(
+            saved.tabs.iter().any(|t| t.panes.is_none()),
+            "one pane: nothing saved"
+        );
+        let r =
+            State::restore(serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap());
+        let panes = |title: &str| {
+            r.tabs
+                .iter()
+                .find(|t| t.title == title)
+                .unwrap()
+                .panes
+                .clone()
+                .unwrap()
+        };
+        assert_eq!(panes("one"), Panes::default());
+        let two = panes("two");
+        assert_eq!(two.len(), 3, "the layout comes back");
+        assert_eq!(two.focused, two.ids()[0]);
     }
 
     #[test]

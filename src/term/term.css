@@ -12,12 +12,57 @@ body {
   padding: 10px 6px 6px 14px;
 }
 
-.terminal {
-  width: 100%;
-  height: 100%;
+.pane {
+  position: absolute;
 }
 
-.terminal[hidden] {
+/* Panes without the keyboard fade back a little. */
+.pane.dimmed::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: var(--surface);
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* Between panes: a hairline, draggable to resize. */
+.divider {
+  position: absolute;
+  z-index: 11;
+}
+
+.divider.across {
+  cursor: col-resize;
+}
+
+.divider.stacked {
+  cursor: row-resize;
+}
+
+.divider::after {
+  content: "";
+  position: absolute;
+  background: var(--separator);
+  transition: background 120ms;
+}
+
+.divider.across::after {
+  inset: 0 auto 0 50%;
+  width: 1px;
+}
+
+.divider.stacked::after {
+  inset: 50% 0 auto 0;
+  height: 1px;
+}
+
+.divider:hover::after {
+  background: var(--text-muted);
+}
+
+.pane[hidden] {
   display: none;
 }
 

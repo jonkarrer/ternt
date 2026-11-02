@@ -33,11 +33,15 @@ use tauri::{
 pub use crate::model::{TabKind, Zone};
 use crate::{
     model::{SPACE_COLORS, Saved, Snapshot, Split, State},
+    panes::Direction,
     session,
 };
 
 pub const MAIN_WINDOW: &str = "main";
 pub const UI_WEBVIEW: &str = "ui";
+/// The sidebar shown over the page while it's collapsed (`index.html`
+/// again, rendering only the sidebar).
+pub const PEEK_WEBVIEW: &str = "peek";
 pub const TERM_WEBVIEW: &str = "term";
 
 /// Gap between the content card and the window edges, in logical px.
@@ -437,6 +441,19 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
 
     crate::palette::create(&window)?;
 
+    // Made up front (hidden), so the sidebar peeks out without a load.
+    let peek = WebviewBuilder::new(PEEK_WEBVIEW, WebviewUrl::App("index.html".into()))
+        .transparent(true)
+        .focused(false);
+    let peek = window.add_child(
+        peek,
+        LogicalPosition::new(0.0, 0.0),
+        LogicalSize::new(0.0, 0.0),
+    )?;
+    peek.hide()?;
+    #[cfg(target_os = "macos")]
+    crate::native::track_window_height(&peek);
+
     // macOS resizes content webviews natively (see `native::style_content`),
     // which keeps a split's panes about right while the window resizes;
     // lay them out exactly after each step.
@@ -742,6 +759,10 @@ fn activate(app: &AppHandle, id: u32) -> tauri::Result<()> {
         view.show()?;
     }
     next_view.show()?;
+    // A view made just now would sit over the peeking sidebar.
+    if with(app, |s| s.sidebar_peeking) {
+        float_sidebar(app, true)?;
+    }
     if exploring(app) {
         // Previewing: the sidebar keeps the keyboard, the dim stays on top.
         update_dim(app)?;
@@ -827,10 +848,18 @@ pub fn close_tab_by_id(app: &AppHandle, id: u32) -> tauri::Result<()> {
     Ok(())
 }
 
+/// ⌘W: close the active tab, or the focused pane of a split terminal.
 pub fn close_active_tab(app: &AppHandle) -> tauri::Result<()> {
-    match with(app, |s| s.active) {
-        Some(id) => close_tab_by_id(app, id),
-        None => Ok(()),
+    let Some(id) = with(app, |s| s.active) else {
+        return Ok(());
+    };
+    let pane = with(app, |s| {
+        let panes = s.tab(id)?.panes.as_ref()?;
+        (panes.len() > 1).then_some(panes.focused)
+    });
+    match pane {
+        Some(pane) => close_pane(app, id, pane),
+        None => close_tab_by_id(app, id),
     }
 }
 
@@ -863,13 +892,18 @@ pub fn reopen_closed_tab(app: &AppHandle, id: Option<u32>) -> tauri::Result<()> 
     let Some(closed) = with(app, |s| s.take_closed(id)) else {
         return Ok(());
     };
-    match closed.kind {
+    let id = match closed.kind {
         TabKind::Web => match Url::parse(&closed.url) {
-            Ok(url) => open_tab(app, url).map(|_| ()),
-            Err(_) => Ok(()),
+            Ok(url) => open_tab(app, url)?,
+            Err(_) => return Ok(()),
         },
-        TabKind::Terminal => open_terminal(app).map(|_| ()),
+        TabKind::Terminal => open_terminal(app)?,
+    };
+    if let Some(name) = closed.name {
+        with(app, |s| s.rename_tab(id, &name));
+        emit_state(app);
     }
+    Ok(())
 }
 
 pub fn duplicate_tab(app: &AppHandle, id: u32) -> tauri::Result<()> {
@@ -973,6 +1007,66 @@ pub fn on_view_focused(app: &AppHandle, tab: Option<u32>, terminal: bool) {
     });
 }
 
+// --- Terminal panes -----------------------------------------------------------
+
+pub fn has_pane(app: &AppHandle, id: u32, pane: u32) -> bool {
+    with(app, |s| {
+        s.tab(id)
+            .and_then(|t| t.panes.as_ref())
+            .is_some_and(|p| p.has(pane))
+    })
+}
+
+/// Split the active terminal's focused pane (⌘D, ⇧⌘D). The new pane's
+/// shell starts in the folder the focused one is in.
+pub fn split_pane(app: &AppHandle, direction: Direction) -> tauri::Result<()> {
+    let split = with(app, |s| {
+        let id = s.active?;
+        let panes = s.tab_mut(id)?.panes.as_mut()?;
+        let from = panes.focused;
+        Some((id, from, panes.split(direction)))
+    });
+    if let Some((id, from, pane)) = split {
+        // Before the state goes out: the terminal view starts the shell.
+        crate::pty::start_beside(app, (id, pane), (id, from));
+        emit_state(app);
+    }
+    Ok(())
+}
+
+/// Close a pane and its shell; its neighbor takes the room. Closing a
+/// tab's last pane closes the tab.
+pub fn close_pane(app: &AppHandle, id: u32, pane: u32) -> tauri::Result<()> {
+    let closed = with(app, |s| {
+        let panes = s.tab_mut(id)?.panes.as_mut()?;
+        panes.has(pane).then(|| panes.close(pane))
+    });
+    match closed {
+        Some(true) => {
+            crate::pty::kill_pane(app, id, pane);
+            emit_state(app);
+            Ok(())
+        }
+        Some(false) => close_tab_by_id(app, id),
+        None => Ok(()),
+    }
+}
+
+/// Focus the active terminal's pane `delta` places away (⌘], ⌘[).
+/// Returns whether the active tab is a terminal.
+pub fn cycle_pane(app: &AppHandle, delta: isize) -> bool {
+    let cycled = with(app, |s| {
+        let panes = s.tab_mut(s.active?)?.panes.as_mut()?;
+        let before = panes.focused;
+        panes.cycle(delta);
+        Some(panes.focused != before)
+    });
+    if cycled == Some(true) {
+        emit_state(app);
+    }
+    cycled.is_some()
+}
+
 /// Activate the tab `delta` positions away in the sidebar, wrapping.
 pub fn cycle_tab(app: &AppHandle, delta: isize) -> tauri::Result<()> {
     let target = with(app, |s| {
@@ -1036,6 +1130,9 @@ pub fn forward_active(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn toggle_sidebar(app: &AppHandle) -> tauri::Result<()> {
+    if with(app, |s| std::mem::take(&mut s.sidebar_peeking)) {
+        float_sidebar(app, false)?;
+    }
     let collapsed = with(app, |s| {
         s.sidebar_collapsed = !s.sidebar_collapsed;
         s.sidebar_collapsed
@@ -1048,6 +1145,72 @@ pub fn toggle_sidebar(app: &AppHandle) -> tauri::Result<()> {
     let _ = collapsed;
     emit_state(app);
     Ok(())
+}
+
+/// Room beside the peeking sidebar for its shadow, in logical px.
+const PEEK_SHADOW: f64 = 24.0;
+
+/// Show the collapsed sidebar over the page while the pointer is on it
+/// (it reaches the window's left edge), and hide it again.
+pub fn set_sidebar_peek(app: &AppHandle, show: bool) -> tauri::Result<()> {
+    let changed = with(app, |s| {
+        let show = show && s.sidebar_collapsed && cfg!(target_os = "macos");
+        (s.sidebar_peeking != show).then(|| {
+            s.sidebar_peeking = show;
+            show
+        })
+    });
+    match changed {
+        // The sidebar renders first, then floats; it sinks before it goes.
+        Some(true) => {
+            emit_state(app);
+            float_sidebar(app, true)
+        }
+        Some(false) => {
+            float_sidebar(app, false)?;
+            emit_state(app);
+            Ok(())
+        }
+        None => Ok(()),
+    }
+}
+
+/// Show the peek view over the content (or hide it), with the window
+/// buttons showing while it does. Showing again raises it over views added
+/// since.
+fn float_sidebar(app: &AppHandle, float: bool) -> tauri::Result<()> {
+    let Some(peek) = app.get_webview(PEEK_WEBVIEW) else {
+        return Ok(());
+    };
+    if float {
+        let window = main_window(app)?;
+        let height = window
+            .inner_size()?
+            .to_logical::<f64>(window.scale_factor()?)
+            .height;
+        let width = with(app, |s| s.sidebar_width) + PEEK_SHADOW;
+        peek.set_bounds(Rect {
+            position: LogicalPosition::new(0.0, 0.0).into(),
+            size: LogicalSize::new(width, height).into(),
+        })?;
+        #[cfg(target_os = "macos")]
+        crate::native::bring_to_front(&peek);
+        peek.show()?;
+    } else {
+        peek.hide()?;
+    }
+    #[cfg(target_os = "macos")]
+    crate::native::set_traffic_lights_hidden(&main_window(app)?, !float);
+    Ok(())
+}
+
+/// The view showing the sidebar: the peek view while it's up.
+fn sidebar_view(app: &AppHandle) -> &'static str {
+    if with(app, |s| s.sidebar_peeking) {
+        PEEK_WEBVIEW
+    } else {
+        UI_WEBVIEW
+    }
 }
 
 // --- Spaces -----------------------------------------------------------------
@@ -1139,10 +1302,14 @@ pub fn request_icon_picker(app: &AppHandle, id: u32) -> tauri::Result<()> {
         switch_space(app, id)?;
         emit_state(app);
     }
-    if let Some(ui) = app.get_webview(UI_WEBVIEW) {
+    if let Some(ui) = app.get_webview(sidebar_view(app)) {
         ui.set_focus()?;
     }
-    app.emit_to(EventTarget::webview(UI_WEBVIEW), "browser:icon-picker", id)
+    app.emit_to(
+        EventTarget::webview(sidebar_view(app)),
+        "browser:icon-picker",
+        id,
+    )
 }
 
 pub fn set_space_color(app: &AppHandle, id: u32, color: &str) {
@@ -1211,11 +1378,11 @@ pub fn request_rename(app: &AppHandle, kind: &str, id: u32) -> tauri::Result<()>
         kind: &'a str,
         id: u32,
     }
-    if let Some(ui) = app.get_webview(UI_WEBVIEW) {
+    if let Some(ui) = app.get_webview(sidebar_view(app)) {
         ui.set_focus()?;
     }
     app.emit_to(
-        EventTarget::webview(UI_WEBVIEW),
+        EventTarget::webview(sidebar_view(app)),
         "browser:rename",
         Rename { kind, id },
     )
@@ -1442,6 +1609,14 @@ pub async fn move_tab(
     move_tab_to(&app, id, zone, folder, index);
 }
 
+/// Name a tab (inline rename in the sidebar); empty goes back to its title.
+#[tauri::command]
+pub async fn rename_tab(app: AppHandle, id: u32, name: String) {
+    if with(&app, |s| s.rename_tab(id, &name)) {
+        emit_state(&app);
+    }
+}
+
 /// Terminals set their title from the shell (OSC 0/2 escape sequences).
 #[tauri::command]
 pub async fn set_tab_title(app: AppHandle, id: u32, title: String) {
@@ -1453,6 +1628,37 @@ pub async fn set_tab_title(app: AppHandle, id: u32, title: String) {
     if updated.is_some() {
         schedule_emit(&app);
     }
+}
+
+/// A terminal pane got the keyboard (clicked, or focus moved).
+#[tauri::command]
+pub async fn focus_pane(app: AppHandle, id: u32, pane: u32) {
+    let changed = with(&app, |s| {
+        let panes = s.tab_mut(id)?.panes.as_mut()?;
+        let before = panes.focused;
+        (panes.focus(pane) && before != pane).then_some(())
+    });
+    if changed.is_some() {
+        emit_state(&app);
+    }
+}
+
+#[tauri::command]
+pub async fn peek_sidebar(app: AppHandle, show: bool) -> Result<(), String> {
+    set_sidebar_peek(&app, show).map_err(err)
+}
+
+/// Resize a terminal split (dragging its divider). Returns the ratio
+/// applied (clamped).
+#[tauri::command]
+pub async fn set_pane_ratio(app: AppHandle, id: u32, split: u32, ratio: f64) -> Option<f64> {
+    let applied = with(&app, |s| {
+        s.tab_mut(id)?.panes.as_mut()?.set_ratio(split, ratio)
+    });
+    if applied.is_some() {
+        emit_state(&app);
+    }
+    applied
 }
 
 /// Navigate the active web tab, or open a new one if there is none.
@@ -1589,6 +1795,14 @@ pub async fn rename_folder(app: AppHandle, id: u32, name: String) {
 #[tauri::command]
 pub async fn set_folder_open(app: AppHandle, id: u32, open: bool) {
     if with(&app, |s| s.folder_mut(id).map(|f| f.open = open)).is_some() {
+        emit_state(&app);
+    }
+}
+
+/// Drag a folder to `index` among its space's folders.
+#[tauri::command]
+pub async fn move_folder(app: AppHandle, id: u32, index: usize) {
+    if with(&app, |s| s.move_folder(id, index)) {
         emit_state(&app);
     }
 }

@@ -70,6 +70,17 @@ unsafe fn view<'a>(ptr: *mut c_void) -> &'a NSView {
     unsafe { &*(ptr as *const NSView) }
 }
 
+/// Keep the view's width and left edge as the window resizes, following
+/// its height (the peeking sidebar).
+pub fn track_window_height(webview: &Webview) {
+    let _ = webview.with_webview(|platform| unsafe {
+        view(platform.inner()).setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewHeightSizable
+                | NSAutoresizingMaskOptions::ViewMaxXMargin,
+        );
+    });
+}
+
 fn pin_to_superview(view: &NSView) {
     view.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,

@@ -26,7 +26,7 @@ await t.invoke("activate_space", { id: work.id });
 await t.until(() => tab()?.kind === "terminal", "Work space shows its terminal");
 const term = S().active;
 await t.sleep(1500);
-await t.invoke("pty_write", { id: term, data: "echo restored-$((3*3))\r" });
+await t.invoke("pty_write", { id: term, pane: 0, data: "echo restored-$((3*3))\r" });
 await t.sleep(600);
 await t.assert((await t.read("term", `window.__termText(${term})`)).includes("restored-9"), "restored terminal runs a shell");
 

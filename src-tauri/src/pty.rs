@@ -1,4 +1,5 @@
-//! Terminal sessions: one PTY per terminal tab, streamed to xterm.js.
+//! Terminal sessions: one PTY per terminal pane (a tab starts with one),
+//! streamed to xterm.js.
 //!
 //! Output path: a reader thread pulls bytes off the PTY into a buffer; a
 //! flusher thread sends whatever has accumulated as one raw (non-JSON) channel
@@ -13,6 +14,7 @@
 use std::{
     collections::HashMap,
     io::{Read, Write},
+    path::PathBuf,
     sync::{Arc, Condvar, Mutex},
     time::Duration,
 };
@@ -53,10 +55,14 @@ struct Session {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     output: Arc<Output>,
+    pid: Option<u32>,
 }
 
+/// A pane's shell: `(tab, pane)`.
+type Key = (u32, u32);
+
 #[derive(Default)]
-pub struct Terminals(Mutex<HashMap<u32, Session>>);
+pub struct Terminals(Mutex<HashMap<Key, Session>>);
 
 /// Input typed into a terminal as soon as its shell starts (`(tab, text)`),
 /// for terminals opened to run a command.
@@ -64,6 +70,55 @@ static STARTUP_INPUT: Mutex<Vec<(u32, String)>> = Mutex::new(Vec::new());
 
 pub fn queue_startup_input(id: u32, text: String) {
     STARTUP_INPUT.lock().unwrap().push((id, text));
+}
+
+/// Folders new panes start in (the folder of the pane they split from).
+static START_DIRS: Mutex<Vec<(Key, PathBuf)>> = Mutex::new(Vec::new());
+
+/// Start a pane's shell in the folder another pane's shell is in.
+pub fn start_beside(app: &AppHandle, key: Key, beside: Key) {
+    let pid = app
+        .state::<Terminals>()
+        .0
+        .lock()
+        .unwrap()
+        .get(&beside)
+        .and_then(|s| s.pid);
+    if let Some(dir) = pid.and_then(shell_dir) {
+        START_DIRS.lock().unwrap().push((key, dir));
+    }
+}
+
+/// A shell's working directory.
+#[cfg(target_os = "macos")]
+fn shell_dir(pid: u32) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY: proc_pidinfo fills at most `size` bytes of the zeroed struct.
+    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of_val(&info) as libc::c_int;
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            (&raw mut info).cast(),
+            size,
+        )
+    };
+    if read != size {
+        return None;
+    }
+    let path = info.pvi_cdir.vip_path.as_flattened();
+    // SAFETY: c_char and u8 have the same size and layout.
+    let path: &[u8] = unsafe { std::slice::from_raw_parts(path.as_ptr().cast(), path.len()) };
+    let path = std::ffi::CStr::from_bytes_until_nul(path).ok()?;
+    let path = PathBuf::from(std::ffi::OsStr::from_bytes(path.to_bytes()));
+    path.is_dir().then_some(path)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn shell_dir(_pid: u32) -> Option<PathBuf> {
+    None
 }
 
 fn size(cols: u16, rows: u16) -> PtySize {
@@ -75,15 +130,22 @@ fn size(cols: u16, rows: u16) -> PtySize {
     }
 }
 
-fn spawn(app: &AppHandle, id: u32, cols: u16, rows: u16) -> Result<Session, String> {
+fn spawn(app: &AppHandle, key: Key, cols: u16, rows: u16) -> Result<Session, String> {
+    let (id, _) = key;
     let pair = native_pty_system()
         .openpty(size(cols, rows))
         .map_err(|e| e.to_string())?;
 
     // The user's login shell, like Terminal.app.
     let mut cmd = CommandBuilder::new_default_prog();
-    if let Some(home) = std::env::var_os("HOME") {
-        cmd.cwd(home);
+    let dir = {
+        let mut dirs = START_DIRS.lock().unwrap();
+        dirs.iter()
+            .position(|(k, _)| *k == key)
+            .map(|i| dirs.remove(i).1)
+    };
+    if let Some(dir) = dir.or_else(|| std::env::var_os("HOME").map(PathBuf::from)) {
+        cmd.cwd(dir);
     }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
@@ -96,6 +158,7 @@ fn spawn(app: &AppHandle, id: u32, cols: u16, rows: u16) -> Result<Session, Stri
     // Drop our copy of the slave so the reader sees EOF when the shell exits.
     drop(pair.slave);
     let killer = child.clone_killer();
+    let pid = child.process_id();
     std::thread::spawn(move || {
         let _ = child.wait();
     });
@@ -166,7 +229,7 @@ fn spawn(app: &AppHandle, id: u32, cols: u16, rows: u16) -> Result<Session, Stri
             let _ = channel.send(InvokeResponseBody::Raw(chunk));
             std::thread::sleep(FLUSH_INTERVAL);
         }
-        on_exit(&app, id);
+        on_exit(&app, key);
     });
 
     Ok(Session {
@@ -174,57 +237,80 @@ fn spawn(app: &AppHandle, id: u32, cols: u16, rows: u16) -> Result<Session, Stri
         writer,
         killer,
         output,
+        pid,
     })
 }
 
-/// The shell exited on its own: close its tab, like a terminal app would.
-fn on_exit(app: &AppHandle, id: u32) {
+/// The shell exited on its own: close its pane (the tab, if it was the
+/// last one), like a terminal app would.
+fn on_exit(app: &AppHandle, key: Key) {
     if app
         .state::<Terminals>()
         .0
         .lock()
         .unwrap()
-        .remove(&id)
+        .remove(&key)
         .is_some()
     {
-        let _ = crate::browser::close_tab_by_id(app, id);
+        let _ = crate::browser::close_pane(app, key.0, key.1);
     }
 }
 
-/// Kill a tab's shell (its tab is being closed).
+fn stop(mut session: Session) {
+    let _ = session.killer.kill();
+    let mut pipe = session.output.lock();
+    pipe.closed = true;
+    pipe.channel = None;
+    session.output.changed.notify_all();
+}
+
+/// Kill every shell of a tab (it's being closed).
 pub fn kill(app: &AppHandle, id: u32) {
-    if let Some(mut session) = app.state::<Terminals>().0.lock().unwrap().remove(&id) {
-        let _ = session.killer.kill();
-        let mut pipe = session.output.lock();
-        pipe.closed = true;
-        pipe.channel = None;
-        session.output.changed.notify_all();
+    let terminals = app.state::<Terminals>();
+    let mut sessions = terminals.0.lock().unwrap();
+    let keys: Vec<Key> = sessions.keys().filter(|k| k.0 == id).copied().collect();
+    for key in keys {
+        stop(sessions.remove(&key).expect("listed above"));
     }
 }
 
-/// Start the shell for a terminal tab, or reattach to it if it's running
+/// Kill one pane's shell (the pane is being closed).
+pub fn kill_pane(app: &AppHandle, id: u32, pane: u32) {
+    let session = app
+        .state::<Terminals>()
+        .0
+        .lock()
+        .unwrap()
+        .remove(&(id, pane));
+    if let Some(session) = session {
+        stop(session);
+    }
+}
+
+/// Start the shell for a terminal pane, or reattach to it if it's running
 /// (e.g. after the terminal webview reloads).
 #[tauri::command]
 pub async fn pty_spawn(
     app: AppHandle,
     id: u32,
+    pane: u32,
     cols: u16,
     rows: u16,
     channel: Channel<InvokeResponseBody>,
 ) -> Result<(), String> {
-    if !crate::browser::is_terminal_tab(&app, id) {
-        return Err(format!("tab {id} is not a terminal"));
+    if !crate::browser::has_pane(&app, id, pane) {
+        return Err(format!("tab {id} has no terminal pane {pane}"));
     }
     let terminals = app.state::<Terminals>();
     let mut sessions = terminals.0.lock().unwrap();
-    let session = match sessions.entry(id) {
+    let session = match sessions.entry((id, pane)) {
         std::collections::hash_map::Entry::Occupied(entry) => {
             let session = entry.into_mut();
             let _ = session.master.resize(size(cols, rows));
             session
         }
         std::collections::hash_map::Entry::Vacant(entry) => {
-            entry.insert(spawn(&app, id, cols, rows)?)
+            entry.insert(spawn(&app, (id, pane), cols, rows)?)
         }
     };
     let mut pipe = session.output.lock();
@@ -235,21 +321,25 @@ pub async fn pty_spawn(
 }
 
 #[tauri::command]
-pub fn pty_write(app: AppHandle, id: u32, data: String) -> Result<(), String> {
+pub fn pty_write(app: AppHandle, id: u32, pane: u32, data: String) -> Result<(), String> {
     let writer = {
         let terminals = app.state::<Terminals>();
         let sessions = terminals.0.lock().unwrap();
-        sessions.get(&id).ok_or("no such terminal")?.writer.clone()
+        sessions
+            .get(&(id, pane))
+            .ok_or("no such terminal")?
+            .writer
+            .clone()
     };
     let mut writer = writer.lock().unwrap();
     writer.write_all(data.as_bytes()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn pty_resize(app: AppHandle, id: u32, cols: u16, rows: u16) -> Result<(), String> {
+pub fn pty_resize(app: AppHandle, id: u32, pane: u32, cols: u16, rows: u16) -> Result<(), String> {
     let terminals = app.state::<Terminals>();
     let sessions = terminals.0.lock().unwrap();
-    let session = sessions.get(&id).ok_or("no such terminal")?;
+    let session = sessions.get(&(id, pane)).ok_or("no such terminal")?;
     session
         .master
         .resize(size(cols, rows))
@@ -258,10 +348,10 @@ pub fn pty_resize(app: AppHandle, id: u32, cols: u16, rows: u16) -> Result<(), S
 
 /// xterm.js has parsed `bytes` more bytes.
 #[tauri::command]
-pub fn pty_ack(app: AppHandle, id: u32, bytes: usize) {
+pub fn pty_ack(app: AppHandle, id: u32, pane: u32, bytes: usize) {
     let terminals = app.state::<Terminals>();
     let sessions = terminals.0.lock().unwrap();
-    if let Some(session) = sessions.get(&id) {
+    if let Some(session) = sessions.get(&(id, pane)) {
         let mut pipe = session.output.lock();
         pipe.unacked = pipe.unacked.saturating_sub(bytes);
         session.output.changed.notify_all();

@@ -9,7 +9,9 @@ use tauri::{
 use crate::{
     browser::{self, TabKind, Zone},
     model::SPACE_COLORS,
-    palette, settings, welcome,
+    palette,
+    panes::Direction,
+    settings, welcome,
 };
 
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
@@ -144,6 +146,27 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         ],
     )?;
 
+    // ⌘[ and ⌘] (Back, Forward) also move between panes when a terminal is
+    // active, as in iTerm and Ghostty.
+    let terminal = Submenu::with_items(
+        app,
+        "Terminal",
+        true,
+        &[
+            &MenuItem::with_id(app, "split-right", "Split Right", true, Some("CmdOrCtrl+D"))?,
+            &MenuItem::with_id(
+                app,
+                "split-down",
+                "Split Down",
+                true,
+                Some("CmdOrCtrl+Shift+D"),
+            )?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "next-pane", "Next Pane", true, None::<&str>)?,
+            &MenuItem::with_id(app, "previous-pane", "Previous Pane", true, None::<&str>)?,
+        ],
+    )?;
+
     let window = Submenu::with_items(
         app,
         "Window",
@@ -213,7 +236,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     Menu::with_items(
         app,
         &[
-            &app_menu, &file, &edit, &view, &tabs, &spaces, &window, &help,
+            &app_menu, &file, &edit, &view, &terminal, &tabs, &spaces, &window, &help,
         ],
     )
 }
@@ -239,8 +262,20 @@ pub fn run_action(app: &AppHandle, id: String) {
             "close-tab" => browser::close_active_tab(&app),
             "settings" => settings::open(&app),
             "reload" => browser::reload_active(&app),
+            "back" if browser::cycle_pane(&app, -1) => Ok(()),
+            "forward" if browser::cycle_pane(&app, 1) => Ok(()),
             "back" => browser::back_active(&app),
             "forward" => browser::forward_active(&app),
+            "split-right" => browser::split_pane(&app, Direction::Right),
+            "split-down" => browser::split_pane(&app, Direction::Down),
+            "next-pane" => {
+                browser::cycle_pane(&app, 1);
+                Ok(())
+            }
+            "previous-pane" => {
+                browser::cycle_pane(&app, -1);
+                Ok(())
+            }
             "reopen-tab" => browser::reopen_closed_tab(&app, None),
             "clear-today" => browser::clear_today(&app),
             "check-updates" => {
@@ -354,6 +389,11 @@ pub async fn tab_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
             menu.append(&PredefinedMenuItem::separator(&app)?)?;
             menu.append(&item(&app, format!("ctx-duplicate:{id}"), "Duplicate Tab")?)?;
             menu.append(&item(&app, format!("ctx-copy-link:{id}"), "Copy Link")?)?;
+            menu.append(&PredefinedMenuItem::separator(&app)?)?;
+        }
+        // Favorites are tiles: there's no title to edit.
+        if info.zone != Zone::Favorite {
+            menu.append(&item(&app, format!("ctx-rename-tab:{id}"), "Rename Tab…")?)?;
             menu.append(&PredefinedMenuItem::separator(&app)?)?;
         }
         if info.can_split {
@@ -505,6 +545,7 @@ fn run_context_action(app: &AppHandle, id: &str) -> tauri::Result<()> {
         "ctx-close" => browser::close_tab_by_id(app, target)?,
         // Spaces
         "ctx-rename-space" => browser::request_rename(app, "space", target)?,
+        "ctx-rename-tab" => browser::request_rename(app, "tab", target)?,
         "ctx-space-icon" => browser::request_icon_picker(app, target)?,
         "ctx-space-color" => browser::set_space_color(app, target, arg.unwrap_or_default()),
         "ctx-space-profile" => {

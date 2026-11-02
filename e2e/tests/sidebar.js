@@ -46,4 +46,23 @@ await t.until(() => rows().length === 1 && S().tabs.filter((x) => x.zone === "to
 await t.assert(document.querySelectorAll(".favorites .fav").length === 1, "favorite survives clear");
 await t.invoke("close_tab", { id: S().tabs.find((x) => x.kind === "terminal").id });
 await t.until(() => !document.querySelector(".divider .clear"), "clear hides with no Today web tabs");
+
+// A short window: the tab list scrolls instead of running under the spaces
+for (let i = 0; i < 12; i++) await t.invoke("new_tab", { url: `${t.F}/spa/n${i}` });
+await t.until(() => S().tabs.filter((x) => x.zone === "today").length >= 12, "a dozen tabs");
+await t.resize(900, 420);
+await t.sleep(400);
+const scroller = document.querySelector(".space-scroll");
+const footer = document.querySelector("footer.spaces").getBoundingClientRect();
+await t.assert(scroller.scrollHeight > scroller.clientHeight, "the list overflows its area");
+await t.assert(scroller.getBoundingClientRect().bottom <= footer.top + 1, "and stops above the spaces");
+const newTab = [...document.querySelectorAll(".row.action")].find((el) => el.textContent.includes("New Tab")).getBoundingClientRect();
+await t.assert(newTab.bottom <= footer.top || newTab.top >= scroller.getBoundingClientRect().bottom, "New Tab never sits under the spaces");
+scroller.scrollTop = scroller.scrollHeight;
+await t.sleep(100);
+const last = [...document.querySelectorAll(".tabs .tab")].at(-1).getBoundingClientRect();
+await t.assert(last.bottom <= footer.top + 1, "scrolling reaches the last tab");
+await t.shot("sidebar-short");
+await t.assert(!document.querySelector("footer.spaces .update"), "the update button isn't in the space switcher");
+await t.assert(document.querySelector(".update-row")?.nextElementSibling?.matches("footer.spaces"), "its row sits right above it");
 await t.quit();

@@ -17,6 +17,8 @@ function tab(title: string, url: string, extra: Partial<Tab> = {}): Tab {
     loading: false,
     canGoBack: false,
     canGoForward: false,
+    name: null,
+    panes: null,
     ...extra,
   };
 }
@@ -205,7 +207,7 @@ describe("> runs in a terminal", () => {
 
 let nextClosed = 1;
 function closedTab(title: string, url: string, extra: Partial<ClosedTab> = {}): ClosedTab {
-  return { id: nextClosed++, kind: "web", url, title, space: 1, ...extra };
+  return { id: nextClosed++, kind: "web", url, title, name: null, space: 1, ...extra };
 }
 
 describe("recently closed", () => {
@@ -263,5 +265,23 @@ describe("split view commands", () => {
     expect(has({})).not.toContain("Close Split View");
     expect(has({ splits: [{ left: a.id, right: b.id, ratio: 0.5 }] })).toContain("Close Split View");
     expect(has({})).toContain("Split View with New Terminal");
+  });
+
+  test("renamed tabs are listed and found by their name", () => {
+    const mail = tab("Inbox (3) - Gmail", "https://mail.google.com", { name: "Work mail" });
+    const other = tab("Other", "https://other.com");
+    const ctx0 = ctx({ tabs: [mail, other], activeId: other.id });
+    const found = buildItems("work", ctx0).find((i) => i.kind === "tab");
+    expect(found?.label).toBe("Work mail");
+    expect(buildItems("gmail", ctx0).find((i) => i.kind === "tab")?.label).toBe("Work mail");
+  });
+
+  test("pane commands only on a terminal", () => {
+    const page = tab("A", "https://a.com");
+    const shell = tab("Terminal", "", { kind: "terminal" });
+    const found = (active: typeof page) => labels(buildItems("split", ctx({ tabs: [page, shell], activeId: active.id })));
+    expect(found(shell)).toContain("Split Right");
+    expect(found(shell)).toContain("Split Down");
+    expect(found(page)).not.toContain("Split Right");
   });
 });
