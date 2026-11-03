@@ -328,8 +328,18 @@ pub fn debug_downloads() -> Vec<(String, bool, String)> {
 
 /// Click at (x, y) in a webview (CSS px from its top left) with real mouse
 /// events, so pages see a user gesture (a scripted `.click()` isn't one).
+/// With `to`, drag there instead (selecting text); `alt` holds Option.
 #[tauri::command]
-pub async fn debug_click(app: AppHandle, label: String, x: f64, y: f64) -> Result<(), String> {
+pub async fn debug_click(
+    app: AppHandle,
+    label: String,
+    x: f64,
+    y: f64,
+    to: Option<(f64, f64)>,
+    alt: Option<bool>,
+) -> Result<(), String> {
+    // NSEventModifierFlagOption
+    let modifiers: usize = if alt == Some(true) { 1 << 19 } else { 0 };
     let webview = app
         .get_webview(&label)
         .ok_or_else(|| format!("no webview {label}"))?;
@@ -342,35 +352,56 @@ pub async fn debug_click(app: AppHandle, label: String, x: f64, y: f64) -> Resul
             let window: *mut AnyObject = objc2::msg_send![view, window];
             let flipped: bool = objc2::msg_send![view, isFlipped];
             let bounds: objc2_foundation::NSRect = objc2::msg_send![view, bounds];
-            let local = NSPoint::new(x, if flipped { y } else { bounds.size.height - y });
-            let point: NSPoint =
-                objc2::msg_send![view, convertPoint: local, toView: std::ptr::null::<AnyObject>()];
+            let in_window = |x: f64, y: f64| -> NSPoint {
+                let local = NSPoint::new(x, if flipped { y } else { bounds.size.height - y });
+                objc2::msg_send![view, convertPoint: local, toView: std::ptr::null::<AnyObject>()]
+            };
             let number: isize = objc2::msg_send![&*window, windowNumber];
             let info: *mut AnyObject = objc2::msg_send![objc2::class!(NSProcessInfo), processInfo];
             let now: f64 = objc2::msg_send![&*info, systemUptime];
-            for kind in [1usize, 2] {
-                // NSEventTypeLeftMouseDown, NSEventTypeLeftMouseUp
+            // NSEventTypeLeftMouseDown, LeftMouseDragged, LeftMouseUp
+            let (end_x, end_y) = to.unwrap_or((x, y));
+            let mut events = vec![(1usize, x, y)];
+            if to.is_some() {
+                events.extend((1..=10).map(|i| {
+                    let f = i as f64 / 10.0;
+                    (6, x + (end_x - x) * f, y + (end_y - y) * f)
+                }));
+            }
+            events.push((2, end_x, end_y));
+            // The window's hit view gets the events (sending them through the
+            // window would be swallowed while the app is in the background),
+            // and becomes first responder on mouse down as AppKit does.
+            let content: *mut AnyObject = objc2::msg_send![&*window, contentView];
+            let superview: *mut AnyObject = objc2::msg_send![&*content, superview];
+            let start = in_window(x, y);
+            let start: NSPoint = objc2::msg_send![&*superview, convertPoint: start, fromView: std::ptr::null::<AnyObject>()];
+            let target: *mut AnyObject = objc2::msg_send![&*content, hitTest: start];
+            let target = if target.is_null() { view as *const _ as *mut AnyObject } else { target };
+            for (i, (kind, x, y)) in events.into_iter().enumerate() {
                 let event: *mut AnyObject = objc2::msg_send![
                     objc2::class!(NSEvent),
                     mouseEventWithType: kind,
-                    location: point,
-                    modifierFlags: 0usize,
-                    timestamp: now,
+                    location: in_window(x, y),
+                    modifierFlags: modifiers,
+                    timestamp: now + i as f64 * 0.01,
                     windowNumber: number,
                     context: std::ptr::null::<AnyObject>(),
                     eventNumber: 0isize,
                     clickCount: 1isize,
                     pressure: 1f32
                 ];
-                let content: *mut AnyObject = objc2::msg_send![&*window, contentView];
-                let superview: *mut AnyObject = objc2::msg_send![&*content, superview];
-                let local: NSPoint = objc2::msg_send![&*superview, convertPoint: point, fromView: std::ptr::null::<AnyObject>()];
-                let target: *mut AnyObject = objc2::msg_send![&*content, hitTest: local];
-                let target = if target.is_null() { view as *const _ as *mut AnyObject } else { target };
-                if kind == 1 {
-                    let _: () = objc2::msg_send![&*target, mouseDown: event];
-                } else {
-                    let _: () = objc2::msg_send![&*target, mouseUp: event];
+                match kind {
+                    1 => {
+                        let _: bool = objc2::msg_send![&*window, makeFirstResponder: target];
+                        let _: () = objc2::msg_send![&*target, mouseDown: event];
+                    }
+                    6 => {
+                        let _: () = objc2::msg_send![&*target, mouseDragged: event];
+                    }
+                    _ => {
+                        let _: () = objc2::msg_send![&*target, mouseUp: event];
+                    }
                 }
             }
             let _ = tx.send(());
@@ -449,6 +480,28 @@ pub async fn debug_answer_dialog(
                 let _: () = objc2::msg_send![button, performClick: std::ptr::null::<AnyObject>()];
             }
             let _ = tx.send(Some(texts));
+        })
+        .map_err(|e| e.to_string())?;
+    rx.recv().map_err(|e| e.to_string())
+}
+
+/// Send an action (`copy:`, `paste:`…) to the main window's first responder
+/// and up its responder chain, as the Edit menu's items do.
+#[tauri::command]
+pub async fn debug_send_action(app: AppHandle, action: String) -> Result<bool, String> {
+    let window = app.get_window(MAIN_WINDOW).ok_or("no window")?;
+    let ns_window = window.ns_window().map_err(|e| e.to_string())? as usize;
+    let (tx, rx) = std::sync::mpsc::channel();
+    window
+        .run_on_main_thread(move || unsafe {
+            use objc2::runtime::{AnyObject, Sel};
+            let ns_window = &*(ns_window as *const AnyObject);
+            let responder: *mut AnyObject = objc2::msg_send![ns_window, firstResponder];
+            let action = Sel::register(&std::ffi::CString::new(action).unwrap());
+            let sent = responder.as_ref().is_some_and(|responder| {
+                objc2::msg_send![responder, tryToPerform: action, with: std::ptr::null::<AnyObject>()]
+            });
+            let _ = tx.send(sent);
         })
         .map_err(|e| e.to_string())?;
     rx.recv().map_err(|e| e.to_string())

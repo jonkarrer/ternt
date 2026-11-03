@@ -357,3 +357,10 @@ pub fn pty_ack(app: AppHandle, id: u32, pane: u32, bytes: usize) {
         session.output.changed.notify_all();
     }
 }
+
+/// A program in a terminal copied `text` (OSC 52: tmux, vim, Claude Code…,
+/// often over ssh).
+#[tauri::command]
+pub fn pty_copy(app: AppHandle, text: String) {
+    crate::native::copy_to_clipboard(&app, text);
+}

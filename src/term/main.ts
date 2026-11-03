@@ -104,6 +104,9 @@ function create(id: number, pane: number): Session {
     lineHeight: 1.2,
     cursorBlink: true,
     macOptionIsMeta: true,
+    // Option-drag selects text even when a program has the mouse (tmux,
+    // vim…), as in Terminal.app.
+    macOptionClickForcesSelection: true,
     scrollback: 10_000,
     theme: theme(),
   });
@@ -112,6 +115,19 @@ function create(id: number, pane: number): Session {
   // ⌘-click (or click) a URL to open it as a browser tab.
   term.loadAddon(new WebLinksAddon((_event, uri) => browser.newTab(uri)));
   term.open(el);
+  // Programs copy by sending OSC 52 (`52;c;<base64>`), often from across ssh.
+  // Reading the clipboard back (`?`) is refused.
+  term.parser.registerOscHandler(52, (data) => {
+    const base64 = data.slice(data.indexOf(";") + 1);
+    if (base64 === "?") return true;
+    try {
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      invoke("pty_copy", { text: new TextDecoder().decode(bytes) });
+    } catch {
+      // Not base64: ignore it.
+    }
+    return true;
+  });
 
   const session: Session = { id, pane, term, fit, el, started: false };
   sessions.set(keyOf(id, pane), session);
@@ -157,6 +173,12 @@ function focus(s: Session) {
   if (document.hasFocus()) s.term.focus();
 }
 window.addEventListener("focus", () => focused?.term.focus());
+
+// ⌘C copies the terminal's selection; with nothing selected, WebKit would
+// copy the page's empty selection and wipe the clipboard.
+document.addEventListener("copy", (event) => {
+  if (!focused?.term.hasSelection()) event.preventDefault();
+});
 
 function setFocused(s: Session) {
   const changed = focused !== s;
@@ -379,4 +401,11 @@ if (import.meta.env.DEV) {
     for (let i = 0; i < buffer.length; i++) lines.push(buffer.getLine(i)?.translateToString(true) ?? "");
     return lines.join("\n").trimEnd();
   };
+  // Where a screen row's text starts (x) and its middle (y), in page px.
+  (window as any).__termRow = (id: number, row: number, pane = 0) => {
+    const s = sessions.get(keyOf(id, pane))!;
+    const r = s.el.querySelector(".xterm-screen")!.getBoundingClientRect();
+    return [r.x + 2, r.y + (r.height / s.term.rows) * (row - 0.5)];
+  };
+  (window as any).__termSelection = (id: number, pane = 0) => sessions.get(keyOf(id, pane))?.term.getSelection();
 }

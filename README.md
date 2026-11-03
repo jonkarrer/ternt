@@ -83,6 +83,10 @@ in the folder of the pane it split from. Click a pane (or ⌘[ / ⌘]) to focus 
 little. Drag the line between panes to resize. ⌘W or `exit` closes a pane; the last one closes the
 tab. The layout is saved with the session (with fresh shells on relaunch).
 
+**Copying from a terminal**: select and ⌘C (with nothing selected, ⌘C leaves the clipboard
+alone). When a program has the mouse (tmux, vim…), ⌥-drag selects. Programs that copy for you
+(tmux, vim, Claude Code, also over ssh) reach the clipboard too (OSC 52); they can't read it.
+
 **Spaces**: hover the space name for **…** (rename, icon, color, profile, delete; also a
 right-click on the name or on a space in the switcher). Every space has an icon, shown next to its
 name, in the switcher and in the command bar: new spaces start with a line symbol in the space's

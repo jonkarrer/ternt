@@ -127,6 +127,7 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_ack,
+            pty::pty_copy,
             history::history_search,
             updater::update_status,
             updater::check_for_updates,
@@ -175,6 +176,8 @@ pub fn run() {
             debug::debug_click,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_answer_dialog,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_send_action,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_open_external,
         ])
