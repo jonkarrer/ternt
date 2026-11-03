@@ -4059,6 +4059,7 @@ dependencies = [
 name = "ternt"
 version = "0.8.1"
 dependencies = [
+ "block2",
  "libc",
  "objc2",
  "objc2-app-kit",

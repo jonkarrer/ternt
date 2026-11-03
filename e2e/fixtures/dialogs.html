@@ -1,0 +1,15 @@
+<!doctype html>
+<title>Fixture Dialogs</title>
+<body style="font: 20px system-ui; padding: 40px">
+  <h1>Dialogs</h1>
+  <!-- Like a site that asks for a password before following a link. -->
+  <p><a id="locked" href="/page2.html">locked link</a></p>
+  <script>
+    const show = (name, value) => (document.title = `${name}: ${JSON.stringify(value)}`);
+    document.getElementById("locked").addEventListener("click", (event) => {
+      event.preventDefault();
+      const password = prompt("Password");
+      if (password !== null) location.href = "/page2.html?password=" + encodeURIComponent(password);
+    });
+  </script>
+</body>

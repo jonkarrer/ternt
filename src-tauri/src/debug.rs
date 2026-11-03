@@ -378,3 +378,78 @@ pub async fn debug_click(app: AppHandle, label: String, x: f64, y: f64) -> Resul
         .map_err(|e| e.to_string())?;
     rx.recv().map_err(|e| e.to_string())
 }
+
+/// Answer the JavaScript dialog sheet on the main window: type `text` into
+/// a prompt's field (if given), then press OK or Cancel. Returns the
+/// dialog's texts (title, message), or `None` if no dialog is showing.
+#[tauri::command]
+pub async fn debug_answer_dialog(
+    app: AppHandle,
+    text: Option<String>,
+    ok: bool,
+) -> Result<Option<Vec<String>>, String> {
+    let window = app.get_window(MAIN_WINDOW).ok_or("no window")?;
+    let ns_window = window.ns_window().map_err(|e| e.to_string())? as usize;
+    let (tx, rx) = std::sync::mpsc::channel();
+    window
+        .run_on_main_thread(move || unsafe {
+            use objc2::runtime::AnyObject;
+            use objc2_foundation::NSString;
+            let ns_window = &*(ns_window as *const AnyObject);
+            let sheet: *mut AnyObject = objc2::msg_send![ns_window, attachedSheet];
+            let Some(sheet) = sheet.as_ref() else {
+                let _ = tx.send(None);
+                return;
+            };
+            let mut views = vec![];
+            let content: *mut AnyObject = objc2::msg_send![sheet, contentView];
+            fn walk(view: &AnyObject, out: &mut Vec<*mut AnyObject>) {
+                unsafe {
+                    let subviews: *mut AnyObject = objc2::msg_send![view, subviews];
+                    let count: usize = objc2::msg_send![&*subviews, count];
+                    for i in 0..count {
+                        let sub: *mut AnyObject = objc2::msg_send![&*subviews, objectAtIndex: i];
+                        out.push(sub);
+                        walk(&*sub, out);
+                    }
+                }
+            }
+            walk(&*content, &mut views);
+            let mut texts = vec![];
+            let wanted = if ok { "OK" } else { "Cancel" };
+            let mut button = None;
+            for &view in &views {
+                let view = &*view;
+                let is_button: bool =
+                    objc2::msg_send![view, isKindOfClass: objc2::class!(NSButton)];
+                let is_field: bool =
+                    objc2::msg_send![view, isKindOfClass: objc2::class!(NSTextField)];
+                if is_button {
+                    let title: *mut NSString = objc2::msg_send![view, title];
+                    if (*title).to_string() == wanted {
+                        button = Some(view);
+                    }
+                } else if is_field {
+                    let editable: bool = objc2::msg_send![view, isEditable];
+                    if editable {
+                        if let Some(text) = &text {
+                            let _: () =
+                                objc2::msg_send![view, setStringValue: &*NSString::from_str(text)];
+                        }
+                    } else {
+                        let value: *mut NSString = objc2::msg_send![view, stringValue];
+                        let value = (*value).to_string();
+                        if !value.is_empty() {
+                            texts.push(value);
+                        }
+                    }
+                }
+            }
+            if let Some(button) = button {
+                let _: () = objc2::msg_send![button, performClick: std::ptr::null::<AnyObject>()];
+            }
+            let _ = tx.send(Some(texts));
+        })
+        .map_err(|e| e.to_string())?;
+    rx.recv().map_err(|e| e.to_string())
+}

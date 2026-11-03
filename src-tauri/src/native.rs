@@ -467,16 +467,203 @@ pub fn download_finished(path: &std::path::Path) {
     }
 }
 
-/// Remove the scripts Tauri adds to every webview (its IPC bridge) from a
-/// web page's view, before the page's document is created. Web pages never
-/// talk to Ternt, and the bridge defines a locked `window.ipc`: sites that
-/// declare their own global `ipc` (Google Docs, Sheets, Forms…) fail to load.
-/// Run it right after creating the view: its first page loads afterwards.
-pub fn remove_injected_scripts(webview: tauri::webview::PlatformWebview) {
+/// Set up a web page's view (tabs, popups, Little Ternt) right after
+/// creating it, before its first page loads.
+///
+/// - Remove the scripts Tauri adds to every webview (its IPC bridge). Web
+///   pages never talk to Ternt, and the bridge defines a locked `window.ipc`:
+///   sites that declare their own global `ipc` (Google Docs, Sheets, Forms…)
+///   fail to load.
+/// - Show `alert()`, `confirm()` and `prompt()`. wry leaves them out, so
+///   WebKit answered at once with nothing: a site asking for a password with
+///   `prompt()` got `null` and its link did nothing.
+pub fn prepare_page(webview: tauri::webview::PlatformWebview) {
     unsafe {
         let view = &*(webview.inner() as *const AnyObject);
         let config: *mut AnyObject = msg_send![view, configuration];
         let controller: *mut AnyObject = msg_send![&*config, userContentController];
         let _: () = msg_send![&*controller, removeAllUserScripts];
+
+        let delegate: *mut AnyObject = msg_send![view, UIDelegate];
+        if let Some(delegate) = delegate.as_ref() {
+            add_js_dialogs(delegate.class());
+            // WebKit notes which methods a delegate has when it's set:
+            // set it again so it sees the dialogs.
+            let _: () = msg_send![view, setUIDelegate: delegate];
+        }
+    }
+}
+
+// --- JavaScript dialogs ------------------------------------------------------
+//
+// Added to wry's WKUIDelegate class at runtime (Tauri doesn't let us supply
+// our own delegate). Each shows a sheet on the page's window, like Safari.
+
+type JsAlert = unsafe extern "C-unwind" fn(
+    &AnyObject,
+    objc2::runtime::Sel,
+    &AnyObject,
+    &NSString,
+    &AnyObject,
+    &block2::Block<dyn Fn()>,
+);
+type JsConfirm = unsafe extern "C-unwind" fn(
+    &AnyObject,
+    objc2::runtime::Sel,
+    &AnyObject,
+    &NSString,
+    &AnyObject,
+    &block2::Block<dyn Fn(objc2::runtime::Bool)>,
+);
+type JsPrompt = unsafe extern "C-unwind" fn(
+    &AnyObject,
+    objc2::runtime::Sel,
+    &AnyObject,
+    &NSString,
+    *mut NSString,
+    &AnyObject,
+    &block2::Block<dyn Fn(*mut NSString)>,
+);
+
+/// Add the dialog methods to wry's delegate class, once.
+unsafe fn add_js_dialogs(class: &objc2::runtime::AnyClass) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        let class = class as *const _ as *mut objc2::runtime::AnyClass;
+        let methods: [(&str, objc2::runtime::Imp, &std::ffi::CStr); 3] = [
+            (
+                "webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:",
+                std::mem::transmute::<JsAlert, objc2::runtime::Imp>(js_alert),
+                c"v@:@@@@?",
+            ),
+            (
+                "webView:runJavaScriptConfirmPanelWithMessage:initiatedByFrame:completionHandler:",
+                std::mem::transmute::<JsConfirm, objc2::runtime::Imp>(js_confirm),
+                c"v@:@@@@?",
+            ),
+            (
+                "webView:runJavaScriptTextInputPanelWithPrompt:defaultText:initiatedByFrame:completionHandler:",
+                std::mem::transmute::<JsPrompt, objc2::runtime::Imp>(js_prompt),
+                c"v@:@@@@@?",
+            ),
+        ];
+        for (name, imp, types) in methods {
+            objc2::ffi::class_addMethod(class, objc2::runtime::Sel::register(&std::ffi::CString::new(name).unwrap()), imp, types.as_ptr());
+        }
+    });
+}
+
+/// An alert for a page: titled with the site's host, `message` below,
+/// OK (and Cancel when asked).
+unsafe fn js_dialog_alert(
+    frame: &AnyObject,
+    message: &NSString,
+    cancel: bool,
+) -> Retained<AnyObject> {
+    unsafe {
+        let alert: Retained<AnyObject> = msg_send![objc2::class!(NSAlert), new];
+        let request: *mut AnyObject = msg_send![frame, request];
+        let url: *mut NSURL = msg_send![&*request, URL];
+        let host = url
+            .as_ref()
+            .and_then(|url| url.host())
+            .map(|host| host.to_string())
+            .unwrap_or_default();
+        let title = if host.is_empty() {
+            "This page says".to_string()
+        } else {
+            format!("{host} says")
+        };
+        let _: () = msg_send![&*alert, setMessageText: &*NSString::from_str(&title)];
+        let _: () = msg_send![&*alert, setInformativeText: message];
+        let _: *mut AnyObject = msg_send![&*alert, addButtonWithTitle: &*NSString::from_str("OK")];
+        if cancel {
+            let _: *mut AnyObject =
+                msg_send![&*alert, addButtonWithTitle: &*NSString::from_str("Cancel")];
+        }
+        alert
+    }
+}
+
+/// Show `alert` as a sheet on `web_view`'s window (modal if it has none);
+/// `done` gets whether OK was chosen.
+unsafe fn js_dialog_show(web_view: &AnyObject, alert: &AnyObject, done: impl Fn(bool) + 'static) {
+    const FIRST_BUTTON: isize = 1000; // NSAlertFirstButtonReturn
+    unsafe {
+        let window: *mut AnyObject = msg_send![web_view, window];
+        match window.as_ref() {
+            Some(window) => {
+                let handler =
+                    block2::RcBlock::new(move |response: isize| done(response == FIRST_BUTTON));
+                let _: () = msg_send![alert, beginSheetModalForWindow: window, completionHandler: &*handler];
+            }
+            None => {
+                let response: isize = msg_send![alert, runModal];
+                done(response == FIRST_BUTTON);
+            }
+        }
+    }
+}
+
+unsafe extern "C-unwind" fn js_alert(
+    _this: &AnyObject,
+    _cmd: objc2::runtime::Sel,
+    web_view: &AnyObject,
+    message: &NSString,
+    frame: &AnyObject,
+    completion: &block2::Block<dyn Fn()>,
+) {
+    unsafe {
+        let alert = js_dialog_alert(frame, message, false);
+        let completion = completion.copy();
+        js_dialog_show(web_view, &alert, move |_| completion.call(()));
+    }
+}
+
+unsafe extern "C-unwind" fn js_confirm(
+    _this: &AnyObject,
+    _cmd: objc2::runtime::Sel,
+    web_view: &AnyObject,
+    message: &NSString,
+    frame: &AnyObject,
+    completion: &block2::Block<dyn Fn(objc2::runtime::Bool)>,
+) {
+    unsafe {
+        let alert = js_dialog_alert(frame, message, true);
+        let completion = completion.copy();
+        js_dialog_show(web_view, &alert, move |ok| {
+            completion.call((objc2::runtime::Bool::new(ok),))
+        });
+    }
+}
+
+unsafe extern "C-unwind" fn js_prompt(
+    _this: &AnyObject,
+    _cmd: objc2::runtime::Sel,
+    web_view: &AnyObject,
+    prompt: &NSString,
+    default_text: *mut NSString,
+    frame: &AnyObject,
+    completion: &block2::Block<dyn Fn(*mut NSString)>,
+) {
+    unsafe {
+        let alert = js_dialog_alert(frame, prompt, true);
+        let field: objc2::rc::Allocated<AnyObject> = msg_send![objc2::class!(NSTextField), alloc];
+        let field: Retained<AnyObject> = msg_send![field, initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(260.0, 24.0))];
+        if let Some(text) = default_text.as_ref() {
+            let _: () = msg_send![&*field, setStringValue: text];
+        }
+        let _: () = msg_send![&*alert, setAccessoryView: &*field];
+        let alert_window: *mut AnyObject = msg_send![&*alert, window];
+        let _: () = msg_send![&*alert_window, setInitialFirstResponder: &*field];
+        let completion = completion.copy();
+        js_dialog_show(web_view, &alert, move |ok| {
+            if ok {
+                let text: *mut NSString = msg_send![&*field, stringValue];
+                completion.call((text,));
+            } else {
+                completion.call((ptr::null_mut(),));
+            }
+        });
     }
 }

@@ -174,6 +174,8 @@ pub fn run() {
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_click,
             #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_answer_dialog,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_open_external,
         ])
         .build(tauri::generate_context!())
