@@ -186,7 +186,7 @@ export const browser = {
     return prefs;
   },
   /** A site's app icon as a data URL (src-tauri/src/icons.rs). */
-  siteIcon: (url: string) => invoke<string | null>("site_icon", { url }),
+  siteIcon: (url: string, tab?: number) => invoke<string | null>("site_icon", { url, tab: tab ?? null }),
   defaultBrowser: () => invoke<{ isDefault: boolean; canAsk: boolean }>("default_browser"),
   /** macOS asks the user to confirm. */
   makeDefaultBrowser: () => invoke("make_default_browser"),

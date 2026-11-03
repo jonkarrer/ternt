@@ -1,6 +1,11 @@
 //! Site icons for favorites: a site's app icon (`apple-touch-icon`, else the
 //! largest `<link rel="icon">`), fetched once per origin and kept for the
 //! run as a data URL. Without one the tile falls back to `/favicon.ico`.
+//!
+//! Icon links come from the favorite's live page when it's loaded: fetched
+//! here without the user's cookies, many sites show a sign-in page (Gmail),
+//! refuse (TradingView) or add their icons with scripts (single-page apps).
+//! Otherwise from the page's HTML, then the site's home page.
 
 use std::{
     collections::HashMap,
@@ -20,8 +25,10 @@ const MAX_HTML: usize = 512 * 1024;
 /// Largest icon accepted.
 const MAX_ICON: usize = 512 * 1024;
 
+/// `tab` is the favorite showing `url`, whose page is asked for its icon
+/// links if it's loaded.
 #[tauri::command]
-pub async fn site_icon(app: AppHandle, url: String) -> Option<String> {
+pub async fn site_icon(app: AppHandle, url: String, tab: Option<u32>) -> Option<String> {
     let url = Url::parse(&url)
         .ok()
         .filter(|u| matches!(u.scheme(), "http" | "https"))?;
@@ -29,12 +36,20 @@ pub async fn site_icon(app: AppHandle, url: String) -> Option<String> {
     if let Some(icon) = app.state::<Icons>().0.lock().unwrap().get(&origin) {
         return icon.clone();
     }
-    let fetched = fetch(&url).await?;
-    app.state::<Icons>()
-        .0
-        .lock()
-        .unwrap()
-        .insert(origin, fetched.clone());
+    let page = match tab {
+        Some(id) => crate::browser::page_icon_links(&app, id).await,
+        None => None,
+    };
+    let fetched = fetch(&url, page.as_deref()).await?;
+    // "No icon" is only final once the live page was asked: an unloaded
+    // favorite is asked again when its page loads.
+    if fetched.is_some() || page.is_some() {
+        app.state::<Icons>()
+            .0
+            .lock()
+            .unwrap()
+            .insert(origin, fetched.clone());
+    }
     fetched
 }
 
@@ -57,25 +72,43 @@ fn client() -> Option<&'static reqwest::Client> {
 }
 
 /// The site's icon, `Some(None)` when it has none, `None` when it couldn't
-/// be reached.
-async fn fetch(url: &Url) -> Option<Option<String>> {
+/// be reached. `page` holds the live page's icon links, if known.
+async fn fetch(url: &Url, page: Option<&str>) -> Option<Option<String>> {
     let client = client()?;
-    // The conventional location first: right host, no page to parse.
+    if let Some(page) = page {
+        for href in icon_links(page) {
+            if let Ok(href) = Url::parse(&href)
+                && let Some(icon) = image(client, href).await
+            {
+                return Some(Some(icon));
+            }
+        }
+    }
+    // The conventional location: right host, no page to parse.
     if let Ok(touch) = url.join("/apple-touch-icon.png")
         && let Some(icon) = image(client, touch).await
     {
         return Some(Some(icon));
     }
-    let (base, _, html) = get(client, url.clone(), MAX_HTML).await?;
-    let html = String::from_utf8_lossy(&html);
-    for href in icon_links(&html) {
-        if let Ok(href) = base.join(&href)
-            && let Some(icon) = image(client, href).await
-        {
-            return Some(Some(icon));
+    // The page's HTML, then the home page's (a deep link may need signing
+    // in, or be refused).
+    let mut reached = page.is_some();
+    let home = url.join("/").ok().filter(|home| home != url);
+    for url in std::iter::once(url.clone()).chain(home) {
+        let Some((base, _, html)) = get(client, url, MAX_HTML).await else {
+            continue;
+        };
+        reached = true;
+        let html = String::from_utf8_lossy(&html);
+        for href in icon_links(&html) {
+            if let Ok(href) = base.join(&href)
+                && let Some(icon) = image(client, href).await
+            {
+                return Some(Some(icon));
+            }
         }
     }
-    Some(None)
+    reached.then_some(None)
 }
 
 /// GET `url`, reading at most `limit` bytes: the final URL (after

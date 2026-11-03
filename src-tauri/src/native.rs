@@ -667,3 +667,43 @@ unsafe extern "C-unwind" fn js_prompt(
         });
     }
 }
+
+/// A page's icon links as `<link>` tags with absolute hrefs, read from the
+/// live page (signed in, with links its scripts added). Runs in an isolated
+/// script world, so the page's own scripts can't interfere.
+pub async fn page_icon_links(webview: &Webview) -> Option<String> {
+    const JS: &str = r#"[...document.querySelectorAll("link[rel][href]")]
+        .map((l) => `<link rel="${l.rel}" href="${l.href.replaceAll('"', "%22")}" sizes="${l.sizes?.value ?? ""}">`)
+        .join("")"#;
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
+    let tx = std::sync::Mutex::new(Some(tx));
+    webview
+        .with_webview(move |platform| unsafe {
+            let view = &*(platform.inner() as *const AnyObject);
+            let world: *mut AnyObject =
+                msg_send![objc2::class!(WKContentWorld), defaultClientWorld];
+            let done =
+                block2::RcBlock::new(move |result: *mut AnyObject, _error: *mut AnyObject| {
+                    let text = result
+                        .as_ref()
+                        .filter(|r| msg_send![*r, isKindOfClass: objc2::class!(NSString)])
+                        .map(|r| (*(r as *const AnyObject as *const NSString)).to_string());
+                    if let Some(tx) = tx.lock().unwrap().take() {
+                        let _ = tx.send(text);
+                    }
+                });
+            let js = NSString::from_str(JS);
+            let _: () = msg_send![
+                view,
+                evaluateJavaScript: &*js,
+                inFrame: ptr::null::<AnyObject>(),
+                inContentWorld: world,
+                completionHandler: &*done
+            ];
+        })
+        .ok()?;
+    tokio::time::timeout(std::time::Duration::from_secs(2), rx)
+        .await
+        .ok()?
+        .ok()?
+}

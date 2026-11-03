@@ -1,0 +1,12 @@
+<!doctype html>
+<title>Fixture Script Icon</title>
+<body style="font: 20px system-ui; padding: 40px">
+  <h1>Script icon</h1>
+  <!-- Like a single-page app: the icon link only exists once scripts run. -->
+  <script>
+    const link = document.createElement("link");
+    link.rel = "apple-touch-icon";
+    link.href = "/app-icon.svg";
+    document.head.append(link);
+  </script>
+</body>

@@ -1915,6 +1915,21 @@ pub async fn remove_folder(app: AppHandle, id: u32) {
     delete_folder(&app, id);
 }
 
+/// Icon links from a tab's live page, if it's loaded (see
+/// `native::page_icon_links`).
+pub async fn page_icon_links(app: &AppHandle, id: u32) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let webview = app.get_webview(&tab_label(id))?;
+        crate::native::page_icon_links(&webview).await
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, id);
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ProfileChoice;

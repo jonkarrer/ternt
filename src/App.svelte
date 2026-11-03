@@ -605,7 +605,7 @@
               }}
             >
               {#if tab.kind === "web"}
-                <SiteIcon url={tab.url} loading={tab.loading} />
+                <SiteIcon url={tab.url} tab={tab.id} loading={tab.loading} />
               {:else}
                 <TabIcon {tab} />
               {/if}

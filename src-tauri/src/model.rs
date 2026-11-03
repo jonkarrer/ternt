@@ -419,10 +419,8 @@ impl State {
             out.extend(ids(Zone::Pinned, Some(folder.id)));
         }
         out.extend(ids(Zone::Pinned, None));
-        let (terminals, pages): (Vec<u32>, Vec<u32>) =
-            ids(Zone::Today, None).partition(|&id| {
-                self.tab(id).is_some_and(|t| t.kind == TabKind::Terminal)
-            });
+        let (terminals, pages): (Vec<u32>, Vec<u32>) = ids(Zone::Today, None)
+            .partition(|&id| self.tab(id).is_some_and(|t| t.kind == TabKind::Terminal));
         out.extend(pages);
         out.extend(terminals);
         out

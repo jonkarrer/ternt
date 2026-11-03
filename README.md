@@ -58,8 +58,9 @@ them run under `doppler run --`.
 
 Arc-style, top to bottom:
 
-- **Favorites**: tiles showing each site's app icon (its `apple-touch-icon`, else its largest icon),
-  shared by every space with the same profile.
+- **Favorites**: tiles showing each site's app icon (its `apple-touch-icon`, else its largest icon,
+  read from the open page so signed-in sites and single-page apps get theirs), shared by every
+  space with the same profile.
 - **Pinned**: per space, optionally grouped in folders. An open folder is a tinted block with its
   tabs indented under it; a closed one shows how many tabs it holds. Drag tabs to reorder them
   (within a folder, or in and out of one), and drag a folder by its header to reorder folders.
