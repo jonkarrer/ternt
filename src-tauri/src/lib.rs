@@ -171,6 +171,7 @@ pub fn run() {
             debug::debug_view,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_focus,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_click,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_open_external,
