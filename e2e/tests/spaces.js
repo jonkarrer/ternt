@@ -41,10 +41,20 @@ await t.shot("spaces-home");
 await t.invoke("menu_action", { id: "next-space" });
 await t.until(() => S().activeSpace === work && tab()?.title === "SPA", "next space restores Work's last tab");
 
-// Two-finger swipe over the sidebar switches spaces (wraps to Home)
+// Two-finger swipe over the sidebar switches spaces, stopping at the ends
 const sidebar = document.querySelector(".sidebar");
-for (let i = 0; i < 4; i++) sidebar.dispatchEvent(new WheelEvent("wheel", { deltaX: 45, bubbles: true }));
+const swipe = (deltaX) => {
+  for (let i = 0; i < 4; i++) sidebar.dispatchEvent(new WheelEvent("wheel", { deltaX, bubbles: true }));
+};
+swipe(45);
+await t.sleep(400);
+await t.assert(S().activeSpace === work, "swiping past the last space stays there");
+swipe(-45);
 await t.until(() => S().activeSpace === home, "horizontal swipe switches space");
+await t.sleep(400);
+swipe(-45);
+await t.sleep(400);
+await t.assert(S().activeSpace === home, "swiping past the first space stays there");
 
 // A mouse: each sideways wheel tick switches once (quick repeats count once),
 // and Shift turns the plain wheel sideways

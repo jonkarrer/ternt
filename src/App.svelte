@@ -435,7 +435,8 @@
   // --- Spaces --------------------------------------------------------------
 
   // Over the sidebar, a two-finger horizontal swipe or a mouse's sideways
-  // scroll (tilt wheel, or Shift + wheel) switches spaces.
+  // scroll (tilt wheel, or Shift + wheel) switches spaces. It stops at the
+  // first and last space rather than wrapping around.
   let swipe = 0;
   let swipeLocked = false;
   let swipeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -453,7 +454,11 @@
     const sideways = event.shiftKey && event.deltaX === 0;
     const dx = sideways ? event.deltaY : event.deltaX;
     if (dx === 0 || (!sideways && Math.abs(dx) <= Math.abs(event.deltaY))) return;
-    const step = () => browser.menuAction(dx > 0 ? "next-space" : "previous-space");
+    const step = () => {
+      const at = browserState.spaces.findIndex((s) => s.id === activeSpace);
+      const next = browserState.spaces[at + (dx > 0 ? 1 : -1)];
+      if (next) browser.activateSpace(next.id);
+    };
 
     if (isNotch(event)) {
       // One space per tick, but not a run of spaces from one quick flick.
