@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { fly } from "svelte/transition";
+  import { cubicOut } from "svelte/easing";
   import IconPicker from "./lib/IconPicker.svelte";
   import SiteIcon from "./lib/SiteIcon.svelte";
   import SpaceIcon from "./lib/SpaceIcon.svelte";
@@ -442,11 +443,16 @@
 
   // Over the sidebar, a two-finger horizontal swipe or a mouse's sideways
   // scroll (tilt wheel, or Shift + wheel) switches spaces. It stops at the
-  // first and last space rather than wrapping around.
+  // first and last space rather than wrapping around. On a trackpad the
+  // space follows the fingers until the swipe is far enough to switch, and
+  // springs back if it isn't (or there's no space that way).
   let swipe = 0;
   let swipeLocked = false;
   let swipeTimer: ReturnType<typeof setTimeout> | undefined;
   let lastNotch = 0;
+  /** How far the space body is pulled sideways, in px. */
+  let pull = $state(0);
+  let swiping = $state(false);
 
   /** A mouse wheel's tick rather than a trackpad's stream: line-based, or
    *  whole ticks of 120 (WebKit's legacy wheelDeltaX). */
@@ -455,37 +461,48 @@
     return event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL || (ticks !== 0 && ticks % 120 === 0);
   }
 
+  /** The space a scroll of `dx` leads to. Content follows the fingers: a
+   *  swipe to the right (negative delta) brings in the space on the left. */
+  function spaceToward(dx: number) {
+    const at = browserState.spaces.findIndex((s) => s.id === activeSpace);
+    return browserState.spaces[at + (dx > 0 ? -1 : 1)];
+  }
+
   function onwheel(event: WheelEvent) {
     // Shift turns a plain wheel sideways (macOS usually does this already).
     const sideways = event.shiftKey && event.deltaX === 0;
     const dx = sideways ? event.deltaY : event.deltaX;
     if (dx === 0 || (!sideways && Math.abs(dx) <= Math.abs(event.deltaY))) return;
-    const step = () => {
-      const at = browserState.spaces.findIndex((s) => s.id === activeSpace);
-      // Content follows the fingers: a swipe to the right brings in the
-      // space on the left (scroll delta is negative), and vice versa.
-      const next = browserState.spaces[at + (dx > 0 ? -1 : 1)];
-      if (next) browser.activateSpace(next.id);
-    };
 
     if (isNotch(event)) {
       // One space per tick, but not a run of spaces from one quick flick.
-      if (event.timeStamp - lastNotch > NOTCH_INTERVAL) step();
+      const next = spaceToward(dx);
+      if (next && event.timeStamp - lastNotch > NOTCH_INTERVAL) browser.activateSpace(next.id);
       lastNotch = event.timeStamp;
       return;
     }
     clearTimeout(swipeTimer);
-    // One switch per gesture: unlock once the wheel events stop.
+    // One switch per gesture: unlock (and spring back) once the wheel
+    // events, momentum included, stop.
     swipeTimer = setTimeout(() => {
       swipe = 0;
       swipeLocked = false;
-    }, 200);
+      swiping = false;
+      pull = 0;
+    }, 120);
     if (swipeLocked) return;
+    swiping = true;
     swipe += dx;
-    if (Math.abs(swipe) > SWIPE_DISTANCE) {
-      step();
+    const next = spaceToward(swipe);
+    if (next && Math.abs(swipe) > SWIPE_DISTANCE) {
       swipeLocked = true;
+      swiping = false;
+      pull = 0;
+      browser.activateSpace(next.id);
+      return;
     }
+    // Follow the fingers, with a stiff rubber band where there's no space.
+    pull = -swipe * (next ? 0.5 : 0.15);
   }
 
   function focusSelect(node: HTMLInputElement) {
@@ -633,7 +650,13 @@
       {/if}
 
       {#key activeSpace}
-        <div class="space-body" in:fly={{ x: 24 * slide, duration: 160 }}>
+        <div
+          class="space-body"
+          class:settling={!swiping}
+          style:translate={pull ? `${pull}px` : null}
+          style:opacity={pull ? 1 - Math.abs(pull) / 200 : null}
+          in:fly={{ x: 48 * slide, duration: 180, easing: cubicOut }}
+        >
           <div class="space-header">
             {#if space}<SpaceIcon icon={space.icon} name={space.name} color={space.color} />{/if}
             {#if renaming?.kind === "space" && renaming.id === space?.id}
@@ -1096,10 +1119,16 @@
 
   .space-body {
     flex: 1;
+    will-change: translate;
     min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+  .space-body.settling {
+    transition:
+      translate 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      opacity 180ms ease;
   }
   .space-header {
     display: flex;

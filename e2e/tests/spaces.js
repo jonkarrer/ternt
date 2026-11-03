@@ -59,6 +59,15 @@ swipe(45);
 await t.sleep(400);
 await t.assert(S().activeSpace === home, "swiping past the first space stays there");
 
+// A short swipe pulls the space along with the fingers, then springs back
+const body = () => document.querySelector(".sidebar .space-body");
+sidebar.dispatchEvent(new WheelEvent("wheel", { deltaX: -30, bubbles: true }));
+await Promise.resolve();
+const pulled = body().style.translate;
+await t.assert(pulled === "15px", `a short swipe pulls the space (${pulled})`);
+await t.until(() => !body().style.translate, "and it springs back");
+await t.assert(S().activeSpace === home, "without switching");
+
 // A mouse: each sideways wheel tick switches once (quick repeats count once),
 // and Shift turns the plain wheel sideways
 await t.sleep(300);
