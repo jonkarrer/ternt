@@ -670,11 +670,12 @@ impl State {
             })
     }
 
-    /// The space `delta` positions from the active one, wrapping.
+    /// The space `delta` positions from the active one; None past the first
+    /// or last space (no wrapping).
     pub fn space_at_offset(&self, delta: isize) -> Option<u32> {
-        let index = self.spaces.iter().position(|s| s.id == self.active_space)? as isize;
-        let len = self.spaces.len() as isize;
-        Some(self.spaces[(index + delta).rem_euclid(len) as usize].id)
+        let index = self.spaces.iter().position(|s| s.id == self.active_space)?;
+        let at = index.checked_add_signed(delta)?;
+        self.spaces.get(at).map(|s| s.id)
     }
 
     /// Delete a space and its tabs and folders (never the last space). Its
@@ -1448,14 +1449,15 @@ mod tests {
     }
 
     #[test]
-    fn spaces_cycle_and_ignore_unknown_ids() {
+    fn spaces_step_without_wrapping_and_ignore_unknown_ids() {
         let mut s = State::default();
         let two = s.add_space(None);
         let three = s.add_space(None);
         assert_eq!(s.space_at_offset(1), Some(two));
-        assert_eq!(s.space_at_offset(-1), Some(three), "wraps backwards");
+        assert_eq!(s.space_at_offset(-1), None, "stops at the first space");
         s.active_space = three;
-        assert_eq!(s.space_at_offset(1), Some(1), "wraps forwards");
+        assert_eq!(s.space_at_offset(-1), Some(two));
+        assert_eq!(s.space_at_offset(1), None, "stops at the last space");
         assert_eq!(s.switch_space(999), None);
         assert_eq!(s.active_space, three, "unknown space: no change");
     }

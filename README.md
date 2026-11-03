@@ -49,7 +49,7 @@ them run under `doppler run --`.
 | ⌘D / ⇧⌘D | Split the terminal: a new pane to the right / below |
 | ⌘S | Toggle sidebar (hidden, it slides out over the page when the pointer touches the window's left edge) |
 | ⌘F | Explore tabs: j/k or ↑/↓ move, h/l or ←/→ switch space, Space peeks, Enter opens, Esc goes back |
-| ⌃1–⌃9, ⌘⌥← / ⌘⌥→ | Switch spaces (or swipe two fingers across the sidebar; with a mouse, scroll sideways or Shift-scroll over it) |
+| ⌃1–⌃9, ⌘⌥← / ⌘⌥→ | Switch spaces, stopping at the first and last (or swipe two fingers across the sidebar; with a mouse, scroll sideways or Shift-scroll over it) |
 | ⌥⌘\ | Split view: a new terminal beside the current page |
 | ⌘, | Settings (⌘1–⌘6 switch its pages, ⌘W closes it) |
 | ⌘H | Shortcuts and how-tos, searchable (also in the Help menu). Hide Ternt is in the app menu without a shortcut |

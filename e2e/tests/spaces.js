@@ -40,6 +40,9 @@ await t.shot("spaces-home");
 // Next space returns to Work's last tab (the favorite)
 await t.invoke("menu_action", { id: "next-space" });
 await t.until(() => S().activeSpace === work && tab()?.title === "SPA", "next space restores Work's last tab");
+await t.invoke("menu_action", { id: "next-space" });
+await t.sleep(300);
+await t.assert(S().activeSpace === work, "next space stops at the last space");
 
 // Two-finger swipe over the sidebar switches spaces, stopping at the ends
 const sidebar = document.querySelector(".sidebar");
