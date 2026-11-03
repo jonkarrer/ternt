@@ -405,7 +405,8 @@ impl State {
     }
 
     /// Tabs in the order the sidebar shows them for `space`: favorites,
-    /// pinned (open folders, then loose), then Today.
+    /// pinned (open folders, then loose), Today's pages, then terminals (at
+    /// the bottom of the sidebar).
     pub fn visible_order(&self, space: u32) -> Vec<u32> {
         let ids = |zone, folder| {
             self.tabs
@@ -418,7 +419,12 @@ impl State {
             out.extend(ids(Zone::Pinned, Some(folder.id)));
         }
         out.extend(ids(Zone::Pinned, None));
-        out.extend(ids(Zone::Today, None));
+        let (terminals, pages): (Vec<u32>, Vec<u32>) =
+            ids(Zone::Today, None).partition(|&id| {
+                self.tab(id).is_some_and(|t| t.kind == TabKind::Terminal)
+            });
+        out.extend(pages);
+        out.extend(terminals);
         out
     }
 
@@ -1052,6 +1058,15 @@ mod tests {
         s.folder_mut(folder).unwrap().open = false;
         assert_eq!(titles(&s, &s.visible_order(1)), ["a", "c"]);
         let _ = c;
+    }
+
+    #[test]
+    fn terminals_come_after_todays_pages() {
+        let mut s = State::default();
+        web(&mut s, "a");
+        s.add_tab(TabKind::Terminal, String::new(), "t".into());
+        web(&mut s, "b"); // today: b, t, a
+        assert_eq!(titles(&s, &s.visible_order(1)), ["b", "a", "t"]);
     }
 
     #[test]

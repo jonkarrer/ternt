@@ -33,7 +33,7 @@
   type Mark =
     | { kind: "row"; tab: number; where: "before" | "after" }
     | { kind: "folder"; id: number }
-    | { kind: "zone"; zone: Zone };
+    | { kind: "zone"; zone: Zone | "terminals" };
   type DropTarget = { zone: Zone; folder: number | null; index: number; mark: Mark };
 
   let browserState = $state<BrowserState>({
@@ -74,6 +74,9 @@
   const folders = $derived(browserState.folders.filter((f) => f.space === activeSpace));
   const loosePinned = $derived(pinnedIn(null));
   const today = $derived(browserState.tabs.filter((t) => t.zone === "today" && t.space === activeSpace));
+  // Today's terminals sit at the bottom of the sidebar, below its pages.
+  const todayPages = $derived(today.filter((t) => t.kind !== "terminal"));
+  const terminals = $derived(today.filter((t) => t.kind === "terminal"));
   const collapsed = $derived(browserState.sidebarCollapsed);
   /** The collapsed sidebar, shown over the page while the pointer is on it:
       the "peek" view (this page again) floats over the page and draws it. */
@@ -256,11 +259,20 @@
       const id = Number(el.dataset.folder);
       target = { zone: "pinned", folder: id, index: END, mark: { kind: "folder", id } };
     } else if (kind === "zone") {
-      const zone = el.dataset.zone as Zone;
-      target = { zone, folder: null, index: END, mark: { kind: "zone", zone } };
+      const zone = el.dataset.zone as Zone | "terminals";
+      target =
+        zone === "terminals"
+          ? { zone: "today", folder: null, index: END, mark: { kind: "zone", zone } }
+          : { zone, folder: null, index: END, mark: { kind: "zone", zone } };
     }
     // Terminals only live in Today.
     if (target && tab.kind === "terminal" && target.zone !== "today") return null;
+    // Today shows pages and terminals apart: a drop in the other's list goes
+    // to the end of the tab's own.
+    const terminal = tab.kind === "terminal";
+    if (target?.zone === "today" && terminal !== !!el.closest(".terminals")) {
+      target = { zone: "today", folder: null, index: END, mark: { kind: "zone", zone: terminal ? "terminals" : "today" } };
+    }
     return target;
   }
 
@@ -301,7 +313,7 @@
     return mark?.kind === "row" && mark.tab === tab.id ? mark.where : null;
   }
 
-  function isDropInto(kind: "folder" | "zone", key: number | Zone) {
+  function isDropInto(kind: "folder" | "zone", key: number | Zone | "terminals") {
     const mark = drag?.target?.mark;
     if (!mark) return false;
     return kind === "folder" ? mark.kind === "folder" && mark.id === key : mark.kind === "zone" && mark.zone === key;
@@ -491,6 +503,25 @@
 </script>
 
 <svelte:window onkeydowncapture={exploreKeys} bind:innerWidth />
+
+<!-- A Today row (page or terminal); indexes count the whole Today group. -->
+{#snippet todayRow(tab: Tab)}
+  <TabRow
+    {tab}
+    zone="today"
+    index={today.indexOf(tab)}
+    active={tab.id === browserState.active}
+    split={splitSide(tab.id)}
+    beside={besideActive(tab.id)}
+    cursor={tab.id === cursor}
+    dragging={drag?.id === tab.id}
+    mark={markFor(tab)}
+    renaming={renaming?.kind === "tab" && renaming.id === tab.id}
+    onstartrename={() => (renaming = { kind: "tab", id: tab.id })}
+    onrename={(name) => renameTab(tab, name)}
+    onpointerdown={(e) => startDrag(e, tab)}
+  />
+{/snippet}
 
 <div
   class="app"
@@ -742,30 +773,26 @@
               <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg>
               <span>New Tab</span>
             </button>
-            <button class="row action" onclick={() => browser.newTerminal()}>
-              <svg viewBox="0 0 16 16"><path d="m4 5 3 3-3 3M9 11.5h3.5" /></svg>
-              <span>New Terminal</span>
-            </button>
-
             <nav class="tabs" class:drop-into={isDropInto("zone", "today")} data-drop="zone" data-zone="today">
-              {#each today as tab, i (tab.id)}
-                <TabRow
-                  {tab}
-                  zone="today"
-                  index={i}
-                  active={tab.id === browserState.active}
-                  split={splitSide(tab.id)}
-                  beside={besideActive(tab.id)}
-                  cursor={tab.id === cursor}
-                  dragging={drag?.id === tab.id}
-                  mark={markFor(tab)}
-                  renaming={renaming?.kind === "tab" && renaming.id === tab.id}
-                  onstartrename={() => (renaming = { kind: "tab", id: tab.id })}
-                  onrename={(name) => renameTab(tab, name)}
-                  onpointerdown={(e) => startDrag(e, tab)}
-                />
+              {#each todayPages as tab (tab.id)}
+                {@render todayRow(tab)}
               {/each}
             </nav>
+
+            <!-- Terminals: at the bottom while there's room; a long Today list
+                 pushes them down and they scroll with it. -->
+            <div class="terminals" class:drop-into={isDropInto("zone", "terminals")} data-drop="zone" data-zone="terminals">
+              <div class="divider"><span class="line"></span></div>
+              <button class="row action" onclick={() => browser.newTerminal()}>
+                <svg viewBox="0 0 16 16"><path d="m4 5 3 3-3 3M9 11.5h3.5" /></svg>
+                <span>New Terminal</span>
+              </button>
+              <nav class="tabs">
+                {#each terminals as tab (tab.id)}
+                  {@render todayRow(tab)}
+                {/each}
+              </nav>
+            </div>
           </div>
         </div>
       {/key}
@@ -1107,9 +1134,20 @@
   .pinned-list {
     flex: none;
   }
-  /* Today fills what's left, so the whole area takes drops. */
+  /* Today's pages fill what's left, so the whole area takes drops, and
+     keep the terminals at the bottom. */
   .tabs {
     flex: 1 0 auto;
+  }
+  .terminals {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-radius: 10px;
+  }
+  .terminals .divider {
+    margin-top: 0;
   }
   /* Bleeds into the sidebar's side padding, so focus rings, drop outlines
      and the scrollbar aren't clipped against the rows. */

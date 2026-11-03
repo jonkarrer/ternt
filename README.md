@@ -65,6 +65,8 @@ Arc-style, top to bottom:
   (within a folder, or in and out of one), and drag a folder by its header to reorder folders.
 - **Today**: per space, newest first, below a divider. Hover the divider for *Clear*, which
   closes the space's Today web tabs (terminals stay; ⇧⌘T reopens).
+- **Terminals**: per space, at the bottom of the sidebar under *New Terminal*. A long Today list
+  pushes them down, and they scroll with it.
 
 **Renaming tabs**: double-click a tab's title (or right-click → *Rename Tab…*) to give it a name;
 Enter saves, Escape cancels. The name replaces the page's or shell's own title in the sidebar, the
