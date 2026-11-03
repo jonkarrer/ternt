@@ -462,7 +462,9 @@
     if (dx === 0 || (!sideways && Math.abs(dx) <= Math.abs(event.deltaY))) return;
     const step = () => {
       const at = browserState.spaces.findIndex((s) => s.id === activeSpace);
-      const next = browserState.spaces[at + (dx > 0 ? 1 : -1)];
+      // Content follows the fingers: a swipe to the right brings in the
+      // space on the left (scroll delta is negative), and vice versa.
+      const next = browserState.spaces[at + (dx > 0 ? -1 : 1)];
       if (next) browser.activateSpace(next.id);
     };
 

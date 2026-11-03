@@ -49,13 +49,13 @@ const sidebar = document.querySelector(".sidebar");
 const swipe = (deltaX) => {
   for (let i = 0; i < 4; i++) sidebar.dispatchEvent(new WheelEvent("wheel", { deltaX, bubbles: true }));
 };
-swipe(45);
+swipe(-45);
 await t.sleep(400);
 await t.assert(S().activeSpace === work, "swiping past the last space stays there");
-swipe(-45);
+swipe(45);
 await t.until(() => S().activeSpace === home, "horizontal swipe switches space");
 await t.sleep(400);
-swipe(-45);
+swipe(45);
 await t.sleep(400);
 await t.assert(S().activeSpace === home, "swiping past the first space stays there");
 
@@ -63,12 +63,12 @@ await t.assert(S().activeSpace === home, "swiping past the first space stays the
 // and Shift turns the plain wheel sideways
 await t.sleep(300);
 const tick = (init) => sidebar.dispatchEvent(new WheelEvent("wheel", { deltaMode: WheelEvent.DOM_DELTA_LINE, bubbles: true, ...init }));
-tick({ deltaX: 1 });
-tick({ deltaX: 1 });
+tick({ deltaX: -1 });
+tick({ deltaX: -1 });
 await t.until(() => S().activeSpace === work, "a mouse tick switches to the next space");
 await t.sleep(400);
 await t.assert(S().activeSpace === work, "a quick second tick doesn't switch again");
-tick({ deltaY: -1, shiftKey: true });
+tick({ deltaY: 1, shiftKey: true });
 await t.until(() => S().activeSpace === home, "Shift + wheel switches back");
 
 // Opening a tab from another space switches to it
