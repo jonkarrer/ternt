@@ -10,8 +10,8 @@ open it and drag Ternt to Applications. Needs macOS 14 or later.
 The first launch opens a welcome page with the shortcuts (later: *Help → Welcome to Ternt*).
 No tabs are created for you: press ⌘T to open the first one.
 
-After that Ternt updates itself. It checks at launch, every hour, and when you come back to it
-(at most every 15 minutes); when a new version is out, a card pops up at the bottom of the sidebar.
+After that Ternt updates itself. It checks at launch, every 15 minutes, and when you come back to it
+(at most every 2 minutes); when a new version is out, a card pops up at the bottom of the sidebar.
 *Restart Now* downloads the update, swaps the app in place and relaunches (your tabs come back);
 *Later* hides it for that version (*Settings → General* can still install it). *Ternt → Check for
 Updates…* checks right away and answers on the same card.
@@ -169,7 +169,7 @@ just upload-resume         # publish what the last run built, after a push/uploa
 
 Releases are built on a Mac with an Apple Developer ID, signed and notarized, and published to
 GitHub Releases: the `.dmg` for new installs, plus the signed update archive and `latest.json`
-that installed copies check shortly after launch and every 4 hours
+that installed copies check shortly after launch, every 15 minutes and when you come back to the app
 (`src-tauri/src/updater.rs`). Updates are verified against the public key in
 `tauri.conf.json`; the private key lives in Doppler (`ternt` / `dev`, `TAURI_SIGNING_PRIVATE_KEY`) and in
 `~/.tauri/ternt.key` (without it, installed copies can't be updated). Setup and details: [docs/RELEASING.md](docs/RELEASING.md).

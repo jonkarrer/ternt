@@ -1,19 +1,19 @@
-//! Self-update. Releases are built by GitHub Actions (.github/workflows/
-//! release.yml) and published on GitHub Releases with a `latest.json`
-//! manifest; every update is signed with the project's updater key and
-//! verified against the public key in `tauri.conf.json` before install.
+//! Self-update. Releases are built and published by scripts/publish.sh on
+//! GitHub Releases with a `latest.json` manifest; every update is signed
+//! with the project's updater key and verified against the public key in
+//! `tauri.conf.json` before install.
 //!
-//! Ternt checks shortly after launch, every hour, and when you come back to
-//! it (at most every 15 minutes). When an update turns up the sidebar pops
-//! up a card (Restart Now / Later) and keeps a button at the bottom left;
-//! either downloads, swaps the app bundle in place and relaunches.
+//! Ternt checks shortly after launch, every 15 minutes, and when you come
+//! back to it (at most every 2 minutes). When an update turns up the sidebar
+//! pops up a card (Restart Now / Later); Restart Now downloads, swaps the
+//! app bundle in place and relaunches.
 //!
 //! `TERNT_UPDATE_URL` replaces the manifest URL (local testing, see
 //! e2e/update.sh). Signatures are still checked against the built-in key.
 
 use std::{
     sync::Mutex,
-    time::{Duration, Instant},
+    time::{Duration, SystemTime},
 };
 
 use serde::Serialize;
@@ -23,9 +23,13 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 use crate::browser::{PEEK_WEBVIEW, UI_WEBVIEW};
 
 const FIRST_CHECK: Duration = Duration::from_secs(5);
-const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
+const CHECK_EVERY: Duration = Duration::from_secs(15 * 60);
 /// Coming back to the app checks again when the last check is this old.
-const CHECK_ON_FOCUS_AFTER: Duration = Duration::from_secs(15 * 60);
+const CHECK_ON_FOCUS_AFTER: Duration = Duration::from_secs(2 * 60);
+/// How often the background loop looks at the clock. Timers stop while the
+/// Mac sleeps, so it compares wall-clock times rather than sleeping
+/// `CHECK_EVERY` (which could run hours late after a night asleep).
+const TICK: Duration = Duration::from_secs(60);
 
 /// What the sidebar shows.
 #[derive(Clone, Debug, Serialize)]
@@ -57,8 +61,9 @@ pub struct Updates {
     status: Mutex<Option<Status>>,
     /// The update found by the last check, ready to install.
     pending: Mutex<Option<Update>>,
-    /// When the last check started.
-    last_check: Mutex<Option<Instant>>,
+    /// When the last check started (wall clock, which keeps counting
+    /// while the Mac sleeps).
+    last_check: Mutex<Option<SystemTime>>,
 }
 
 fn set_status(app: &AppHandle, status: Status) {
@@ -92,19 +97,20 @@ pub fn start(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(FIRST_CHECK).await;
         loop {
-            if let Err(err) = check(&app, false).await {
+            if since_last_check(&app).is_none_or(|age| age >= CHECK_EVERY)
+                && let Err(err) = check(&app, false).await
+            {
                 eprintln!("update check failed: {err}");
             }
-            tokio::time::sleep(CHECK_EVERY).await;
+            tokio::time::sleep(TICK).await;
         }
     });
 }
 
 /// The main window came forward: check if it's been a while.
 pub fn on_focus(app: &AppHandle) {
-    let last = *app.state::<Updates>().last_check.lock().unwrap();
     // Before the first check, `start` has it covered.
-    if !enabled() || !last.is_some_and(|t| t.elapsed() >= CHECK_ON_FOCUS_AFTER) {
+    if !enabled() || !since_last_check(app).is_some_and(|age| age >= CHECK_ON_FOCUS_AFTER) {
         return;
     }
     let app = app.clone();
@@ -113,6 +119,12 @@ pub fn on_focus(app: &AppHandle) {
             eprintln!("update check failed: {err}");
         }
     });
+}
+
+fn since_last_check(app: &AppHandle) -> Option<Duration> {
+    let last = (*app.state::<Updates>().last_check.lock().unwrap())?;
+    // A clock set backwards counts as due.
+    Some(last.elapsed().unwrap_or(Duration::MAX))
 }
 
 fn updater(app: &AppHandle) -> tauri_plugin_updater::Result<tauri_plugin_updater::Updater> {
@@ -135,7 +147,7 @@ pub async fn check(app: &AppHandle, manual: bool) -> Result<(), String> {
     ) {
         return Ok(());
     }
-    *app.state::<Updates>().last_check.lock().unwrap() = Some(Instant::now());
+    *app.state::<Updates>().last_check.lock().unwrap() = Some(SystemTime::now());
     let found = updater(app).map_err(|e| e.to_string())?.check().await;
     match found {
         Ok(Some(update)) => {
