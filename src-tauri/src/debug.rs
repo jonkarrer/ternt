@@ -325,3 +325,56 @@ pub fn debug_downloads() -> Vec<(String, bool, String)> {
         })
         .collect()
 }
+
+/// Click at (x, y) in a webview (CSS px from its top left) with real mouse
+/// events, so pages see a user gesture (a scripted `.click()` isn't one).
+#[tauri::command]
+pub async fn debug_click(app: AppHandle, label: String, x: f64, y: f64) -> Result<(), String> {
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| format!("no webview {label}"))?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    webview
+        .with_webview(move |p| unsafe {
+            use objc2::runtime::AnyObject;
+            use objc2_foundation::NSPoint;
+            let view = &*(p.inner() as *const AnyObject);
+            let window: *mut AnyObject = objc2::msg_send![view, window];
+            let flipped: bool = objc2::msg_send![view, isFlipped];
+            let bounds: objc2_foundation::NSRect = objc2::msg_send![view, bounds];
+            let local = NSPoint::new(x, if flipped { y } else { bounds.size.height - y });
+            let point: NSPoint =
+                objc2::msg_send![view, convertPoint: local, toView: std::ptr::null::<AnyObject>()];
+            let number: isize = objc2::msg_send![&*window, windowNumber];
+            let info: *mut AnyObject = objc2::msg_send![objc2::class!(NSProcessInfo), processInfo];
+            let now: f64 = objc2::msg_send![&*info, systemUptime];
+            for kind in [1usize, 2] {
+                // NSEventTypeLeftMouseDown, NSEventTypeLeftMouseUp
+                let event: *mut AnyObject = objc2::msg_send![
+                    objc2::class!(NSEvent),
+                    mouseEventWithType: kind,
+                    location: point,
+                    modifierFlags: 0usize,
+                    timestamp: now,
+                    windowNumber: number,
+                    context: std::ptr::null::<AnyObject>(),
+                    eventNumber: 0isize,
+                    clickCount: 1isize,
+                    pressure: 1f32
+                ];
+                let content: *mut AnyObject = objc2::msg_send![&*window, contentView];
+                let superview: *mut AnyObject = objc2::msg_send![&*content, superview];
+                let local: NSPoint = objc2::msg_send![&*superview, convertPoint: point, fromView: std::ptr::null::<AnyObject>()];
+                let target: *mut AnyObject = objc2::msg_send![&*content, hitTest: local];
+                let target = if target.is_null() { view as *const _ as *mut AnyObject } else { target };
+                if kind == 1 {
+                    let _: () = objc2::msg_send![&*target, mouseDown: event];
+                } else {
+                    let _: () = objc2::msg_send![&*target, mouseUp: event];
+                }
+            }
+            let _ = tx.send(());
+        })
+        .map_err(|e| e.to_string())?;
+    rx.recv().map_err(|e| e.to_string())
+}

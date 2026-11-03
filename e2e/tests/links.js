@@ -27,6 +27,16 @@ await t.until(async () => (await links()).includes("ternt-test-app:blank"), "eve
 await t.sleep(300);
 await t.assert(S().tabs.length === tabs && tab()?.url.endsWith("/links.html"), "without a tab or a navigation");
 
+// A real click (a user gesture) on a target=_blank link opens a tab. Tauri's
+// opener plugin script used to catch these and drop them.
+await t.invoke("debug_eval", { label: `tab-${page}`, js: `(() => { const r = document.getElementById("blank").getBoundingClientRect(); document.title = "at " + (r.x + 5) + "," + (r.y + r.height / 2); })()` });
+await t.until(() => tab()?.title.startsWith("at "), "find the new-tab link");
+const [x, y] = tab().title.slice(3).split(",").map(Number);
+await t.invoke("debug_click", { label: `tab-${page}`, x, y });
+await t.until(() => tab()?.url.endsWith("/page2.html?blank") && S().tabs.length === tabs + 1, "clicking a target=_blank link opens a new tab");
+await t.invoke("close_tab", { id: S().active });
+await t.invoke("activate_tab", { id: page });
+
 await click(page, "next");
 await t.until(() => tab()?.title === "Fixture Page 2", "ordinary links still work");
 
