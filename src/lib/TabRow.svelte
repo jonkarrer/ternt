@@ -10,6 +10,7 @@
     cursor = false,
     indent = false,
     split = null,
+    splitColor = null,
     beside = false,
     zone,
     folder = null,
@@ -29,6 +30,8 @@
     indent?: boolean;
     /** Its side, if the tab is in a split view. */
     split?: "left" | "right" | null;
+    /** Its split's color, shared with the other tab of the split. */
+    splitColor?: string | null;
     /** On screen beside the active tab (the other pane of its split). */
     beside?: boolean;
     /** This row's group and position, for drop targeting. */
@@ -80,6 +83,8 @@
   class:cursor
   class:indent
   class:beside
+  class:in-split={splitColor != null}
+  style:--split={splitColor}
   class:terminal={tab.kind === "terminal"}
   class:before={mark === "before"}
   class:after={mark === "after"}
@@ -200,6 +205,34 @@
     box-shadow:
       inset 0 0 0 1px var(--fill-strong),
       0 1px 2px var(--shadow);
+  }
+  /* In a split: tinted in the split's color, as is the other tab of the
+     split, with a bar of it down the left edge. Stronger while on screen. */
+  .in-split,
+  .terminal.in-split,
+  .in-split:hover {
+    background: color-mix(in srgb, var(--split) 16%, transparent);
+  }
+  .in-split.active,
+  .in-split.beside {
+    background: color-mix(in srgb, var(--split) 30%, var(--tab-active));
+  }
+  .terminal.in-split.active,
+  .terminal.in-split.beside {
+    background: color-mix(in srgb, var(--split) 30%, var(--term-row-active));
+  }
+  .in-split:not(.before)::before {
+    content: "";
+    position: absolute;
+    left: 2px;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--split);
+  }
+  .in-split .split-glyph {
+    color: var(--split);
   }
   .row.cursor {
     box-shadow: inset 0 0 0 2px var(--accent);

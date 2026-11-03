@@ -30,6 +30,8 @@ await t.assert(near(right.x, left.x + left.width + INSET) && near(right.x + righ
 await t.assert(near(left.height, full.height) && near(right.height, full.height), "full height");
 await t.until(() => document.querySelectorAll(".tab .split-glyph").length === 2, "both rows marked as split");
 await t.until(() => document.querySelector(".tab.beside")?.dataset.tab === String(a), "the other pane's row is highlighted");
+const color = (id) => document.querySelector(`.tab.in-split[data-tab="${id}"]`)?.style.getPropertyValue("--split");
+await t.assert(color(a) && color(a) === color(b), `both rows share the split's color (${color(a)})`);
 await t.until(() => document.querySelector(".split-handle"), "divider between the panes");
 await t.sleep(300);
 await t.shot("split-pages");

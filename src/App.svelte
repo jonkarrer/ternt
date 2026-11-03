@@ -100,6 +100,12 @@
     return s ? (s.left === id ? "left" : "right") : null;
   };
   const activeSplit = $derived(browserState.active != null ? splitOf(browserState.active) : undefined);
+  // Both tabs of a split share a color in the sidebar; each split its own.
+  const SPLIT_COLORS = ["#14b8a6", "#8b5cf6", "#f59e0b", "#ec4899", "#22c55e", "#0ea5e9"];
+  const splitColor = (id: number) => {
+    const s = splitOf(id);
+    return s ? SPLIT_COLORS[browserState.splits.indexOf(s) % SPLIT_COLORS.length] : null;
+  };
   const besideActive = (id: number) => id !== browserState.active && activeSplit != null && splitOf(id) === activeSplit;
 
   let innerWidth = $state(window.innerWidth);
@@ -517,6 +523,7 @@
     index={today.indexOf(tab)}
     active={tab.id === browserState.active}
     split={splitSide(tab.id)}
+    splitColor={splitColor(tab.id)}
     beside={besideActive(tab.id)}
     cursor={tab.id === cursor}
     dragging={drag?.id === tab.id}
@@ -597,6 +604,8 @@
               class:dragging={drag?.id === tab.id}
               class:before={markFor(tab) === "before"}
               class:after={markFor(tab) === "after"}
+              class:in-split={splitColor(tab.id) != null}
+              style:--split={splitColor(tab.id)}
               title={tabLabel(tab)}
               data-drop="row"
               data-tab={tab.id}
@@ -728,6 +737,7 @@
                       index={i}
                       active={tab.id === browserState.active}
                       split={splitSide(tab.id)}
+                      splitColor={splitColor(tab.id)}
                       beside={besideActive(tab.id)}
                       cursor={tab.id === cursor}
                       dragging={drag?.id === tab.id}
@@ -748,6 +758,7 @@
                   index={i}
                   active={tab.id === browserState.active}
                   split={splitSide(tab.id)}
+                  splitColor={splitColor(tab.id)}
                   beside={besideActive(tab.id)}
                   cursor={tab.id === cursor}
                   dragging={drag?.id === tab.id}
@@ -1055,6 +1066,11 @@
   .fav.active {
     background: var(--tab-active);
     box-shadow: 0 1px 2px var(--shadow);
+  }
+  /* In a split: ringed in the split's color, like its partner's row. */
+  .fav.in-split {
+    background: color-mix(in srgb, var(--split) 22%, var(--fill));
+    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--split) 70%, transparent);
   }
   .fav.dragging {
     opacity: 0.5;

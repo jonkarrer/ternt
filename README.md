@@ -78,7 +78,8 @@ comes back with ⇧⌘T. Clear it to go back to the title.
 (⌥⌘\ opens a terminal beside the page). Click into a pane to make it the active tab; drag the gap
 between them to resize (double-click: back to half and half). *Close Split View* (tab menu, View
 menu or command bar) ends it; closing either tab gives the other the whole area. A split holds two
-pages or a page and a terminal, in the same space.
+pages or a page and a terminal, in the same space. In the sidebar both tabs of a split share a
+color (each split its own).
 
 **Terminal panes**: ⌘D splits a terminal tab side by side, ⇧⌘D stacks; panes nest, and the tab
 stays one row in the sidebar, named after the focused pane. Each pane runs its own shell, starting
