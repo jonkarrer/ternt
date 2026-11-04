@@ -477,6 +477,9 @@ pub fn download_finished(path: &std::path::Path) {
 /// - Show `alert()`, `confirm()` and `prompt()`. wry leaves them out, so
 ///   WebKit answered at once with nothing: a site asking for a password with
 ///   `prompt()` got `null` and its link did nothing.
+/// - Tell pages their window's frame. Without it `outerWidth` and
+///   `outerHeight` are 0, and Google Docs, which compares them with the inner
+///   size to guess the zoom, drew its pages at half resolution (blurry).
 pub fn prepare_page(webview: tauri::webview::PlatformWebview) {
     unsafe {
         let view = &*(webview.inner() as *const AnyObject);
@@ -488,7 +491,7 @@ pub fn prepare_page(webview: tauri::webview::PlatformWebview) {
         if let Some(delegate) = delegate.as_ref() {
             add_js_dialogs(delegate.class());
             // WebKit notes which methods a delegate has when it's set:
-            // set it again so it sees the dialogs.
+            // set it again so it sees the added ones.
             let _: () = msg_send![view, setUIDelegate: delegate];
         }
     }
@@ -525,12 +528,20 @@ type JsPrompt = unsafe extern "C-unwind" fn(
     &block2::Block<dyn Fn(*mut NSString)>,
 );
 
-/// Add the dialog methods to wry's delegate class, once.
+type WindowFrame = unsafe extern "C-unwind" fn(
+    &AnyObject,
+    objc2::runtime::Sel,
+    &AnyObject,
+    &block2::Block<dyn Fn(NSRect)>,
+);
+
+/// Add the dialog methods (and the window frame) to wry's delegate class,
+/// once.
 unsafe fn add_js_dialogs(class: &objc2::runtime::AnyClass) {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| unsafe {
         let class = class as *const _ as *mut objc2::runtime::AnyClass;
-        let methods: [(&str, objc2::runtime::Imp, &std::ffi::CStr); 3] = [
+        let methods: [(&str, objc2::runtime::Imp, &std::ffi::CStr); 4] = [
             (
                 "webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:",
                 std::mem::transmute::<JsAlert, objc2::runtime::Imp>(js_alert),
@@ -545,6 +556,12 @@ unsafe fn add_js_dialogs(class: &objc2::runtime::AnyClass) {
                 "webView:runJavaScriptTextInputPanelWithPrompt:defaultText:initiatedByFrame:completionHandler:",
                 std::mem::transmute::<JsPrompt, objc2::runtime::Imp>(js_prompt),
                 c"v@:@@@@@?",
+            ),
+            // WebKit's private WKUIDelegate method, which Safari implements.
+            (
+                "_webView:getWindowFrameWithCompletionHandler:",
+                std::mem::transmute::<WindowFrame, objc2::runtime::Imp>(window_frame),
+                c"v@:@@?",
             ),
         ];
         for (name, imp, types) in methods {
@@ -602,6 +619,31 @@ unsafe fn js_dialog_show(web_view: &AnyObject, alert: &AnyObject, done: impl Fn(
                 done(response == FIRST_BUTTON);
             }
         }
+    }
+}
+
+/// The "window" a page sees (`outerWidth`, `outerHeight`, `screenX`,
+/// `screenY`): its own view's frame on screen, as if the browser had no
+/// chrome. Google Docs scales its canvas by outer / inner width, so the
+/// whole window (sidebar included, or a split's other side) over-draws it.
+unsafe extern "C-unwind" fn window_frame(
+    _this: &AnyObject,
+    _cmd: objc2::runtime::Sel,
+    web_view: &AnyObject,
+    completion: &block2::Block<dyn Fn(NSRect)>,
+) {
+    unsafe {
+        let bounds: NSRect = msg_send![web_view, bounds];
+        let window: *mut AnyObject = msg_send![web_view, window];
+        let frame = match window.as_ref() {
+            Some(window) => {
+                let null: *const AnyObject = ptr::null();
+                let in_window: NSRect = msg_send![web_view, convertRect: bounds, toView: null];
+                msg_send![window, convertRectToScreen: in_window]
+            }
+            None => bounds,
+        };
+        completion.call((frame,));
     }
 }
 

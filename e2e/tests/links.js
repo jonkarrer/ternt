@@ -47,4 +47,10 @@ await t.until(() => tab()?.title.startsWith("ipc:"), "a page declaring its own g
 await t.assert(tab().title === "ipc: page's own, tauri: undefined", `and sees no Tauri internals (${tab().title})`);
 const fresh = await t.invoke("new_tab", { url: `${F}/ipc.html` });
 await t.until(() => S().tabs.find((x) => x.id === fresh)?.title === "ipc: page's own, tauri: undefined", "the same in a new tab's first page");
+
+// Pages see their own frame as the window: outerWidth was 0, and Google Docs
+// (which scales its canvas by outer / inner width) drew blurry pages.
+await t.invoke("debug_eval", { label: `tab-${fresh}`, js: `document.title = "outer " + (outerWidth === innerWidth && outerHeight >= innerHeight && innerWidth > 0)` });
+await t.until(() => S().tabs.find((x) => x.id === fresh)?.title.startsWith("outer "), "read the page's window size");
+await t.assert(S().tabs.find((x) => x.id === fresh).title === "outer true", "a page's outer size is its tab's, not 0");
 await t.quit();
