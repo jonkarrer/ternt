@@ -794,8 +794,10 @@
                   onpointerdown={(e) => startDrag(e, tab)}
                 />
               {/each}
-              {#if drag && !folders.length && !loosePinned.length}
-                <span class="hint">Drop to pin to {space?.name}</span>
+              <!-- While dragging, a place to pin outside any folder until there
+                   are loose pinned tabs to drop between. -->
+              {#if drag && !loosePinned.length}
+                <span class="hint">{folders.length ? "Drop here to pin outside a folder" : `Drop to pin to ${space?.name}`}</span>
               {/if}
             </div>
 

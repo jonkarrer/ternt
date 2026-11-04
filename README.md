@@ -64,6 +64,7 @@ Arc-style, top to bottom:
 - **Pinned**: per space, optionally grouped in folders. An open folder is a tinted block with its
   tabs indented under it; a closed one shows how many tabs it holds. Drag tabs to reorder them
   (within a folder, or in and out of one), and drag a folder by its header to reorder folders.
+  No folder is needed: while dragging, a spot under the folders pins a tab on its own.
 - **Today**: per space, newest first, below a divider. Hover the divider for *Clear*, which
   closes the space's Today web tabs (terminals stay; ⇧⌘T reopens).
 - **Terminals**: per space, at the bottom of the sidebar under *New Terminal*. A long Today list
