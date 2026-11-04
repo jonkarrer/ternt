@@ -56,6 +56,8 @@ swipe(45);
 await t.until(() => S().activeSpace === home, "horizontal swipe switches space");
 await t.sleep(400);
 swipe(45);
+await Promise.resolve();
+await t.assert(!document.querySelector(".sidebar .space-body").style.translate, "swiping past the first space doesn't move it");
 await t.sleep(400);
 await t.assert(S().activeSpace === home, "swiping past the first space stays there");
 

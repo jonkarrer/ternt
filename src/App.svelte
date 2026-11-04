@@ -445,7 +445,7 @@
   // scroll (tilt wheel, or Shift + wheel) switches spaces. It stops at the
   // first and last space rather than wrapping around. On a trackpad the
   // space follows the fingers until the swipe is far enough to switch, and
-  // springs back if it isn't (or there's no space that way).
+  // springs back if it isn't. With no space that way, nothing moves.
   let swipe = 0;
   let swipeLocked = false;
   let swipeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -501,8 +501,8 @@
       browser.activateSpace(next.id);
       return;
     }
-    // Follow the fingers, with a stiff rubber band where there's no space.
-    pull = -swipe * (next ? 0.5 : 0.15);
+    // Follow the fingers; past the first or last space, stay put.
+    pull = next ? -swipe * 0.5 : 0;
   }
 
   function focusSelect(node: HTMLInputElement) {
