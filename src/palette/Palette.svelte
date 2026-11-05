@@ -4,7 +4,7 @@
   import SpaceIcon from "../lib/SpaceIcon.svelte";
   import TabIcon from "../lib/TabIcon.svelte";
   import HelpSheet from "./HelpSheet.svelte";
-  import { browser, type ClosedTab, type HistoryHit, type Split, type PaletteRequest, type Space, type Tab } from "../lib/browser";
+  import { browser, type ClosedTab, type HistoryHit, type Group, type PaletteRequest, type Space, type Tab } from "../lib/browser";
   import { buildItems, type Action, type Item } from "./rank";
 
   let request = $state<PaletteRequest | null>(null);
@@ -15,7 +15,7 @@
   let activeId = $state<number | null>(null);
   let activeSpace = $state(0);
   let closed = $state<ClosedTab[]>([]);
-  let splits = $state<Split[]>([]);
+  let groups = $state<Group[]>([]);
   let input = $state<HTMLInputElement>();
   let list = $state<HTMLElement>();
 
@@ -26,7 +26,7 @@
 
   const help = $derived(request?.mode === "help");
   const items = $derived(
-    request && !help ? buildItems(query, { mode: request.mode, tabs, spaces, activeId, activeSpace, history, closed, splits }) : [],
+    request && !help ? buildItems(query, { mode: request.mode, tabs, spaces, activeId, activeSpace, history, closed, groups }) : [],
   );
 
   $effect(() => {
@@ -63,7 +63,7 @@
     activeId = state.active;
     activeSpace = state.activeSpace;
     closed = state.closed;
-    splits = state.splits;
+    groups = state.groups;
   }
 
   function close() {

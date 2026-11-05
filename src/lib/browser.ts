@@ -68,12 +68,25 @@ export interface Profile {
   spaces: number[];
 }
 
-/** Two tabs side by side (see `Split` in model.rs). */
-export interface Split {
-  left: number;
-  right: number;
-  /** The left pane's share of the width. */
+/** Up to four tabs shown together (see src-tauri/src/group.rs). */
+export interface Group {
+  id: number;
+  name: string;
+  /** Left to right; each column's tabs top to bottom. */
+  columns: number[][];
+  /** The first column's share of the width. */
   ratio: number;
+  /** Each column's top tab's share of its height. */
+  rows: number[];
+}
+
+/** A tab on screen, in window coordinates (logical px). */
+export interface ScreenFrame {
+  tab: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 /** A closed Today tab that can be reopened (newest last). */
@@ -95,7 +108,12 @@ export interface BrowserState {
   profiles: Profile[];
   /** Oldest first. */
   closed: ClosedTab[];
-  splits: Split[];
+  /** Their tabs sit together in Today, in group order. */
+  groups: Group[];
+  /** The group on screen (the active tab's, showing rather than the tab alone). */
+  shownGroup: number | null;
+  /** The tabs on screen and where. */
+  screen: ScreenFrame[];
   active: number | null;
   activeSpace: number;
   sidebarWidth: number;
@@ -139,7 +157,7 @@ export interface PaletteRequest {
 export const DEFAULT_SIDEBAR_WIDTH = 240;
 export const MIN_SIDEBAR_WIDTH = 180;
 export const MAX_SIDEBAR_WIDTH = 480;
-/** Mirror INSET in src-tauri/src/browser.rs (also the gap between split panes). */
+/** Mirror INSET in src-tauri/src/browser.rs (also the gap between a group's panes). */
 export const INSET = 8;
 
 export const browser = {
@@ -149,10 +167,19 @@ export const browser = {
   newTerminal: (command?: string) => invoke<number>("new_terminal", { command: command ?? null }),
   closeTab: (id: number) => invoke("close_tab", { id }),
   activateTab: (id: number) => invoke("activate_tab", { id }),
-  /** Show a tab beside the active one. */
+  /** Show a tab beside the active one (joining its group). */
   splitView: (id: number) => invoke("split_view", { id }),
-  /** Returns the ratio after Rust clamps it (null: no split on screen). */
-  setSplitRatio: (ratio: number) => invoke<number | null>("set_split_ratio", { ratio }),
+  /** Resize the group on screen: its columns (`column` null) or a column's
+   *  rows. Returns the ratio after Rust clamps it (null: no such divider). */
+  setGroupRatio: (column: number | null, ratio: number) => invoke<number | null>("set_group_ratio", { column, ratio }),
+  showGroup: (id: number) => invoke("show_group", { id }),
+  renameGroup: (id: number, name: string) => invoke("rename_group", { id, name }),
+  ungroup: (id: number) => invoke("ungroup", { id }),
+  /** While dragging a tab over the content area: show where it would drop
+   *  (`point` null hides that). Returns whether it would. */
+  previewGroupDrop: (tab: number, point: [number, number] | null) => invoke<boolean>("preview_group_drop", { tab, point }),
+  /** Drop a dragged tab on the content area, beside the tab under it. */
+  dropOnContent: (tab: number, x: number, y: number) => invoke<boolean>("drop_on_content", { tab, x, y }),
   /** Reopen one closed tab, in the space it was closed from. */
   reopenClosed: (id: number) => invoke("reopen_closed", { id }),
   /** `index` is the position in the full tab list after removing the tab. */

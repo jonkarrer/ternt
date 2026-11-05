@@ -19,6 +19,7 @@
     MAX_SIDEBAR_WIDTH,
     MIN_SIDEBAR_WIDTH,
     type BrowserState,
+    type Group,
     type Tab,
     type Zone,
   } from "./lib/browser";
@@ -43,7 +44,9 @@
     folders: [],
     profiles: [],
     closed: [],
-    splits: [],
+    groups: [],
+    shownGroup: null,
+    screen: [],
     active: null,
     activeSpace: 0,
     sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
@@ -55,7 +58,7 @@
   let drag = $state<{ id: number; target: DropTarget | null } | null>(null);
   /** A folder being dragged: where it would land among the space's folders. */
   let folderDrag = $state<{ id: number; index: number | null; mark: { id: number; where: "before" | "after" } | null } | null>(null);
-  let renaming = $state<{ kind: "space" | "folder" | "tab"; id: number } | null>(null);
+  let renaming = $state<{ kind: "space" | "folder" | "group" | "tab"; id: number } | null>(null);
   /** The space whose icon picker is open (space menu → Change Icon…). */
   let pickingIcon = $state<number | null>(null);
   /** Direction of the last space switch, for the slide-in. */
@@ -76,8 +79,9 @@
   const loosePinned = $derived(pinnedIn(null));
   const today = $derived(browserState.tabs.filter((t) => t.zone === "today" && t.space === activeSpace));
   // Today's terminals sit at the bottom of the sidebar, below its pages.
-  const todayPages = $derived(today.filter((t) => t.kind !== "terminal"));
-  const terminals = $derived(today.filter((t) => t.kind === "terminal"));
+  // Grouped terminals sit with their group, among the pages.
+  const todayPages = $derived(today.filter((t) => t.kind !== "terminal" || groupOf(t.id)));
+  const terminals = $derived(today.filter((t) => t.kind === "terminal" && !groupOf(t.id)));
   const collapsed = $derived(browserState.sidebarCollapsed);
   /** The collapsed sidebar, shown over the page while the pointer is on it:
       the "peek" view (this page again) floats over the page and draws it. */
@@ -91,63 +95,87 @@
     unpeekTimer = setTimeout(() => browser.peekSidebar(false), 300);
   }
 
-  // --- Split view -------------------------------------------------------
-  // Rust lays out the two panes; the sidebar webview, under them, draws their
-  // cards and the divider in the gap between them.
+  // --- Groups -----------------------------------------------------------
+  // Up to four tabs shown together. Rust lays out their views; the sidebar
+  // webview, under them, draws their cards and the dividers in the gaps.
 
-  const splitOf = (id: number) => browserState.splits.find((s) => s.left === id || s.right === id);
+  const groupOf = (id: number) => browserState.groups.find((g) => g.columns.some((c) => c.includes(id)));
+  /** Its column, for the split glyph on its row. */
   const splitSide = (id: number) => {
-    const s = splitOf(id);
-    return s ? (s.left === id ? "left" : "right") : null;
+    const g = groupOf(id);
+    return g ? (g.columns[0].includes(id) ? "left" : "right") : null;
   };
-  const activeSplit = $derived(browserState.active != null ? splitOf(browserState.active) : undefined);
-  // Both tabs of a split share a color in the sidebar; each split its own.
+  const shownGroup = $derived(browserState.groups.find((g) => g.id === browserState.shownGroup));
+  // A group's tabs share a color in the sidebar; each group its own.
   const SPLIT_COLORS = ["#14b8a6", "#8b5cf6", "#f59e0b", "#ec4899", "#22c55e", "#0ea5e9"];
+  const groupColor = (g: Group) => SPLIT_COLORS[browserState.groups.indexOf(g) % SPLIT_COLORS.length];
   const splitColor = (id: number) => {
-    const s = splitOf(id);
-    return s ? SPLIT_COLORS[browserState.splits.indexOf(s) % SPLIT_COLORS.length] : null;
+    const g = groupOf(id);
+    return g ? groupColor(g) : null;
   };
-  const besideActive = (id: number) => id !== browserState.active && activeSplit != null && splitOf(id) === activeSplit;
+  const besideActive = (id: number) => id !== browserState.active && shownGroup != null && groupOf(id) === shownGroup;
 
-  let innerWidth = $state(window.innerWidth);
-  /** The divider's ratio while it's dragged (Rust's otherwise). */
-  let dragRatio = $state<number | null>(null);
   const contentLeft = $derived(Math.max(collapsed ? 0 : sidebarWidth, INSET));
-  /** Width the two panes share: the content area minus the gap. */
-  const paneRoom = $derived(Math.max(innerWidth - contentLeft - INSET * 2, 0));
-  const leftPane = $derived(Math.round(paneRoom * (dragRatio ?? activeSplit?.ratio ?? 0.5)));
+  /** The group's panes on screen, and the area they share. */
+  const panes = $derived(shownGroup ? browserState.screen : []);
+  const area = $derived.by(() => {
+    if (!panes.length) return null;
+    const x = Math.min(...panes.map((p) => p.x));
+    const y = Math.min(...panes.map((p) => p.y));
+    return {
+      x,
+      y,
+      w: Math.max(...panes.map((p) => p.x + p.width)) - x,
+      h: Math.max(...panes.map((p) => p.y + p.height)) - y,
+    };
+  });
+  /** The gaps to drag: between the columns, and between a column's rows. */
+  const dividers = $derived.by(() => {
+    if (!shownGroup || !area) return [];
+    const frame = (id: number) => panes.find((p) => p.tab === id);
+    const out: { column: number | null; x: number; y: number; w: number; h: number }[] = [];
+    const first = frame(shownGroup.columns[0][0]);
+    if (shownGroup.columns.length > 1 && first) {
+      out.push({ column: null, x: first.x + first.width, y: area.y, w: INSET, h: area.h });
+    }
+    shownGroup.columns.forEach((column, i) => {
+      const top = frame(column[0]);
+      if (column.length > 1 && top) out.push({ column: i, x: top.x, y: top.y + top.height, w: top.width, h: INSET });
+    });
+    return out;
+  });
 
-  let pendingRatio: number | null = null;
+  let pendingRatio: { column: number | null; ratio: number } | null = null;
   let ratioInFlight = false;
-  async function pushRatio(ratio: number) {
-    pendingRatio = ratio;
+  async function pushRatio(column: number | null, ratio: number) {
+    pendingRatio = { column, ratio };
     if (ratioInFlight) return;
     ratioInFlight = true;
     while (pendingRatio != null) {
       const next = pendingRatio;
       pendingRatio = null;
-      await browser.setSplitRatio(next);
+      await browser.setGroupRatio(next.column, next.ratio);
     }
     ratioInFlight = false;
   }
 
-  function startSplitResize(event: PointerEvent) {
+  function startGroupResize(event: PointerEvent, column: number | null) {
     const handle = event.currentTarget as HTMLElement;
     handle.setPointerCapture(event.pointerId);
     const move = (e: PointerEvent) => {
+      if (!area) return;
       // Rust clamps too; clamp here so the handle doesn't run ahead.
-      const ratio = Math.min(0.8, Math.max(0.2, (e.clientX - contentLeft - INSET / 2) / paneRoom));
-      dragRatio = ratio;
-      pushRatio(ratio);
+      const across = column == null;
+      const offset = across ? e.clientX - area.x : e.clientY - area.y;
+      const room = (across ? area.w : area.h) - INSET;
+      pushRatio(column, Math.min(0.8, Math.max(0.2, (offset - INSET / 2) / room)));
     };
-    const end = () => {
-      dragRatio = null;
-      handle.removeEventListener("pointermove", move);
-    };
+    const end = () => handle.removeEventListener("pointermove", move);
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", end, { once: true });
     handle.addEventListener("pointercancel", end, { once: true });
   }
+
 
   function pinnedIn(folder: number | null) {
     return browserState.tabs.filter((t) => t.zone === "pinned" && t.space === activeSpace && t.folder === folder);
@@ -283,6 +311,21 @@
     return target;
   }
 
+  /** The latest point to preview a content drop at (sent one at a time). */
+  let dropPoint: [number, number] | null = null;
+  let previewing = false;
+  async function previewDrop(tab: number, point: [number, number] | null) {
+    dropPoint = point;
+    if (previewing) return;
+    previewing = true;
+    let sent: [number, number] | null | undefined;
+    while (sent !== dropPoint) {
+      sent = dropPoint;
+      await browser.previewGroupDrop(tab, sent);
+    }
+    previewing = false;
+  }
+
   function startDrag(event: PointerEvent, tab: Tab) {
     if (event.button !== 0) return;
     const el = event.currentTarget as HTMLElement;
@@ -295,10 +338,16 @@
       // Synthetic pointers (tests) can't be captured; moves still bubble here.
     }
 
+    // Over the content area, it drops beside the tab under the pointer
+    // (making or growing a group); Rust shows where.
+    let content: [number, number] | null = null;
     const move = (e: PointerEvent) => {
       if (!dragging && Math.hypot(e.clientX - startX, e.clientY - startY) < 4) return;
       dragging = true;
-      drag = { id: tab.id, target: hitTest(e.clientX, e.clientY, tab) };
+      const over = e.clientX >= contentLeft && browserState.active != null;
+      if (over || content) previewDrop(tab.id, over ? [e.clientX, e.clientY] : null);
+      content = over ? [e.clientX, e.clientY] : null;
+      drag = { id: tab.id, target: over ? null : hitTest(e.clientX, e.clientY, tab) };
     };
     const up = async () => {
       el.removeEventListener("pointermove", move);
@@ -306,13 +355,23 @@
       drag = null;
       if (!dragging) {
         browser.activateTab(tab.id);
+      } else if (content) {
+        dropPoint = null;
+        await browser.dropOnContent(tab.id, ...content);
       } else if (target) {
         await browser.moveTab(tab.id, target.zone, target.folder, target.index);
       }
     };
     el.addEventListener("pointermove", move);
     el.addEventListener("pointerup", up, { once: true });
-    el.addEventListener("pointercancel", () => (drag = null), { once: true });
+    el.addEventListener(
+      "pointercancel",
+      () => {
+        drag = null;
+        if (content) previewDrop(tab.id, null);
+      },
+      { once: true },
+    );
   }
 
   function markFor(tab: Tab): "before" | "after" | null {
@@ -516,6 +575,7 @@
     renaming = null;
     if (!target) return;
     if (target.kind === "space") browser.renameSpace(target.id, name);
+    else if (target.kind === "group") browser.renameGroup(target.id, name);
     else browser.renameFolder(target.id, name);
   }
 
@@ -532,12 +592,13 @@
   }
 </script>
 
-<svelte:window onkeydowncapture={exploreKeys} bind:innerWidth />
+<svelte:window onkeydowncapture={exploreKeys} />
 
 <!-- A Today row (page or terminal); indexes count the whole Today group. -->
 {#snippet todayRow(tab: Tab)}
   <TabRow
     {tab}
+    indent={groupOf(tab.id) != null}
     zone="today"
     index={today.indexOf(tab)}
     active={tab.id === browserState.active}
@@ -552,6 +613,49 @@
     onrename={(name) => renameTab(tab, name)}
     onpointerdown={(e) => startDrag(e, tab)}
   />
+{/snippet}
+
+<!-- A group's row, above its tabs: click to show them together. Its glyph
+     maps the layout. -->
+{#snippet groupRow(group: Group)}
+  <div
+    class="row group"
+    class:shown={group.id === browserState.shownGroup}
+    style:--split={groupColor(group)}
+    data-group={group.id}
+    role="button"
+    tabindex="0"
+    onclick={() => browser.showGroup(group.id)}
+    onkeydown={(e) => e.target === e.currentTarget && e.key === "Enter" && browser.showGroup(group.id)}
+  >
+    <svg class="group-glyph" viewBox="0 0 16 16" aria-hidden="true">
+      {#each group.columns as column, c}
+        {#each column as tab, r (tab)}
+          {@const x = group.columns.length > 1 ? (c ? 8.5 : 2) : 2}
+          {@const w = group.columns.length > 1 ? 5.5 : 12}
+          {@const y = column.length > 1 ? (r ? 8.5 : 2) : 2}
+          {@const h = column.length > 1 ? 5.5 : 12}
+          <rect {x} {y} width={w} height={h} rx="1.2" class:on={tab === browserState.active} />
+        {/each}
+      {/each}
+    </svg>
+    {#if renaming?.kind === "group" && renaming.id === group.id}
+      <input class="rename" value={group.name} use:focusSelect onblur={commitRename} onkeydown={renameKeys} />
+    {:else}
+      <span class="title" role="none" ondblclick={() => (renaming = { kind: "group", id: group.id })}>{group.name}</span>
+      <button
+        class="ungroup"
+        aria-label="Ungroup"
+        title="Ungroup"
+        onclick={(e) => {
+          e.stopPropagation();
+          browser.ungroup(group.id);
+        }}
+      >
+        <svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" /></svg>
+      </button>
+    {/if}
+  </div>
 {/snippet}
 
 <div
@@ -818,6 +922,10 @@
             </button>
             <nav class="tabs" class:drop-into={isDropInto("zone", "today")} data-drop="zone" data-zone="today">
               {#each todayPages as tab (tab.id)}
+                {@const group = groupOf(tab.id)}
+                {#if group && group.columns[0][0] === tab.id}
+                  {@render groupRow(group)}
+                {/if}
                 {@render todayRow(tab)}
               {/each}
             </nav>
@@ -883,20 +991,33 @@
   {/if}
 
   {#if !PEEK_VIEW}
-  <!-- Sits exactly under the active content view: draws its shadow, and the
+  <!-- Sits exactly under the content views: draws their shadows, and the
        empty state when nothing is open. -->
-  {#if activeSplit}
-    <main class="content pane" style:width="{leftPane}px"></main>
-    <main class="content pane right" style:left="{contentLeft + leftPane + INSET}px"></main>
-    <div
-      class="split-handle"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize split view"
-      style:left="{contentLeft + leftPane}px"
-      onpointerdown={startSplitResize}
-      ondblclick={() => pushRatio(0.5)}
-    ></div>
+  {#if shownGroup}
+    {#each panes as pane (pane.tab)}
+      <main
+        class="content pane"
+        style:left="{pane.x}px"
+        style:top="{pane.y}px"
+        style:width="{pane.width}px"
+        style:height="{pane.height}px"
+      ></main>
+    {/each}
+    {#each dividers as d (d.column)}
+      <div
+        class="split-handle"
+        class:stacked={d.column != null}
+        role="separator"
+        aria-orientation={d.column == null ? "vertical" : "horizontal"}
+        aria-label="Resize group"
+        style:left="{d.x}px"
+        style:top="{d.y}px"
+        style:width="{d.w}px"
+        style:height="{d.h}px"
+        onpointerdown={(e) => startGroupResize(e, d.column)}
+        ondblclick={() => pushRatio(d.column, 0.5)}
+      ></div>
+    {/each}
   {:else}
     <main class="content">
       {#if browserState.active == null}
@@ -1275,6 +1396,61 @@
   .folder-mark.after {
     bottom: -3px;
   }
+  /* A group's row: in its color, as are its tabs (indented under it). */
+  .group {
+    gap: 8px;
+    font-weight: 500;
+    background: color-mix(in srgb, var(--split) 12%, transparent);
+  }
+  .group:hover {
+    background: color-mix(in srgb, var(--split) 20%, transparent);
+  }
+  .group.shown {
+    background: color-mix(in srgb, var(--split) 30%, var(--tab-active));
+  }
+  .group .title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .group-glyph {
+    width: 16px;
+    height: 16px;
+    flex: none;
+  }
+  .group-glyph rect {
+    fill: none;
+    stroke: var(--split);
+    stroke-width: 1.2;
+  }
+  .group-glyph rect.on {
+    fill: var(--split);
+  }
+  .ungroup {
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    border-radius: 6px;
+    color: var(--text-muted);
+    opacity: 0;
+  }
+  .group:hover .ungroup {
+    opacity: 1;
+  }
+  .ungroup:hover {
+    background: var(--fill-hover);
+  }
+  .ungroup svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+  }
   .folder {
     gap: 6px;
     padding-left: 4px;
@@ -1450,30 +1626,33 @@
   }
   .content.pane {
     right: auto;
+    bottom: auto;
   }
-  .content.pane.right {
-    right: var(--inset);
-  }
-  /* The gap between split panes; a grip shows on hover. */
+  /* The gaps between a group's panes; a grip shows on hover. */
   .split-handle {
     position: absolute;
-    top: var(--inset);
-    bottom: var(--inset);
-    width: var(--inset);
     cursor: col-resize;
+  }
+  .split-handle.stacked {
+    cursor: row-resize;
   }
   .split-handle::after {
     content: "";
     position: absolute;
     top: 50%;
-    left: 2px;
+    left: 50%;
     width: 4px;
     height: 36px;
-    margin-top: -18px;
+    margin: -18px 0 0 -2px;
     border-radius: 2px;
     background: var(--separator);
     opacity: 0;
     transition: opacity 120ms ease;
+  }
+  .split-handle.stacked::after {
+    width: 36px;
+    height: 4px;
+    margin: -2px 0 0 -18px;
   }
   .split-handle:hover::after {
     opacity: 1;

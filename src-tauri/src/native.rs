@@ -17,7 +17,7 @@ use objc2_foundation::{
 };
 use tauri::{AppHandle, Manager, Webview};
 
-use crate::browser::{self, NativeState, Pane};
+use crate::browser::{self, NativeState};
 
 /// Pin the view's margins to its superview so AppKit resizes it in the same
 /// frame as the window. This avoids an event-loop/IPC hop per frame during
@@ -87,19 +87,38 @@ fn pin_to_superview(view: &NSView) {
     );
 }
 
-/// How a content view resizes with the window: the full content area pins
-/// all four edges; a split pane also lets its outer margin grow, so the two
-/// panes share a resize roughly evenly until `browser` lays them out exactly.
-pub fn set_pane(webview: &Webview, pane: Pane) {
+/// How AppKit resizes a content view with the window until the next exact
+/// layout: the whole content area tracks it, a group's pane scales with it.
+pub fn set_pane(webview: &Webview, whole: bool) {
     let _ = webview.with_webview(move |platform| unsafe {
         let sizable = NSAutoresizingMaskOptions::ViewWidthSizable
             | NSAutoresizingMaskOptions::ViewHeightSizable;
-        let mask = match pane {
-            Pane::Full => sizable,
-            Pane::Left => sizable | NSAutoresizingMaskOptions::ViewMaxXMargin,
-            Pane::Right => sizable | NSAutoresizingMaskOptions::ViewMinXMargin,
+        let mask = if whole {
+            sizable
+        } else {
+            sizable
+                | NSAutoresizingMaskOptions::ViewMinXMargin
+                | NSAutoresizingMaskOptions::ViewMaxXMargin
+                | NSAutoresizingMaskOptions::ViewMinYMargin
+                | NSAutoresizingMaskOptions::ViewMaxYMargin
         };
         view(platform.inner()).setAutoresizingMask(mask);
+    });
+}
+
+/// Put `webview` right below `other` (the terminal view under a group's
+/// pages: it spans the terminals' panes, which can reach around a page).
+pub fn place_below(webview: &Webview, other: &Webview) {
+    let other = other.clone();
+    let _ = webview.with_webview(move |platform| {
+        let below = platform.inner() as usize;
+        let _ = other.with_webview(move |other| unsafe {
+            let below = view(below as *mut c_void);
+            let other = view(other.inner());
+            if let Some(superview) = other.superview() {
+                superview.addSubview_positioned_relativeTo(below, NSWindowOrderingMode::Below, Some(other));
+            }
+        });
     });
 }
 
@@ -380,6 +399,45 @@ pub fn set_dim(ui: &Webview, frame: Option<(f64, f64, f64, f64)>, radius: f64) {
         });
         dim.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(width, height)));
         parent.addSubview_positioned_relativeTo(&dim, NSWindowOrderingMode::Above, None);
+    });
+}
+
+thread_local! {
+    static DROP_HINT: RefCell<Option<Retained<NSBox>>> = const { RefCell::new(None) };
+}
+
+/// While a tab is dragged over the content area: a tinted box over where it
+/// would land (x, y, width, height from the window's top left), above all
+/// content views; `None` removes it.
+pub fn set_drop_hint(ui: &Webview, frame: Option<(f64, f64, f64, f64)>, radius: f64) {
+    let _ = ui.with_webview(move |platform| unsafe {
+        let mtm = MainThreadMarker::new().expect("with_webview runs on the main thread");
+        let Some((x, y, width, height)) = frame else {
+            if let Some(hint) = DROP_HINT.take() {
+                hint.removeFromSuperview();
+            }
+            return;
+        };
+        let Some(parent) = view(platform.inner()).superview() else {
+            return;
+        };
+        let hint = DROP_HINT.with_borrow_mut(|slot| {
+            slot.get_or_insert_with(|| {
+                let hint = NSBox::new(mtm);
+                hint.setBoxType(NSBoxType::Custom);
+                hint.setTitlePosition(NSTitlePosition::NoTitle);
+                hint.setBorderWidth(2.0);
+                hint.setCornerRadius(radius);
+                let accent = NSColor::controlAccentColor();
+                hint.setBorderColor(&accent.colorWithAlphaComponent(0.9));
+                hint.setFillColor(&accent.colorWithAlphaComponent(0.22));
+                hint
+            })
+            .clone()
+        });
+        let y = if parent.isFlipped() { y } else { parent.frame().size.height - y - height };
+        hint.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(width, height)));
+        parent.addSubview_positioned_relativeTo(&hint, NSWindowOrderingMode::Above, None);
     });
 }
 

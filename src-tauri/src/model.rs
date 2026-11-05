@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::group::{self, Group, Place};
 use crate::panes::{Node, Panes};
 
 pub const DEFAULT_SIDEBAR_WIDTH: f64 = 240.0;
@@ -149,37 +150,6 @@ pub struct ProfileGroup {
     pub spaces: Vec<u32>,
 }
 
-/// Two tabs shown side by side, in the same space (usually `right` right
-/// below `left` in the sidebar). At most one is a terminal: terminals share
-/// one webview.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Split {
-    pub left: u32,
-    pub right: u32,
-    /// The left pane's share of the width.
-    pub ratio: f64,
-}
-
-pub const MIN_SPLIT_RATIO: f64 = 0.2;
-pub const MAX_SPLIT_RATIO: f64 = 0.8;
-
-impl Split {
-    pub fn has(&self, tab: u32) -> bool {
-        self.left == tab || self.right == tab
-    }
-
-    pub fn partner(&self, tab: u32) -> Option<u32> {
-        if self.left == tab {
-            Some(self.right)
-        } else if self.right == tab {
-            Some(self.left)
-        } else {
-            None
-        }
-    }
-}
-
 /// A closed Today tab, kept for "reopen" (⇧⌘T, the command bar).
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -191,6 +161,17 @@ pub struct ClosedTab {
     pub title: String,
     pub name: Option<String>,
     pub space: u32,
+}
+
+/// A tab on screen and where (see `Snapshot::screen`).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenFrame {
+    pub tab: u32,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 /// Longest tab name kept, in characters.
@@ -206,7 +187,13 @@ pub struct Snapshot {
     profiles: Vec<ProfileGroup>,
     /// Oldest first.
     closed: Vec<ClosedTab>,
-    splits: Vec<Split>,
+    groups: Vec<Group>,
+    /// The group on screen, if the active tab's group is showing (rather
+    /// than the tab alone).
+    shown_group: Option<u32>,
+    /// Frames of the tabs on screen, in window coordinates (logical px);
+    /// filled in by `browser.rs`, which knows the window.
+    pub screen: Vec<ScreenFrame>,
     active: Option<u32>,
     active_space: u32,
     sidebar_width: f64,
@@ -220,7 +207,13 @@ pub struct State {
     pub folders: Vec<Folder>,
     /// Names given to separate profiles, by profile id.
     pub profile_names: HashMap<String, String>,
-    pub splits: Vec<Split>,
+    /// Tab groups. Their tabs sit together in Today, in group order.
+    pub groups: Vec<Group>,
+    /// The active tab's group is on screen, rather than the tab alone.
+    pub group_shown: bool,
+    /// The tab last active in each group, by group id (focused when the
+    /// group shows again).
+    group_last: HashMap<u32, u32>,
     pub active: Option<u32>,
     pub active_space: u32,
     /// The tab last shown in each space, restored when switching back.
@@ -250,7 +243,9 @@ impl Default for State {
             }],
             folders: Vec::new(),
             profile_names: HashMap::new(),
-            splits: Vec::new(),
+            groups: Vec::new(),
+            group_shown: false,
+            group_last: HashMap::new(),
             active: None,
             active_space: 1,
             last_active: HashMap::new(),
@@ -273,7 +268,9 @@ impl State {
             folders: self.folders.clone(),
             profiles: self.profile_groups(),
             closed: self.closed.clone(),
-            splits: self.splits.clone(),
+            groups: self.groups.clone(),
+            shown_group: self.shown_group().map(|g| g.id),
+            screen: Vec::new(),
             active: self.active,
             active_space: self.active_space,
             sidebar_width: self.sidebar_width,
@@ -400,7 +397,23 @@ impl State {
             None => members.last().map_or(self.tabs.len(), |&i| i + 1),
         };
         self.tabs.insert(at, tab);
-        self.prune_splits();
+        // Dragged away from its group's tabs: it leaves the group.
+        if let Some(group) = self.group_of(id).cloned() {
+            let order: Vec<u32> = self
+                .tabs
+                .iter()
+                .filter(|t| self.in_group(t, Zone::Today, space, None))
+                .map(|t| t.id)
+                .collect();
+            let beside = order.iter().position(|&t| t == id).is_some_and(|i| {
+                let near = |j: Option<usize>| j.and_then(|j| order.get(j)).is_some_and(|&t| group.has(t));
+                near(i.checked_sub(1)) || near(Some(i + 1))
+            });
+            if !beside {
+                self.ungroup_tab(id);
+            }
+        }
+        self.prune_groups();
         before != (zone, space, folder, at)
     }
 
@@ -419,8 +432,9 @@ impl State {
             out.extend(ids(Zone::Pinned, Some(folder.id)));
         }
         out.extend(ids(Zone::Pinned, None));
-        let (terminals, pages): (Vec<u32>, Vec<u32>) = ids(Zone::Today, None)
-            .partition(|&id| self.tab(id).is_some_and(|t| t.kind == TabKind::Terminal));
+        let (terminals, pages): (Vec<u32>, Vec<u32>) = ids(Zone::Today, None).partition(|&id| {
+            self.tab(id).is_some_and(|t| t.kind == TabKind::Terminal) && self.group_of(id).is_none()
+        });
         out.extend(pages);
         out.extend(terminals);
         out
@@ -430,7 +444,13 @@ impl State {
     /// the previously active tab, or `None` if `id` doesn't exist. A
     /// favorite keeps the space only if it shares the space's profile: one
     /// from another profile is signed in as that profile, so its space shows.
+    /// Focus moving within the group on screen keeps it there; any other
+    /// tab shows alone.
     pub fn focus(&mut self, id: u32) -> Option<Option<u32>> {
+        self.group_shown = self.shown_group().is_some_and(|g| g.has(id));
+        if let Some(group) = self.group_of(id).map(|g| g.id) {
+            self.group_last.insert(group, id);
+        }
         let tab = self.tab(id)?;
         let shared_here = tab.zone == Zone::Favorite
             && self.profile_of(tab.space) == self.profile_of(self.active_space);
@@ -460,7 +480,7 @@ impl State {
             return Some(self.tabs[index].clone());
         }
         let tab = self.tabs.remove(index);
-        self.prune_splits();
+        self.prune_groups();
         self.closed.push(ClosedTab {
             id: self.next_closed_id,
             kind: tab.kind,
@@ -501,102 +521,167 @@ impl State {
         Some(closed)
     }
 
-    // --- Split view -------------------------------------------------------
+    // --- Groups ------------------------------------------------------------
 
-    pub fn split_of(&self, tab: u32) -> Option<&Split> {
-        self.splits.iter().find(|s| s.has(tab))
+    pub fn group_of(&self, tab: u32) -> Option<&Group> {
+        self.groups.iter().find(|g| g.has(tab))
     }
 
-    /// The tab shown beside `tab`, if it's in a split.
-    pub fn split_partner(&self, tab: u32) -> Option<u32> {
-        self.split_of(tab)?.partner(tab)
+    fn group_mut(&mut self, id: u32) -> Option<&mut Group> {
+        self.groups.iter_mut().find(|g| g.id == id)
     }
 
-    /// The tabs on screen with `tab`: itself, plus its split partner.
-    pub fn shown_with(&self, tab: u32) -> Vec<u32> {
-        match self.split_of(tab) {
-            Some(split) => vec![split.left, split.right],
-            None => vec![tab],
+    /// The group on screen: the active tab's, while it's showing.
+    pub fn shown_group(&self) -> Option<&Group> {
+        self.group_of(self.active?).filter(|_| self.group_shown)
+    }
+
+    /// The tabs on screen: the shown group's, else the active tab.
+    pub fn on_screen(&self) -> Vec<u32> {
+        match self.shown_group() {
+            Some(group) => group.tabs().collect(),
+            None => self.active.into_iter().collect(),
         }
     }
 
-    /// Show `right` beside `left`; either leaves any split it was in.
-    /// `right` moves right below `left` in the sidebar when it can (a
-    /// terminal can't follow a pinned tab: terminals only live in Today).
-    /// Refused for favorites (they belong to every space of a profile),
-    /// tabs in different spaces, and two terminals.
-    pub fn create_split(&mut self, left: u32, right: u32) -> bool {
-        if !self.can_split(left, right) {
-            return false;
-        }
-        let (Some(l), Some(r)) = (self.tab(left), self.tab(right)) else {
+    /// Whether `tab` can join `target` (and `target`'s group, if any) at
+    /// `place`. Both must be in the same space and not favorites (those
+    /// belong to every space of a profile). Pinned tabs move to Today.
+    pub fn can_place(&self, tab: u32, target: u32, place: Place) -> bool {
+        let (Some(t), Some(at)) = (self.tab(tab), self.tab(target)) else {
             return false;
         };
-        let (zone, folder, space) = (l.zone, l.folder, l.space);
-        let follows = r.kind == TabKind::Web || zone == Zone::Today;
-        self.splits.retain(|s| !s.has(left) && !s.has(right));
-        if follows {
-            // `move_tab` counts positions without the moved tab.
-            let index = self
-                .tabs
-                .iter()
-                .filter(|t| t.id != right && self.in_group(t, zone, space, folder))
-                .position(|t| t.id == left)
-                .map_or(0, |i| i + 1);
-            let active = std::mem::replace(&mut self.active_space, space);
-            self.move_tab(right, zone, folder, index);
-            self.active_space = active;
+        if t.space != at.space || t.zone == Zone::Favorite || at.zone == Zone::Favorite {
+            return false;
         }
-        self.splits.push(Split {
-            left,
-            right,
-            ratio: 0.5,
-        });
+        match self.group_of(target) {
+            Some(group) => group.can_place(tab, target, place),
+            None => Group::new(0, String::new(), target).can_place(tab, target, place),
+        }
+    }
+
+    /// Put `tab` beside `target` at `place`: into `target`'s group, or a new
+    /// group of the two. `tab` leaves any other group. The group shows, with
+    /// `tab` active. Returns the group's id, or `None` if it doesn't fit.
+    pub fn place_tab(&mut self, tab: u32, target: u32, place: Place) -> Option<u32> {
+        if !self.can_place(tab, target, place) {
+            return None;
+        }
+        let id = match self.group_of(target) {
+            Some(group) => group.id,
+            None => {
+                let id = self.next_group_id();
+                let name = self.next_group_name();
+                self.groups.push(Group::new(id, name, target));
+                id
+            }
+        };
+        if let Some(other) = self.group_of(tab).map(|g| g.id) {
+            self.group_mut(other)?.remove(tab);
+        }
+        // Groups live in Today.
+        for id in [tab, target] {
+            if let Some(t) = self.tab_mut(id) {
+                t.zone = Zone::Today;
+                t.folder = None;
+            }
+        }
+        self.group_mut(id)?.place(tab, target, place);
+        self.prune_groups();
+        self.focus(tab);
+        self.group_shown = true;
+        Some(id)
+    }
+
+    /// "Group N", the lowest N not taken.
+    fn next_group_name(&self) -> String {
+        (1..)
+            .map(|n| format!("Group {n}"))
+            .find(|name| !self.groups.iter().any(|g| &g.name == name))
+            .unwrap_or_default()
+    }
+
+    /// Take a tab out of its group; the rest fill its space (a group of one
+    /// ends). Returns whether it was in one.
+    pub fn ungroup_tab(&mut self, tab: u32) -> bool {
+        let Some(id) = self.group_of(tab).map(|g| g.id) else {
+            return false;
+        };
+        self.group_mut(id).map(|g| g.remove(tab));
+        self.prune_groups();
         true
     }
 
-    /// Whether two tabs can be shown side by side (see `create_split`).
-    pub fn can_split(&self, left: u32, right: u32) -> bool {
-        let (Some(l), Some(r)) = (self.tab(left), self.tab(right)) else {
-            return false;
-        };
-        left != right
-            && l.space == r.space
-            && l.zone != Zone::Favorite
-            && r.zone != Zone::Favorite
-            && !(l.kind == TabKind::Terminal && r.kind == TabKind::Terminal)
+    /// End a group: its tabs stay, each on its own.
+    pub fn remove_group(&mut self, id: u32) -> Option<Group> {
+        let index = self.groups.iter().position(|g| g.id == id)?;
+        Some(self.groups.remove(index))
     }
 
-    /// End the split `tab` is in. Returns it.
-    pub fn remove_split(&mut self, tab: u32) -> Option<Split> {
-        let index = self.splits.iter().position(|s| s.has(tab))?;
-        Some(self.splits.remove(index))
+    pub fn rename_group(&mut self, id: u32, name: &str) {
+        let name = name.trim();
+        if let (Some(group), false) = (self.group_mut(id), name.is_empty()) {
+            group.name = name.chars().take(MAX_TAB_NAME).collect();
+        }
     }
 
-    /// Set the left pane's share of the split `tab` is in (clamped).
-    /// Returns the ratio applied.
-    pub fn set_split_ratio(&mut self, tab: u32, ratio: f64) -> Option<f64> {
-        let split = self.splits.iter_mut().find(|s| s.has(tab))?;
-        split.ratio = ratio.clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
-        Some(split.ratio)
+    /// Show a group: its tabs together, with the one last active focused.
+    pub fn show_group(&mut self, id: u32) -> Option<u32> {
+        let group = self.groups.iter().find(|g| g.id == id)?;
+        let tab = self
+            .group_last
+            .get(&id)
+            .copied()
+            .filter(|t| group.has(*t))
+            .or_else(|| group.tabs().next())?;
+        self.focus(tab);
+        self.group_shown = true;
+        Some(tab)
     }
 
-    /// Drop splits whose tabs are gone or can't be shown together any more
-    /// (one was closed, moved to another space, or became a favorite).
-    fn prune_splits(&mut self) {
-        let together = |s: &State, split: &Split| {
-            let (Some(l), Some(r)) = (s.tab(split.left), s.tab(split.right)) else {
-                return false;
+    /// Resize a group's columns (`column: None`) or a column's rows.
+    pub fn set_group_ratio(&mut self, id: u32, column: Option<usize>, ratio: f64) -> Option<f64> {
+        self.group_mut(id)?.set_ratio(column, ratio)
+    }
+
+    /// Keep groups to what can be shown together: tabs that still exist,
+    /// in Today, in one space (moving a tab elsewhere takes it out); groups
+    /// of fewer than two end. Then sit
+    /// each group's tabs together in Today, in group order, where its first
+    /// tab is.
+    fn prune_groups(&mut self) {
+        let mut groups = std::mem::take(&mut self.groups);
+        for group in &mut groups {
+            let space = group.tabs().find_map(|t| self.tab(t)).map(|t| t.space);
+            let gone: Vec<u32> = group
+                .tabs()
+                .filter(|&t| {
+                    self.tab(t)
+                        .is_none_or(|x| x.zone != Zone::Today || Some(x.space) != space)
+                })
+                .collect();
+            for t in gone {
+                group.remove(t);
+            }
+        }
+        groups.retain(|g| g.len() > 1);
+        for group in &groups {
+            let ids: Vec<u32> = group.tabs().collect();
+            // None of them comes before the first, so they all go back in
+            // at its index.
+            let Some(at) = self.tabs.iter().position(|t| ids.contains(&t.id)) else {
+                continue;
             };
-            l.space == r.space && l.zone != Zone::Favorite && r.zone != Zone::Favorite
-        };
-        let keep: Vec<bool> = self
-            .splits
-            .iter()
-            .map(|split| together(self, split))
-            .collect();
-        let mut keep = keep.into_iter();
-        self.splits.retain(|_| keep.next().unwrap_or(false));
+            let members: Vec<Tab> = ids
+                .iter()
+                .filter_map(|id| {
+                    let i = self.tabs.iter().position(|t| t.id == *id)?;
+                    Some(self.tabs.remove(i))
+                })
+                .collect();
+            self.tabs.splice(at..at, members);
+        }
+        self.groups = groups;
     }
 
     // --- Spaces ----------------------------------------------------------
@@ -702,7 +787,7 @@ impl State {
             })
             .partition(|t| t.space == id);
         self.tabs = kept;
-        self.prune_splits();
+        self.prune_groups();
         self.folders.retain(|f| f.space != id);
         self.last_active.remove(&id);
         self.closed.retain(|c| c.space != id);
@@ -905,18 +990,40 @@ impl State {
                 id
             })
             .collect();
-        state.splits = saved
-            .splits
-            .into_iter()
-            .filter_map(|(left, right, ratio)| {
-                Some(Split {
-                    left: *ids.get(left)?,
-                    right: *ids.get(right)?,
-                    ratio: ratio.clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO),
-                })
-            })
-            .collect();
-        state.prune_splits();
+        let index = |i: &usize| ids.get(*i).copied();
+        let legacy = saved.splits.iter().map(|&(left, right, ratio)| SavedGroup {
+            name: String::new(),
+            columns: vec![vec![left], vec![right]],
+            ratio,
+            rows: vec![0.5, 0.5],
+        });
+        for saved in saved.groups.into_iter().chain(legacy) {
+            let columns: Vec<Vec<u32>> = saved
+                .columns
+                .iter()
+                .map(|c| c.iter().filter_map(index).take(2).collect::<Vec<_>>())
+                .filter(|c| !c.is_empty())
+                .take(2)
+                .collect();
+            let id = state.next_group_id();
+            let name = match saved.name.trim() {
+                "" => state.next_group_name(),
+                name => name.to_string(),
+            };
+            let rows = (0..columns.len())
+                .map(|i| saved.rows.get(i).copied().unwrap_or(0.5))
+                .map(|r| r.clamp(group::MIN_RATIO, group::MAX_RATIO))
+                .collect();
+            state.groups.push(Group {
+                id,
+                name,
+                columns,
+                ratio: saved.ratio.clamp(group::MIN_RATIO, group::MAX_RATIO),
+                rows,
+            });
+        }
+        state.prune_groups();
+        state.group_shown = saved.group_shown;
         for (space, index) in saved.last_active {
             if let Some(&id) = ids.get(index) {
                 state.last_active.insert(space, id);
@@ -959,11 +1066,22 @@ impl State {
                 .map(|(id, name)| (id.clone(), name.clone()))
                 .collect(),
             active_space: Some(self.active_space),
-            splits: self
-                .splits
+            groups: self
+                .groups
                 .iter()
-                .filter_map(|s| Some((index(s.left)?, index(s.right)?, s.ratio)))
+                .map(|g| SavedGroup {
+                    name: g.name.clone(),
+                    columns: g
+                        .columns
+                        .iter()
+                        .map(|c| c.iter().filter_map(|&t| index(t)).collect())
+                        .collect(),
+                    ratio: g.ratio,
+                    rows: g.rows.clone(),
+                })
                 .collect(),
+            group_shown: self.group_shown,
+            splits: Vec::new(),
             last_active: self
                 .last_active
                 .iter()
@@ -998,6 +1116,16 @@ pub struct SavedTab {
     pub panes: Option<Node>,
 }
 
+/// A tab group; tabs are indexes into `Saved::tabs`.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedGroup {
+    pub name: String,
+    pub columns: Vec<Vec<usize>>,
+    pub ratio: f64,
+    pub rows: Vec<f64>,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Saved {
@@ -1015,9 +1143,14 @@ pub struct Saved {
     /// `(space id, index into tabs)`.
     #[serde(default)]
     pub last_active: Vec<(u32, usize)>,
-    /// `(left, right, ratio)`, indexes into `tabs`.
-    #[serde(default)]
+    /// Before groups: two tabs side by side, `(left, right, ratio)`,
+    /// indexes into `tabs`. Read as groups.
+    #[serde(default, skip_serializing)]
     pub splits: Vec<(usize, usize, f64)>,
+    #[serde(default)]
+    pub groups: Vec<SavedGroup>,
+    #[serde(default)]
+    pub group_shown: bool,
     pub sidebar_width: f64,
     pub sidebar_collapsed: bool,
 }
@@ -1486,92 +1619,120 @@ mod tests {
     }
 
     #[test]
-    fn split_puts_the_second_tab_below_the_first() {
+    fn grouping_tabs_sits_them_together_and_shows_the_group() {
         let mut s = State::default();
         let a = web(&mut s, "a");
         let b = web(&mut s, "b");
         let c = web(&mut s, "c"); // Today: c, b, a
-        assert!(s.create_split(c, a));
+        let g = s.place_tab(a, c, Place::Right).unwrap();
         assert_eq!(titles(&s, &s.visible_order(1)), ["c", "a", "b"]);
-        assert_eq!(s.split_partner(a), Some(c));
-        assert_eq!(s.shown_with(c), [c, a]);
-        assert_eq!(s.shown_with(b), [b]);
+        assert_eq!(s.groups[0].name, "Group 1");
+        assert_eq!((s.active, s.shown_group().map(|g| g.id)), (Some(a), Some(g)));
+        assert_eq!(s.on_screen(), [c, a]);
 
-        // A tab is in one split at a time: splitting it again ends the old one.
-        assert!(s.create_split(b, a));
-        assert_eq!(s.splits.len(), 1);
-        assert_eq!(s.split_partner(c), None);
-        assert_eq!(s.split_partner(b), Some(a));
+        // A third beside them; focus moving inside keeps the group up.
+        s.place_tab(b, a, Place::Bottom).unwrap();
+        assert_eq!(s.on_screen(), [c, a, b]);
+        s.focus(c);
+        assert_eq!(s.on_screen(), [c, a, b]);
+        // Another tab shows alone; showing the group again focuses the last.
+        let d = web(&mut s, "d");
+        s.focus(d);
+        assert_eq!(s.on_screen(), [d]);
+        assert_eq!(s.show_group(g), Some(c));
+        assert_eq!(s.on_screen(), [c, a, b]);
+        // A tab of the group, alone.
+        s.group_shown = false;
+        s.focus(a);
+        assert_eq!(s.on_screen(), [a]);
+
+        // New groups take the next free name.
+        let e = web(&mut s, "e");
+        s.place_tab(e, d, Place::Left).unwrap();
+        assert_eq!(s.groups[1].name, "Group 2");
+        s.rename_group(g, "  Research ");
+        assert_eq!(s.groups[0].name, "Research");
     }
 
     #[test]
-    fn split_rules() {
+    fn group_rules() {
         let mut s = State::default();
         let a = web(&mut s, "a");
         let t1 = term(&mut s);
         let t2 = term(&mut s);
-        assert!(!s.create_split(a, a), "not with itself");
-        assert!(!s.create_split(t1, t2), "two terminals share one view");
+        assert!(!s.can_place(a, a, Place::Right), "not beside itself");
+        assert!(s.place_tab(t2, t1, Place::Right).is_some(), "terminals group too");
+        assert_eq!(titles(&s, &s.visible_order(1)), ["Terminal", "Terminal", "a"], "with the pages");
         let fav = web(&mut s, "fav");
         s.move_tab(fav, Zone::Favorite, None, 0);
-        assert!(!s.create_split(a, fav), "favorites belong to every space");
+        assert!(!s.can_place(fav, a, Place::Right), "favorites belong to every space");
         let work = s.add_space(None);
         s.switch_space(work);
         let w = web(&mut s, "w");
-        assert!(!s.create_split(a, w), "same space only");
+        assert!(!s.can_place(w, a, Place::Right), "same space only");
 
-        // A pinned page and a terminal: the terminal stays in Today.
+        // A pinned tab joins in Today.
         s.switch_space(1);
         s.move_tab(a, Zone::Pinned, None, 0);
-        assert!(s.create_split(a, t1));
-        assert_eq!(s.tab(t1).unwrap().zone, Zone::Today);
-        assert_eq!(s.split_partner(t1), Some(a));
+        let p = web(&mut s, "p");
+        s.place_tab(p, a, Place::Right).unwrap();
+        assert_eq!(s.tab(a).unwrap().zone, Zone::Today);
     }
 
     #[test]
-    fn splits_end_when_a_tab_closes_leaves_or_becomes_a_favorite() {
+    fn tabs_leave_groups_by_closing_moving_or_ungrouping() {
         let mut s = State::default();
         let a = web(&mut s, "a");
         let b = web(&mut s, "b");
-        s.create_split(a, b);
-        s.remove_tab(b);
-        assert!(s.splits.is_empty(), "closed");
-
         let c = web(&mut s, "c");
-        s.create_split(a, c);
-        s.move_tab(c, Zone::Favorite, None, 0);
-        assert!(s.splits.is_empty(), "favorite");
+        s.place_tab(b, a, Place::Right);
+        s.place_tab(c, b, Place::Bottom);
+        s.remove_tab(c);
+        assert_eq!(s.groups[0].columns, [vec![a], vec![b]], "closed: the rest fill in");
+        s.move_tab(b, Zone::Pinned, None, 0);
+        assert!(s.groups.is_empty(), "pinned away; a group of one ends");
 
         let d = web(&mut s, "d");
-        s.create_split(a, d);
-        s.move_tab(d, Zone::Pinned, None, 0);
-        assert_eq!(s.split_partner(a), Some(d), "pinning one keeps the split");
-        assert_eq!(s.remove_split(a).map(|x| x.right), Some(d));
-        assert!(s.splits.is_empty());
+        let e = web(&mut s, "e");
+        let f = web(&mut s, "f"); // Today: f, e, d, a
+        s.place_tab(d, a, Place::Right);
+        s.place_tab(e, a, Place::Bottom);
+        assert_eq!(titles(&s, &s.visible_order(1)), ["b", "f", "a", "e", "d"]);
+        s.move_tab(e, Zone::Today, None, 0);
+        assert_eq!(s.groups[0].columns, [vec![a], vec![d]], "dragged out of the block");
+        s.move_tab(f, Zone::Today, None, 3);
+        assert_eq!(titles(&s, &s.visible_order(1)), ["b", "e", "a", "d", "f"], "a stranger can't split a group");
+        assert!(s.ungroup_tab(d) && s.groups.is_empty());
     }
 
     #[test]
-    fn split_ratio_is_clamped_and_splits_are_saved() {
+    fn groups_are_saved_with_their_layout() {
         let mut s = State::default();
         let a = web(&mut s, "a");
         let b = web(&mut s, "b");
-        s.create_split(a, b);
-        assert_eq!(s.set_split_ratio(b, 0.05), Some(MIN_SPLIT_RATIO));
-        assert_eq!(s.set_split_ratio(a, 0.7), Some(0.7));
-        assert_eq!(s.set_split_ratio(999, 0.5), None);
+        let c = web(&mut s, "c");
+        let g = s.place_tab(b, a, Place::Right).unwrap();
+        s.place_tab(c, b, Place::Bottom);
+        s.rename_group(g, "Work");
+        assert_eq!(s.set_group_ratio(g, None, 0.05), Some(group::MIN_RATIO));
+        assert_eq!(s.set_group_ratio(g, Some(1), 0.7), Some(0.7));
 
-        let r = State::restore(
-            serde_json::from_str(&serde_json::to_string(&s.save()).unwrap()).unwrap(),
-        );
-        let split = &r.splits[0];
-        assert_eq!(
-            (
-                r.tab(split.left).unwrap().title.as_str(),
-                r.tab(split.right).unwrap().title.as_str(),
-                split.ratio
-            ),
-            ("a", "b", 0.7)
-        );
+        let r = State::restore(serde_json::from_str(&serde_json::to_string(&s.save()).unwrap()).unwrap());
+        let g = &r.groups[0];
+        let names: Vec<Vec<&str>> = g
+            .columns
+            .iter()
+            .map(|c| c.iter().map(|&t| r.tab(t).unwrap().title.as_str()).collect())
+            .collect();
+        assert_eq!(names, [vec!["a"], vec!["b", "c"]]);
+        assert_eq!((g.name.as_str(), g.ratio, g.rows[1]), ("Work", group::MIN_RATIO, 0.7));
+        assert!(r.group_shown);
+
+        // Sessions from before groups: a split is a group of two.
+        let old = r#"{"tabs":[{"kind":"web","url":"x","title":"x"},{"kind":"web","url":"y","title":"y"}],
+            "active":0,"splits":[[0,1,0.3]],"sidebarWidth":240,"sidebarCollapsed":false}"#;
+        let r = State::restore(serde_json::from_str(old).unwrap());
+        assert_eq!((r.groups[0].name.as_str(), r.groups[0].ratio, r.groups[0].len()), ("Group 1", 0.3, 2));
     }
 
     #[test]

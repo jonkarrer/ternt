@@ -64,8 +64,8 @@ export const HOW_TOS: HowTo[] = [
     text: "Use the folder button by the space name. Drag tabs onto a folder or between its tabs, and drag a folder by its header to reorder.",
   },
   {
-    title: "Two tabs side by side",
-    text: "Right-click a tab → Open in Split View. Drag the gap to resize; double-click it for half and half.",
+    title: "Group tabs side by side",
+    text: "Drag a tab from the sidebar onto the page: drop it on the half of a tab where it should go (up to four tabs, pages or terminals). Click the group's row to show it, one of its tabs to show just that one. Drag the gaps to resize.",
   },
   {
     title: "Split a terminal",

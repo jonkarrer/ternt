@@ -1,6 +1,7 @@
 mod browser;
 #[cfg(all(debug_assertions, target_os = "macos"))]
 mod debug;
+mod group;
 mod history;
 mod icons;
 mod little;
@@ -98,7 +99,12 @@ pub fn run() {
             icons::site_icon,
             browser::rename_profile,
             browser::split_view,
-            browser::set_split_ratio,
+            browser::set_group_ratio,
+            browser::show_group,
+            browser::rename_group,
+            browser::ungroup,
+            browser::preview_group_drop,
+            browser::drop_on_content,
             browser::reopen_closed,
             browser::clear_profile_history,
             browser::create_folder,

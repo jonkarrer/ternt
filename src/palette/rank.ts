@@ -1,7 +1,7 @@
 // Command bar results: what to offer for a query, in what order. Pure data
 // in, data out (no Tauri calls), so it's unit-tested in rank.test.ts; the
 // palette performs each item's `action`.
-import type { ClosedTab, HistoryHit, PaletteMode, Space, Split, Tab } from "../lib/browser";
+import type { ClosedTab, HistoryHit, Group, PaletteMode, Space, Tab } from "../lib/browser";
 import { hostOf, parseInput, tabLabel } from "../lib/url";
 
 /** `top` holds the best matches, shown without a header. */
@@ -47,7 +47,7 @@ export type Command = {
   tab?: boolean;
   /** Hidden when the active tab is already in this zone. */
   unless?: Tab["zone"];
-  /** Only when the active tab is in a split view. */
+  /** Only when the active tab is in a group. */
   split?: boolean;
 };
 
@@ -65,8 +65,8 @@ export const COMMANDS: Command[] = [
   { id: "next-space", label: "Next Space", shortcut: "⌥⌘→" },
   { id: "previous-space", label: "Previous Space", shortcut: "⌥⌘←" },
   { id: "new-folder", label: "New Folder" },
-  { id: "split-terminal", label: "Split View with New Terminal", shortcut: "⌥⌘\\", keywords: "side by side shell", web: true },
-  { id: "unsplit", label: "Close Split View", keywords: "side by side", split: true },
+  { id: "split-terminal", label: "Split View with New Terminal", shortcut: "⌥⌘\\", keywords: "side by side shell group" },
+  { id: "unsplit", label: "Ungroup Tabs", keywords: "split view side by side group", split: true },
   { id: "split-right", label: "Split Right", shortcut: "⌘D", keywords: "pane terminal vertical", terminal: true },
   { id: "split-down", label: "Split Down", shortcut: "⇧⌘D", keywords: "pane terminal horizontal", terminal: true },
   { id: "next-pane", label: "Next Pane", shortcut: "⌘]", keywords: "terminal split", terminal: true },
@@ -94,7 +94,7 @@ export interface Context {
   history: HistoryHit[];
   /** Closed tabs, oldest first. */
   closed: ClosedTab[];
-  splits: Split[];
+  groups: Group[];
 }
 
 /** How well `text` matches the lowercase query `q`: 0 (no match) to 100. */
@@ -149,7 +149,7 @@ export function buildItems(raw: string, ctx: Context): Item[] {
       (!c.terminal || activeTab?.kind === "terminal") &&
       (!c.tab || activeTab) &&
       (!c.unless || activeTab?.zone !== c.unless) &&
-      (!c.split || ctx.splits.some((s) => s.left === activeId || s.right === activeId)),
+      (!c.split || ctx.groups.some((g) => activeId != null && g.columns.flat().includes(activeId))),
   );
   const commandItem = (c: Command, section: Section): Item => ({
     key: `cmd-${c.id}`,

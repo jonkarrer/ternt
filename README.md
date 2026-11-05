@@ -50,7 +50,7 @@ them run under `doppler run --`.
 | ⌘S | Toggle sidebar (hidden, it slides out over the page when the pointer touches the window's left edge) |
 | ⌘F | Explore tabs: j/k or ↑/↓ move, h/l or ←/→ switch space, Space peeks, Enter opens, Esc goes back |
 | ⌃1–⌃9, ⌘⌥← / ⌘⌥→ | Switch spaces, stopping at the first and last (or swipe two fingers across the sidebar; with a mouse, scroll sideways or Shift-scroll over it) |
-| ⌥⌘\ | Split view: a new terminal beside the current page |
+| ⌥⌘\ | A new terminal beside the current tab (in a group) |
 | ⌘, | Settings (⌘1–⌘6 switch its pages, ⌘W closes it) |
 | ⌘H | Shortcuts and how-tos, searchable (also in the Help menu). Hide Ternt is in the app menu without a shortcut |
 
@@ -75,12 +75,20 @@ Enter saves, Escape cancels. The name replaces the page's or shell's own title i
 top bar and the command bar (which still finds the tab by its title), is saved with the session and
 comes back with ⇧⌘T. Clear it to go back to the title.
 
-**Split view**: right-click a tab → *Open in Split View* shows it beside the current tab
-(⌥⌘\ opens a terminal beside the page). Click into a pane to make it the active tab; drag the gap
-between them to resize (double-click: back to half and half). *Close Split View* (tab menu, View
-menu or command bar) ends it; closing either tab gives the other the whole area. A split holds two
-pages or a page and a terminal, in the same space. In the sidebar both tabs of a split share a
-color (each split its own).
+**Groups**: show up to four tabs together, pages and terminals alike. Drag a tab from the sidebar
+onto the page area: a highlight shows where it will land (the left, right, top or bottom half of the
+tab under the pointer), and dropping it there makes a group, or adds to the one on screen. That
+gives two side by side or stacked, one half and two quarters (50/25/25, 25/25/50), or quarters.
+Right-click a tab → *Open in Split View* adds it beside the current tab; ⌥⌘\ opens a terminal
+beside it. Drag the gaps between panes to resize (double-click: back to half and half), and click
+into a pane to make its tab active.
+
+In the sidebar a group is a row (named *Group 1*, *Group 2*…; double-click to rename) with its tabs
+under it, all in the group's color. Click the row to show the group; click one of its tabs to show
+just that tab, full size. Closing a tab, dragging it out of the group in the sidebar, or *Remove
+from Group* takes it out, and the others fill its space; the × on the group's row (or *Ungroup
+Tabs*) ends the group and keeps its tabs. Groups live in Today, in one space, and are saved with
+the session.
 
 **Terminal panes**: ⌘D splits a terminal tab side by side, ⇧⌘D stacks; panes nest, and the tab
 stays one row in the sidebar, named after the focused pane. Each pane runs its own shell, starting

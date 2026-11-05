@@ -6,10 +6,27 @@ body {
   background: var(--surface);
 }
 
+/* In a group the view spans several panes (maybe around a page): each
+   terminal draws its own box, and the gaps show the window through. */
+html.grouped,
+html.grouped body {
+  background: transparent;
+}
+
 #terminals {
   position: fixed;
   inset: 0;
-  padding: 10px 6px 6px 14px;
+  /* Inside each terminal's box (main.ts lays them out). */
+  --pad-top: 10px;
+  --pad-right: 6px;
+  --pad-bottom: 6px;
+  --pad-left: 14px;
+}
+
+.box {
+  position: absolute;
+  background: var(--surface);
+  border-radius: 10px;
 }
 
 .pane {

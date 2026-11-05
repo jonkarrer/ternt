@@ -27,7 +27,7 @@ const home: Space = { id: 1, name: "Home", color: "blue", profile: null, icon: n
 const work: Space = { id: 2, name: "Work", color: "green", profile: "abc", icon: null };
 
 function ctx(over: Partial<Context> = {}): Context {
-  return { mode: "newTab", tabs: [], spaces: [home, work], activeId: null, activeSpace: 1, history: [], closed: [], splits: [], ...over };
+  return { mode: "newTab", tabs: [], spaces: [home, work], activeId: null, activeSpace: 1, history: [], closed: [], groups: [], ...over };
 }
 
 const labels = (items: Item[]) => items.map((i) => i.label);
@@ -258,12 +258,13 @@ describe("recently closed", () => {
 });
 
 describe("split view commands", () => {
-  test("Close Split View only when the active tab is in a split", () => {
+  test("Ungroup Tabs only when the active tab is in a group", () => {
     const a = tab("A", "https://a.com");
     const b = tab("B", "https://b.com");
     const has = (over: Partial<Context>) => labels(buildItems("split", ctx({ tabs: [a, b], activeId: a.id, ...over })));
-    expect(has({})).not.toContain("Close Split View");
-    expect(has({ splits: [{ left: a.id, right: b.id, ratio: 0.5 }] })).toContain("Close Split View");
+    expect(has({})).not.toContain("Ungroup Tabs");
+    const group = { id: 9, name: "Group 1", columns: [[a.id], [b.id]], ratio: 0.5, rows: [0.5, 0.5] };
+    expect(has({ groups: [group] })).toContain("Ungroup Tabs");
     expect(has({})).toContain("Split View with New Terminal");
   });
 

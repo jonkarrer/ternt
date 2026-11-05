@@ -1,5 +1,7 @@
 // Terminal webview: hosts one xterm.js instance per terminal pane (a tab
-// starts with one; ⌘D splits it) and lays out the active tab's panes.
+// starts with one; ⌘D splits it) and lays out the terminals on screen: the
+// active one, or every terminal of the group on screen, each in its pane
+// (the view then spans them, under the group's pages).
 // Sessions are reconciled against the browser tab state, so Rust stays the
 // single source of truth for which terminals exist and how they're split.
 import { Channel, invoke } from "@tauri-apps/api/core";
@@ -79,8 +81,10 @@ const sessions = new Map<string, Session>();
 const dark = matchMedia("(prefers-color-scheme: dark)");
 const keyOf = (id: number, pane: number) => `${id}:${pane}`;
 let latest: BrowserState | null = null;
-/** The terminal tab on screen. */
-let shown: Tab | null = null;
+/** The terminal tabs on screen, each with its box (`rect` null: the whole
+    view). */
+let shown: { tab: Tab; box: HTMLDivElement; rect: Rect | null }[] = [];
+const boxes = new Map<number, HTMLDivElement>();
 /** Its sessions, and the one with the keyboard. */
 let visible: Session[] = [];
 let focused: Session | null = null;
@@ -191,11 +195,11 @@ document.addEventListener("copy", (event) => {
   if (!focused?.term.hasSelection()) event.preventDefault();
 });
 
-function setFocused(s: Session) {
+function setFocused(s: Session | null) {
   const changed = focused !== s;
   focused = s;
-  for (const v of visible) v.el.classList.toggle("dimmed", visible.length > 1 && v !== s);
-  if (changed) nameTab(s);
+  for (const v of visible) v.el.classList.toggle("dimmed", s != null && visible.length > 1 && v !== s);
+  if (changed && s) nameTab(s);
 }
 
 function reveal(s: Session) {
@@ -243,26 +247,27 @@ interface Rect {
   h: number;
 }
 
-/** Ratios of dividers being dragged, by split id (sent to Rust on release). */
-const dragging = new Map<number, number>();
-const dividers = new Map<number, HTMLDivElement>();
+/** Ratios of dividers being dragged, by `tab:split` (sent to Rust on release). */
+const dragging = new Map<string, number>();
+const dividers = new Map<string, HTMLDivElement>();
 /** Each divider's split: the room it shares out, in page coordinates. */
-const rooms = new Map<number, { room: Rect; across: boolean }>();
+const rooms = new Map<string, { room: Rect; across: boolean }>();
 
 function place(el: HTMLElement, r: Rect) {
   Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
 }
 
-/** Lay out `node` in `r`: panes get their rects, splits a divider. */
-function layoutNode(node: PaneNode, r: Rect, used: Set<number>) {
+/** Lay out a tab's `node` in `r`: panes get their rects, splits a divider. */
+function layoutNode(tab: number, node: PaneNode, r: Rect, used: Set<string>) {
   if (node.kind === "pane") {
-    const s = sessions.get(keyOf(shown!.id, node.id));
+    const s = sessions.get(keyOf(tab, node.id));
     if (s) place(s.el, r);
     return;
   }
   const across = node.direction === "right";
+  const key = `${tab}:${node.id}`;
   const room = Math.max(0, (across ? r.w : r.h) - GAP);
-  const first = Math.round(room * (dragging.get(node.id) ?? node.ratio));
+  const first = Math.round(room * (dragging.get(key) ?? node.ratio));
   const [a, gap, b]: Rect[] = across
     ? [
         { ...r, w: first },
@@ -274,32 +279,32 @@ function layoutNode(node: PaneNode, r: Rect, used: Set<number>) {
         { ...r, y: r.y + first, h: GAP },
         { ...r, y: r.y + first + GAP, h: room - first },
       ];
-  used.add(node.id);
-  place(divider(node, r), gap);
-  layoutNode(node.first, a, used);
-  layoutNode(node.second, b, used);
+  used.add(key);
+  place(divider(tab, node, r), gap);
+  layoutNode(tab, node.first, a, used);
+  layoutNode(tab, node.second, b, used);
 }
 
 /** A split's divider, made once and kept (it holds the pointer while dragged). */
-function divider(node: Extract<PaneNode, { kind: "split" }>, room: Rect): HTMLDivElement {
-  let el = dividers.get(node.id);
+function divider(tab: number, node: Extract<PaneNode, { kind: "split" }>, room: Rect): HTMLDivElement {
+  const key = `${tab}:${node.id}`;
+  let el = dividers.get(key);
   if (!el) {
     el = document.createElement("div");
     el.dataset.split = String(node.id);
     root.append(el);
-    dividers.set(node.id, el);
+    dividers.set(key, el);
     const handle = el;
     handle.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       handle.setPointerCapture(event.pointerId);
-      const tab = shown!.id;
       const split = node.id;
       let ratio: number | null = null;
       const move = (e: PointerEvent) => {
-        const { room: r, across } = rooms.get(split)!;
+        const { room: r, across } = rooms.get(key)!;
         const offset = across ? e.clientX - r.x : e.clientY - r.y;
         ratio = Math.min(0.9, Math.max(0.1, (offset - GAP / 2) / ((across ? r.w : r.h) - GAP)));
-        dragging.set(split, ratio);
+        dragging.set(key, ratio);
         layout();
       };
       const up = async () => {
@@ -307,7 +312,7 @@ function divider(node: Extract<PaneNode, { kind: "split" }>, room: Rect): HTMLDi
         handle.removeEventListener("pointerup", up);
         handle.removeEventListener("pointercancel", up);
         if (ratio != null) await invoke("set_pane_ratio", { id: tab, split, ratio });
-        dragging.delete(split);
+        dragging.delete(key);
       };
       handle.addEventListener("pointermove", move);
       handle.addEventListener("pointerup", up);
@@ -318,28 +323,41 @@ function divider(node: Extract<PaneNode, { kind: "split" }>, room: Rect): HTMLDi
   el.className = `divider ${across ? "across" : "stacked"}`;
   // The split's whole room, in page coordinates, for dragging.
   const origin = root.getBoundingClientRect();
-  rooms.set(node.id, { room: { ...room, x: room.x + origin.x, y: room.y + origin.y }, across });
+  rooms.set(key, { room: { ...room, x: room.x + origin.x, y: room.y + origin.y }, across });
   return el;
 }
 
-/** Place the shown tab's panes and dividers, and fit each terminal. */
+/** Place each shown terminal's box, its panes and dividers, and fit each
+    terminal. A box is padded like the whole view used to be. */
 function layout() {
-  const used = new Set<number>();
-  if (shown?.panes) {
-    const style = getComputedStyle(root);
-    const r: Rect = {
-      x: parseFloat(style.paddingLeft),
-      y: parseFloat(style.paddingTop),
-      w: root.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
-      h: root.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom),
+  const used = new Set<string>();
+  const style = getComputedStyle(root);
+  const pad = {
+    left: parseFloat(style.getPropertyValue("--pad-left")),
+    top: parseFloat(style.getPropertyValue("--pad-top")),
+    right: parseFloat(style.getPropertyValue("--pad-right")),
+    bottom: parseFloat(style.getPropertyValue("--pad-bottom")),
+  };
+  for (const { tab, box, rect } of shown) {
+    const r = rect ?? { x: 0, y: 0, w: root.clientWidth, h: root.clientHeight };
+    place(box, r);
+    const inner: Rect = {
+      x: r.x + pad.left,
+      y: r.y + pad.top,
+      w: Math.max(0, r.w - pad.left - pad.right),
+      h: Math.max(0, r.h - pad.top - pad.bottom),
     };
-    layoutNode(shown.panes.root, r, used);
+    if (tab.panes) layoutNode(tab.id, tab.panes.root, inner, used);
+    else {
+      const s = sessions.get(keyOf(tab.id, 0));
+      if (s) place(s.el, inner);
+    }
   }
-  for (const [id, el] of dividers) {
-    if (!used.has(id)) {
+  for (const [key, el] of dividers) {
+    if (!used.has(key)) {
       el.remove();
-      dividers.delete(id);
-      rooms.delete(id);
+      dividers.delete(key);
+      rooms.delete(key);
     }
   }
   for (const s of visible) s.fit.fit();
@@ -354,20 +372,49 @@ function reconcile(state: BrowserState) {
   for (const s of [...sessions.values()]) if (!wanted.has(keyOf(s.id, s.pane))) dispose(s);
   for (const t of terminals) for (const p of paneIds(t)) if (!sessions.has(keyOf(t.id, p))) create(t.id, p);
 
-  // The active tab, or its split partner when that's the terminal on screen.
-  const split = state.splits.find((s) => s.left === state.active || s.right === state.active);
-  const onScreen = split ? [state.active, split.left === state.active ? split.right : split.left] : [state.active];
-  const tab = onScreen.map((id) => terminals.find((t) => t.id === id)).find((t) => t);
-  if (!tab) return;
+  // The terminals on screen: in the group's panes, relative to the view
+  // (which spans them), or the active one filling the view.
+  const onScreen = state.screen
+    .map((f) => ({ frame: f, tab: terminals.find((t) => t.id === f.tab) }))
+    .filter((x): x is { frame: (typeof state.screen)[number]; tab: Tab } => x.tab != null);
+  if (!onScreen.length) return;
+  const grouped = state.screen.length > 1;
+  document.documentElement.classList.toggle("grouped", grouped);
+  const left = Math.min(...onScreen.map((x) => x.frame.x));
+  const top = Math.min(...onScreen.map((x) => x.frame.y));
+  for (const [id, box] of boxes) {
+    if (!onScreen.some((x) => x.tab.id === id)) {
+      box.remove();
+      boxes.delete(id);
+    }
+  }
+  shown = onScreen.map(({ frame, tab }) => {
+    let box = boxes.get(tab.id);
+    if (!box) {
+      box = document.createElement("div");
+      box.className = "box";
+      root.prepend(box);
+      boxes.set(tab.id, box);
+    }
+    const rect = grouped ? { x: frame.x - left, y: frame.y - top, w: frame.width, h: frame.height } : null;
+    return { tab, box, rect };
+  });
 
-  shown = tab;
-  const next = paneIds(tab).map((p) => sessions.get(keyOf(tab.id, p))!);
+  const next = shown.flatMap(({ tab }) => paneIds(tab).map((p) => sessions.get(keyOf(tab.id, p))!));
   for (const s of visible) if (!next.includes(s)) conceal(s);
   visible = next;
   for (const s of visible) reveal(s);
   layout();
   for (const s of visible) if (!s.started) start(s);
 
+  // The keyboard: the active terminal's focused pane (none while a page of
+  // the group is active).
+  const tab = shown.find((x) => x.tab.id === state.active)?.tab;
+  if (!tab) {
+    pendingFocus = null;
+    setFocused(null);
+    return;
+  }
   const target = tab.panes?.focused ?? 0;
   if (pendingFocus && (pendingFocus.id !== tab.id || pendingFocus.pane === target)) pendingFocus = null;
   const keyboard = pendingFocus ?? sessions.get(keyOf(tab.id, target)) ?? visible[0];

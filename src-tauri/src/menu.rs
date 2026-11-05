@@ -136,7 +136,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 true,
                 Some("CmdOrCtrl+Alt+Backslash"),
             )?,
-            &MenuItem::with_id(app, "unsplit", "Close Split View", true, None::<&str>)?,
+            &MenuItem::with_id(app, "unsplit", "Ungroup Tabs", true, None::<&str>)?,
             &MenuItem::with_id(app, "explore", "Explore Tabs", true, Some("CmdOrCtrl+F"))?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "reload", "Reload Page", true, Some("CmdOrCtrl+R"))?,
@@ -315,10 +315,7 @@ pub fn run_action(app: &AppHandle, id: String) {
             }
             "toggle-sidebar" => browser::toggle_sidebar(&app),
             "split-terminal" => browser::split_with_new_terminal(&app),
-            "unsplit" => match browser::active_tab(&app) {
-                Some(id) => browser::end_split(&app, id),
-                None => Ok(()),
-            },
+            "unsplit" => browser::end_group_of_active(&app),
             "welcome" => welcome::open(&app),
             "explore" => browser::toggle_explore(&app),
             "next-tab" => browser::cycle_tab(&app, 1),
@@ -425,7 +422,7 @@ pub async fn tab_context_menu(app: AppHandle, id: u32) -> Result<(), String> {
             menu.append(&item(
                 &app,
                 format!("ctx-unsplit:{id}"),
-                "Close Split View",
+                "Remove from Group",
             )?)?;
         }
         if info.can_split || info.split {
