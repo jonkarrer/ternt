@@ -115,6 +115,17 @@ function create(id: number, pane: number): Session {
   // ⌘-click (or click) a URL to open it as a browser tab.
   term.loadAddon(new WebLinksAddon((_event, uri) => browser.newTab(uri)));
   term.open(el);
+  // Shift+Enter types a newline instead of submitting (Claude Code and other
+  // prompts): send ESC + CR, as Option+Enter does and as `/terminal-setup`
+  // configures in other terminals. Plain Enter is just CR.
+  term.attachCustomKeyEventHandler((event) => {
+    if (event.key !== "Enter" || !event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return true;
+    if (event.type === "keydown") {
+      event.preventDefault();
+      term.input("\x1b\r");
+    }
+    return false;
+  });
   // Programs copy by sending OSC 52 (`52;c;<base64>`), often from across ssh.
   // Reading the clipboard back (`?`) is refused.
   term.parser.registerOscHandler(52, (data) => {

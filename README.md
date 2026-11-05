@@ -92,6 +92,8 @@ tab. The layout is saved with the session (with fresh shells on relaunch).
 alone). When a program has the mouse (tmux, vim…), ⌥-drag selects. Programs that copy for you
 (tmux, vim, Claude Code, also over ssh) reach the clipboard too (OSC 52); they can't read it.
 
+**Shift+Enter** types a new line rather than submitting (in Claude Code, for one), like ⌥Enter.
+
 **Spaces**: hover the space name for **…** (rename, icon, color, profile, delete; also a
 right-click on the name or on a space in the switcher). Every space has an icon, shown next to its
 name, in the switcher and in the command bar: new spaces start with a line symbol in the space's
