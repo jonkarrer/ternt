@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { browser, type BrowserState, type Prefs } from "../lib/browser";
   import Avatar from "./Avatar.svelte";
+  import DefaultBrowser from "./DefaultBrowser.svelte";
 
   // You, the person using this Ternt: a name and an email, kept on this Mac.
   // Your sign-ins live in profiles (one per group of spaces), listed below.
@@ -57,6 +58,8 @@
       <div class="hint">Kept on this Mac. Sign-ins to sites live in your profiles.</div>
     </div>
   </header>
+
+  <DefaultBrowser />
 
   <h2>Profiles</h2>
   <div class="card">

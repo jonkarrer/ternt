@@ -32,7 +32,11 @@ await t.until(async () => {
   return account.name === "Ada Lovelace" && account.email === "ada@example.com";
 }, "name and email are saved (trimmed)");
 await t.until(async () => (await read(`document.querySelector("main .avatar").textContent.trim()`)) === "A", "the avatar shows the initial");
-await t.assert((await read(`document.querySelector("main .card .label").textContent`)).includes("Home"), "the account lists Default, used by Home");
+await t.assert((await read(`[...document.querySelectorAll("main .card .label")].map((el) => el.textContent).join()`)).includes("Home"), "the account lists Default, used by Home");
+await t.assert(
+  /Ternt (is|isn't) your default browser/.test(await read(`document.querySelector("main .card .label").textContent`)),
+  "the account shows the default browser card first",
+);
 await t.shot("settings-account", "settings");
 await click(`.page-tab:nth-child(2)`);
 await t.until(async () => (await read(`document.querySelector("main").textContent`)).includes("Version"), "General shows the version");
