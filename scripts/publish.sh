@@ -129,8 +129,13 @@ build() {
   rm -rf $OUT/dmg && mkdir -p $stage
   ditto $app $stage/Ternt.app
   ln -s /Applications $stage/Applications
-  hdiutil create -quiet -volname Ternt -srcfolder $stage -fs HFS+ -format UDZO -ov $dmg
-  rm -rf $stage
+  # Two steps: a read-write image first, then compress. hdiutil create
+  # straight to UDZO started writing images it then calls corrupt (seen
+  # 2026-11-06); the convert path has always been fine.
+  hdiutil create -quiet -volname Ternt -srcfolder $stage -fs HFS+ -format UDRW -ov $dmg.rw.dmg
+  hdiutil convert -quiet $dmg.rw.dmg -format UDZO -ov -o $dmg
+  rm -rf $stage $dmg.rw.dmg
+  hdiutil imageinfo $dmg >/dev/null || fail "hdiutil produced a corrupt dmg"
   [[ -n $DRY ]] || codesign --sign "$identity" --timestamp $dmg
 
   step "verifying"
