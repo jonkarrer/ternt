@@ -85,7 +85,7 @@ export const HOW_TOS: HowTo[] = [
   },
   {
     title: "Links from other apps",
-    text: "Make Ternt your default browser in Settings: links open in a small window, with a button to move them into Ternt.",
+    text: "Make Ternt your default browser (Ternt menu → Make Default Browser, or Settings → Links): links open in a small window, with a button to move them into Ternt.",
   },
 ];
 

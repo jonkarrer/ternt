@@ -465,16 +465,39 @@ pub fn is_default_browser(bundle_id: &str) -> bool {
     handler.to_string().eq_ignore_ascii_case(bundle_id)
 }
 
-/// Make `bundle_id` the handler for http and https links.
+/// Make Ternt the handler for http and https links; macOS confirms with the
+/// user. Points Launch Services at the running bundle, not whichever copy of
+/// Ternt it finds first (old builds, a mounted DMG). Unbundled dev runs fall
+/// back to the bundle id.
 pub fn make_default_browser(bundle_id: &str) {
-    let id = NSString::from_str(bundle_id);
-    for scheme in ["http", "https"] {
-        let scheme = NSString::from_str(scheme);
-        let status = unsafe { LSSetDefaultHandlerForURLScheme(&*scheme, &*id) };
-        if status != 0 {
-            eprintln!("failed to become the default browser for {scheme}: {status}");
+    let bundle: *mut AnyObject = unsafe { msg_send![objc2::class!(NSBundle), mainBundle] };
+    let url: *mut NSURL = unsafe { msg_send![bundle, bundleURL] };
+    let bundled = unsafe { url.as_ref() }
+        .and_then(|url| url.path())
+        .is_some_and(|path| path.to_string().ends_with(".app"));
+    if !bundled {
+        let id = NSString::from_str(bundle_id);
+        for scheme in ["http", "https"] {
+            let scheme = NSString::from_str(scheme);
+            let status = unsafe { LSSetDefaultHandlerForURLScheme(&*scheme, &*id) };
+            if status != 0 {
+                eprintln!("failed to become the default browser for {scheme}: {status}");
+            }
         }
+        return;
     }
+    // One confirmation covers http, https and web pages.
+    let workspace: *mut AnyObject =
+        unsafe { msg_send![objc2::class!(NSWorkspace), sharedWorkspace] };
+    let scheme = NSString::from_str("http");
+    let done = block2::RcBlock::new(|err: *mut AnyObject| {
+        if !err.is_null() {
+            eprintln!("failed to become the default browser");
+        }
+    });
+    let _: () = unsafe {
+        msg_send![workspace, setDefaultApplicationAtURL: url, toOpenURLsWithScheme: &*scheme, completionHandler: &*done]
+    };
 }
 
 /// Move a page's Web Inspector into its own window once it shows (WebKit's

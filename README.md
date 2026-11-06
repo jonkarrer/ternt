@@ -127,7 +127,7 @@ than overwriting, and the Dock's Downloads stack bounces when one finishes. Link
 
 ## Little Ternt
 
-Make Ternt your default browser (*Settings → Links → Make Default*) and links you click in other
+Make Ternt your default browser (*Ternt → Make Default Browser…*, the palette, or *Settings → Links → Make Default*) and links you click in other
 apps open in **Little Ternt**: a small window with the page's address on top, signed in with the
 space you're in. Read it and close it (⌘W), or click *Open in Ternt* to move the page into a tab.
 *Settings → Links* can send those links straight to a new tab instead.

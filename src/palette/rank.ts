@@ -61,6 +61,7 @@ export const COMMANDS: Command[] = [
   { id: "ctx-pin", label: "Pin Tab", web: true, tab: true, unless: "pinned" },
   { id: "ctx-duplicate", label: "Duplicate Tab", keywords: "copy", tab: true },
   { id: "clear-today", label: "Clear Today Tabs", keywords: "close all archive" },
+  { id: "make-default-browser", label: "Make Default Browser", keywords: "links open system macos" },
   { id: "clear-history", label: "Clear History", keywords: "browsing forget" },
   { id: "next-space", label: "Next Space", shortcut: "⌥⌘→" },
   { id: "previous-space", label: "Previous Space", shortcut: "⌥⌘←" },

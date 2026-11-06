@@ -30,6 +30,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?,
+            &MenuItem::with_id(
+                app,
+                "make-default-browser",
+                "Make Default Browser…",
+                true,
+                None::<&str>,
+            )?,
             &PredefinedMenuItem::separator(app)?,
             // ⌘H shows the help sheet instead.
             &MenuItem::with_id(app, "hide-app", "Hide Ternt", true, None::<&str>)?,
@@ -272,6 +279,12 @@ pub fn run_action(app: &AppHandle, id: String) {
             }
             "close-tab" => browser::close_active_tab(&app),
             "settings" => settings::open(&app),
+            "make-default-browser" => {
+                if let Err(err) = settings::make_default_browser(app.clone()).await {
+                    eprintln!("couldn't ask to be the default browser: {err}");
+                }
+                Ok(())
+            }
             "help" => palette::toggle_help(&app),
             #[cfg(target_os = "macos")]
             "hide-app" => app.hide(),
