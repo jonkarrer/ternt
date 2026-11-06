@@ -561,7 +561,27 @@ pub fn download_finished(path: &std::path::Path) {
 /// - Tell pages their window's frame. Without it `outerWidth` and
 ///   `outerHeight` are 0, and Google Docs, which compares them with the inner
 ///   size to guess the zoom, drew its pages at half resolution (blurry).
-pub fn prepare_page(webview: tauri::webview::PlatformWebview) {
+pub fn prepare_page(
+    app: &AppHandle,
+    label: &str,
+) -> impl FnOnce(tauri::webview::PlatformWebview) + Send + 'static {
+    let _ = APP.set(app.clone());
+    let label = label.to_string();
+    move |webview| prepare_page_view(webview, label)
+}
+
+/// The app, for delegate methods that call back into it.
+static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+/// Page views' labels by their `WKWebView`, for `webViewDidClose:`.
+static PAGE_LABELS: std::sync::Mutex<Vec<(usize, String)>> = std::sync::Mutex::new(Vec::new());
+
+fn prepare_page_view(webview: tauri::webview::PlatformWebview, label: String) {
+    {
+        let mut labels = PAGE_LABELS.lock().unwrap();
+        // A freed view's address can come back for a new one.
+        labels.retain(|(view, l)| *view != webview.inner() as usize && *l != label);
+        labels.push((webview.inner() as usize, label));
+    }
     unsafe {
         let view = &*(webview.inner() as *const AnyObject);
         let config: *mut AnyObject = msg_send![view, configuration];
@@ -622,7 +642,7 @@ unsafe fn add_js_dialogs(class: &objc2::runtime::AnyClass) {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| unsafe {
         let class = class as *const _ as *mut objc2::runtime::AnyClass;
-        let methods: [(&str, objc2::runtime::Imp, &std::ffi::CStr); 4] = [
+        let methods: [(&str, objc2::runtime::Imp, &std::ffi::CStr); 5] = [
             (
                 "webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:",
                 std::mem::transmute::<JsAlert, objc2::runtime::Imp>(js_alert),
@@ -643,6 +663,12 @@ unsafe fn add_js_dialogs(class: &objc2::runtime::AnyClass) {
                 "_webView:getWindowFrameWithCompletionHandler:",
                 std::mem::transmute::<WindowFrame, objc2::runtime::Imp>(window_frame),
                 c"v@:@@?",
+            ),
+            // `window.close()`: wry ignores it, leaving sign-in popups open.
+            (
+                "webViewDidClose:",
+                std::mem::transmute::<DidClose, objc2::runtime::Imp>(did_close),
+                c"v@:@",
             ),
         ];
         for (name, imp, types) in methods {
@@ -725,6 +751,29 @@ unsafe extern "C-unwind" fn window_frame(
             None => bounds,
         };
         completion.call((frame,));
+    }
+}
+
+type DidClose = unsafe extern "C-unwind" fn(&AnyObject, objc2::runtime::Sel, &AnyObject);
+
+/// A page called `window.close()` (and WebKit allowed it: the page was
+/// opened by script).
+unsafe extern "C-unwind" fn did_close(
+    _this: &AnyObject,
+    _cmd: objc2::runtime::Sel,
+    web_view: &AnyObject,
+) {
+    let view = web_view as *const AnyObject as usize;
+    let label = PAGE_LABELS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(v, _)| *v == view)
+        .map(|(_, label)| label.clone());
+    if let (Some(app), Some(label)) = (APP.get(), label) {
+        let app = app.clone();
+        // Closing views blocks on the main thread.
+        std::thread::spawn(move || browser::on_page_closed(&app, &label));
     }
 }
 

@@ -153,7 +153,7 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
         LogicalSize::new(size.width, (size.height - BAR_HEIGHT).max(0.0)),
     )?;
     #[cfg(target_os = "macos")]
-    page.with_webview(crate::native::prepare_page)?;
+    page.with_webview(crate::native::prepare_page(app, page.label()))?;
 
     let app = app.clone();
     let window_label = label.clone();
@@ -214,6 +214,13 @@ fn update(app: &AppHandle, webview: &str, change: impl FnOnce(&mut LittleState))
         "little:state",
         state,
     );
+}
+
+/// Close the Little Ternt window holding page view `page`.
+pub fn close_page(app: &AppHandle, page: &str) {
+    if let Some(window) = app.get_window(window_of(page)) {
+        let _ = window.close();
+    }
 }
 
 /// ⌘W closes a Little Ternt window when it's in front. Returns whether it did.

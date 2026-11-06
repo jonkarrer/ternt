@@ -1,0 +1,10 @@
+<!doctype html><title>SSO App</title><body style="font:20px system-ui;padding:40px"><h1>App</h1>
+<script>
+  // A sign-in popup on another origin; the app hears back by message and
+  // watches for the popup to close.
+  window.addEventListener("message", (e) => { if (e.data === "signed-in") document.title = "signed in"; });
+  window.signIn = () => {
+    const popup = window.open("http://127.0.0.1:8765/sso-login.html", "sso", "width=480,height=600");
+    const watch = setInterval(() => { if (popup.closed) { clearInterval(watch); document.title += ", popup closed"; } }, 100);
+  };
+</script></body>

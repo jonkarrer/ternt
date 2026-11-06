@@ -509,6 +509,22 @@ pub fn on_new_window(
     NewWindowResponse::Deny
 }
 
+/// A page closed itself (`window.close()`; WebKit allows it only for pages
+/// opened by script): its popup window, Little Ternt window or tab goes.
+/// Must not be called from the main thread.
+pub fn on_page_closed(app: &AppHandle, label: &str) {
+    if let Some(id) = label.strip_prefix("tab-").and_then(|id| id.parse().ok()) {
+        // Only a tab a link opened, as a browser would.
+        if with(app, |s| s.tab(id).and_then(|t| t.opener)).is_some() {
+            let _ = close_tab_by_id(app, id);
+        }
+    } else if label.starts_with(crate::little::PREFIX) {
+        crate::little::close_page(app, label);
+    } else if let Some(window) = app.get_window(label) {
+        let _ = window.close();
+    }
+}
+
 /// Whether a page can show `url` (rather than another app: mailto:, tel:,
 /// zoommtg:, slack:…). Ternt's own pages (the welcome page) count.
 fn is_web_link(url: &Url) -> bool {
@@ -600,7 +616,7 @@ fn open_popup(
     let builder = builder.user_agent(USER_AGENT);
     let window = builder.build()?;
     #[cfg(target_os = "macos")]
-    window.with_webview(crate::native::prepare_page)?;
+    window.with_webview(crate::native::prepare_page(app, window.label()))?;
     Ok(window)
 }
 
@@ -707,7 +723,7 @@ fn load_tab(app: &AppHandle, id: u32) -> tauri::Result<Webview> {
     let bounds = content_bounds(app)?;
     let webview = main_window(app)?.add_child(builder, bounds.position, bounds.size)?;
     #[cfg(target_os = "macos")]
-    webview.with_webview(crate::native::prepare_page)?;
+    webview.with_webview(crate::native::prepare_page(app, &tab_label(id)))?;
     with(app, |s| {
         if let Some(tab) = s.tab_mut(id) {
             tab.loaded = true;
