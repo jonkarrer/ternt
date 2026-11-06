@@ -66,7 +66,7 @@ const body = () => document.querySelector(".sidebar .space-body");
 sidebar.dispatchEvent(new WheelEvent("wheel", { deltaX: -30, bubbles: true }));
 await Promise.resolve();
 const pulled = body().style.translate;
-await t.assert(pulled === "15px", `a short swipe pulls the space (${pulled})`);
+await t.assert(pulled === "-15px", `a short swipe toward the space on the right slides this one left (${pulled})`);
 await t.until(() => !body().style.translate, "and it springs back");
 await t.assert(S().activeSpace === home, "without switching");
 

@@ -560,8 +560,9 @@
       browser.activateSpace(next.id);
       return;
     }
-    // Follow the fingers; past the first or last space, stay put.
-    pull = next ? -swipe * 0.5 : 0;
+    // Slide away from the space coming in (it then slides in from that
+    // side); past the first or last space, stay put.
+    pull = next ? swipe * 0.5 : 0;
   }
 
   function focusSelect(node: HTMLInputElement) {
