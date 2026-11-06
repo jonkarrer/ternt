@@ -120,7 +120,7 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
         .on_navigation(move |url| crate::browser::on_navigation(&nav_app, url))
         .on_download(|_, event| crate::browser::on_download(event))
         .on_new_window(move |url, features| {
-            crate::browser::on_new_window(&popup_app, url, features)
+            crate::browser::on_new_window(&popup_app, url, features, None)
         })
         .on_page_load(|webview, payload| {
             let loading = matches!(payload.event(), PageLoadEvent::Started);

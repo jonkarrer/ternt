@@ -294,7 +294,7 @@ pub fn on_native_change(app: &AppHandle, id: u32, native: NativeState) {
         }
         tab.title = native.title;
         tab.loading = native.loading;
-        tab.can_go_back = native.can_go_back;
+        tab.set_page_back(native.can_go_back);
         tab.can_go_forward = native.can_go_forward;
         // A finished load is a visit (history ignores repeats of the same URL).
         let visit = (!tab.loading).then(|| (tab.url.clone(), tab.title.clone()));
@@ -485,11 +485,12 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
 /// Handle `window.open()` / `target=_blank`. Scripted popups that ask for a
 /// size (OAuth sign-in, payment flows) get a real window that shares the
 /// opener's configuration, so `window.opener` messaging works. Everything
-/// else opens as a tab.
+/// else opens as a tab; from a tab (`opener`), Back returns to it.
 pub fn on_new_window(
     app: &AppHandle,
     url: Url,
     features: NewWindowFeatures,
+    opener: Option<u32>,
 ) -> NewWindowResponse<tauri::Wry> {
     if !is_web_link(&url) {
         open_in_other_app(app, &url);
@@ -503,7 +504,7 @@ pub fn on_new_window(
     }
     let app = app.clone();
     std::thread::spawn(move || {
-        let _ = open_tab(&app, url);
+        let _ = open_tab_from(&app, url, opener);
     });
     NewWindowResponse::Deny
 }
@@ -594,7 +595,7 @@ fn open_popup(
     .on_document_title_changed(|window, title| {
         let _ = window.set_title(&title);
     })
-    .on_new_window(move |url, features| on_new_window(&popup_app, url, features));
+    .on_new_window(move |url, features| on_new_window(&popup_app, url, features, None));
     #[cfg(target_os = "macos")]
     let builder = builder.user_agent(USER_AGENT);
     let window = builder.build()?;
@@ -667,7 +668,7 @@ fn load_tab(app: &AppHandle, id: u32) -> tauri::Result<Webview> {
         .devtools(true)
         .on_navigation(move |url| on_navigation(&nav_app, url))
         .on_download(|_, event| on_download(event))
-        .on_new_window(move |url, features| on_new_window(&popup_app, url, features));
+        .on_new_window(move |url, features| on_new_window(&popup_app, url, features, Some(id)));
 
     #[cfg(target_os = "macos")]
     let builder = {
@@ -747,8 +748,18 @@ fn unload_tab(app: &AppHandle, id: u32) -> tauri::Result<()> {
 /// Open a web tab at the top of Today and show it. Must not be called from
 /// the main thread (it blocks on it).
 pub fn open_tab(app: &AppHandle, url: Url) -> tauri::Result<u32> {
+    open_tab_from(app, url, None)
+}
+
+/// A new tab for a link clicked in tab `opener`.
+fn open_tab_from(app: &AppHandle, url: Url, opener: Option<u32>) -> tauri::Result<u32> {
     let id = with(app, |s| {
-        s.add_tab(TabKind::Web, url.to_string(), String::new())
+        let id = s.add_tab(TabKind::Web, url.to_string(), String::new());
+        if let Some(tab) = s.tab_mut(id) {
+            tab.opener = opener;
+            tab.set_page_back(false);
+        }
+        id
     });
     if let Err(err) = activate(app, id) {
         with(app, |s| s.tabs.retain(|t| t.id != id));
@@ -1276,6 +1287,17 @@ pub fn toggle_devtools(app: &AppHandle) {
 }
 
 pub fn back_active(app: &AppHandle) -> tauri::Result<()> {
+    // At the start of its history, a tab opened from a link closes and
+    // returns to the tab it came from.
+    let to_opener = with(app, |s| {
+        let tab = s.tab(s.active?)?;
+        let opener = tab.opener.filter(|_| !tab.page_back)?;
+        s.tab(opener).map(|_| (tab.id, opener))
+    });
+    if let Some((id, opener)) = to_opener {
+        activate(app, opener)?;
+        return close_tab_by_id(app, id);
+    }
     let Some(webview) = active_webview(app) else {
         return Ok(());
     };

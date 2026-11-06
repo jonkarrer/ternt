@@ -34,8 +34,11 @@ await t.until(() => tab()?.title.startsWith("at "), "find the new-tab link");
 const [x, y] = tab().title.slice(3).split(",").map(Number);
 await t.invoke("debug_click", { label: `tab-${page}`, x, y });
 await t.until(() => tab()?.url.endsWith("/page2.html?blank") && S().tabs.length === tabs + 1, "clicking a target=_blank link opens a new tab");
-await t.invoke("close_tab", { id: S().active });
-await t.invoke("activate_tab", { id: page });
+// Back returns to the tab the link came from, closing the new one
+await t.until(() => tab()?.canGoBack, "the new tab can go back");
+await t.invoke("go_back");
+await t.until(() => S().active === page && S().tabs.length === tabs, "Back closes it and returns to the page with the link");
+await t.assert(!tab().canGoBack, "which has no history of its own");
 
 await click(page, "next");
 await t.until(() => tab()?.title === "Fixture Page 2", "ordinary links still work");

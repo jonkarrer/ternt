@@ -57,10 +57,19 @@ pub struct Tab {
     /// Web tabs: whether a webview currently exists for this tab.
     pub loaded: bool,
     pub loading: bool,
+    /// Back does something: the page's own history, or the tab it was
+    /// opened from.
     pub can_go_back: bool,
     pub can_go_forward: bool,
     /// Terminals: the shells it's split into (one to start with).
     pub panes: Option<Panes>,
+    /// The tab whose link opened this one (`target=_blank`): Back at the
+    /// start of its history closes it and returns there (Safari behavior).
+    #[serde(skip)]
+    pub opener: Option<u32>,
+    /// The page itself has history to go back to.
+    #[serde(skip)]
+    pub page_back: bool,
 }
 
 impl Tab {
@@ -79,7 +88,15 @@ impl Tab {
             can_go_back: false,
             can_go_forward: false,
             panes: (kind == TabKind::Terminal).then(Panes::default),
+            opener: None,
+            page_back: false,
         }
+    }
+
+    /// Record the page's own back state; Back also works with an opener.
+    pub fn set_page_back(&mut self, page_back: bool) {
+        self.page_back = page_back;
+        self.can_go_back = page_back || self.opener.is_some();
     }
 
     /// Favorites and pinned tabs survive "close" (they unload instead).
@@ -480,6 +497,11 @@ impl State {
             return Some(self.tabs[index].clone());
         }
         let tab = self.tabs.remove(index);
+        // Tabs it opened lose their way back.
+        for t in self.tabs.iter_mut().filter(|t| t.opener == Some(id)) {
+            t.opener = None;
+            t.set_page_back(t.page_back);
+        }
         self.prune_groups();
         self.closed.push(ClosedTab {
             id: self.next_closed_id,
@@ -1325,6 +1347,19 @@ mod tests {
         assert_eq!(s.neighbor(b), Some(a));
         assert_eq!(s.neighbor(a), Some(b));
         assert_eq!(s.neighbor(c), Some(b));
+    }
+
+    #[test]
+    fn a_tab_opened_from_another_goes_back_to_it() {
+        let mut s = State::default();
+        let a = s.add_tab(TabKind::Web, "https://a".into(), String::new());
+        let b = s.add_tab(TabKind::Web, "https://b".into(), String::new());
+        let tab = s.tab_mut(b).unwrap();
+        tab.opener = Some(a);
+        tab.set_page_back(false);
+        assert!(tab.can_go_back, "back to the opener");
+        s.remove_tab(a);
+        assert!(!s.tab(b).unwrap().can_go_back, "the opener closed: no way back");
     }
 
     #[test]
