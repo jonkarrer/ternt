@@ -146,18 +146,28 @@
       <svg viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="2" /><path d="M2.5 8h11" /></svg>
     </button>
   {/if}
-  <button
-    class="close"
-    aria-label={zone === "today" ? "Close tab" : "Unload tab"}
-    onpointerdown={(e) => e.stopPropagation()}
-    onclick={() => browser.closeTab(tab.id)}
-  >
-    {#if zone === "today"}
+  <!-- Pinned tabs unload (−), then an unloaded one can be removed (×). -->
+  {#if zone === "today" || !tab.loaded}
+    <button
+      class="close"
+      aria-label={zone === "today" ? "Close tab" : "Remove tab"}
+      title={zone === "today" ? null : "Remove from Pinned"}
+      onpointerdown={(e) => e.stopPropagation()}
+      onclick={() => (zone === "today" ? browser.closeTab(tab.id) : browser.removeTab(tab.id))}
+    >
       <svg viewBox="0 0 16 16"><path d="m4.5 4.5 7 7m0-7-7 7" /></svg>
-    {:else}
+    </button>
+  {:else}
+    <button
+      class="close"
+      aria-label="Unload tab"
+      title="Unload (stays pinned)"
+      onpointerdown={(e) => e.stopPropagation()}
+      onclick={() => browser.closeTab(tab.id)}
+    >
       <svg viewBox="0 0 16 16"><path d="M4.5 8h7" /></svg>
-    {/if}
-  </button>
+    </button>
+  {/if}
 </div>
 
 <style>

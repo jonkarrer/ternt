@@ -166,6 +166,8 @@ export const browser = {
   /** `command` runs in the new terminal's shell. */
   newTerminal: (command?: string) => invoke<number>("new_terminal", { command: command ?? null }),
   closeTab: (id: number) => invoke("close_tab", { id }),
+  /** Remove a tab for good, pinned or not. */
+  removeTab: (id: number) => invoke("remove_tab", { id }),
   activateTab: (id: number) => invoke("activate_tab", { id }),
   /** Show a tab beside the active one (joining its group). */
   splitView: (id: number) => invoke("split_view", { id }),

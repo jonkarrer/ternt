@@ -1775,6 +1775,19 @@ pub async fn close_tab(app: AppHandle, id: u32) -> Result<(), String> {
     close_tab_by_id(&app, id).map_err(err)
 }
 
+/// Remove a tab for good, even a pinned one or a favorite (closing those
+/// only unloads them). ⇧⌘T brings it back into Today.
+#[tauri::command]
+pub async fn remove_tab(app: AppHandle, id: u32) -> Result<(), String> {
+    with(&app, |s| {
+        if let Some(tab) = s.tab_mut(id) {
+            tab.zone = Zone::Today;
+            tab.folder = None;
+        }
+    });
+    close_tab_by_id(&app, id).map_err(err)
+}
+
 #[tauri::command]
 pub async fn activate_tab(app: AppHandle, id: u32) -> Result<(), String> {
     // Clicking a tab while exploring opens it for real.

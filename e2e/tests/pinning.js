@@ -46,4 +46,17 @@ await t.until(() => find("Fixture Home")?.folder === folder, "the pinned tab mov
 await t.assert(await dragTo("SPA", pinHint, "pinning-outside-folder"), "with only a folder, dragging still shows where to pin outside it");
 await t.until(() => find("SPA")?.zone === "pinned" && find("SPA")?.folder === null, "and dropping there pins the tab, not in the folder");
 await t.assert(!pinHint(), "the hint goes once the drag ends");
+
+// A pinned tab in a folder: − unloads it (it stays), then × removes it
+const home = find("Fixture Home");
+const button = () => rowOf("Fixture Home")?.querySelector(".close");
+await t.until(() => find("Fixture Home")?.loaded, "the pinned tab is loaded");
+await t.assert(button().getAttribute("aria-label") === "Unload tab", "a loaded pinned tab offers to unload");
+button().click();
+await t.until(() => !find("Fixture Home")?.loaded && find("Fixture Home")?.folder === folder, "− unloads it, still in its folder");
+await t.until(() => button()?.getAttribute("aria-label") === "Remove tab", "then it offers to remove it");
+const count = S().tabs.length;
+button().click();
+await t.until(() => !S().tabs.some((x) => x.id === home.id) && S().tabs.length === count - 1, "× removes it from the folder");
+await t.assert(S().folders.length === 1, "the folder stays");
 await t.quit();
