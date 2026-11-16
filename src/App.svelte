@@ -63,7 +63,7 @@
   let pickingIcon = $state<number | null>(null);
   /** Direction of the last space switch, for the slide-in. */
   let slide = $state(1);
-  /** Explore mode (⌘F): the tab under the keyboard cursor, or null when off. */
+  /** Explore mode (⌃F): the tab under the keyboard cursor, or null when off. */
   let explore = $state(false);
   let cursor = $state<number | null>(null);
 
@@ -442,7 +442,7 @@
     return mark?.id === id ? mark.where : null;
   }
 
-  // --- Explore mode (⌘F) ---------------------------------------------------
+  // --- Explore mode (⌃F) ---------------------------------------------------
   // The cursor moves locally (no IPC per key); Space previews the tab, Enter
   // opens it, Escape returns to where exploring started.
 

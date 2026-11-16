@@ -144,7 +144,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 Some("CmdOrCtrl+Alt+Backslash"),
             )?,
             &MenuItem::with_id(app, "unsplit", "Ungroup Tabs", true, None::<&str>)?,
-            &MenuItem::with_id(app, "explore", "Explore Tabs", true, Some("CmdOrCtrl+F"))?,
+            &MenuItem::with_id(app, "explore", "Explore Tabs", true, Some("Ctrl+F"))?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "reload", "Reload Page", true, Some("CmdOrCtrl+R"))?,
             &MenuItem::with_id(app, "back", "Back", true, Some("CmdOrCtrl+["))?,
@@ -260,7 +260,18 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 }
 
 pub fn handle(app: &AppHandle, event: MenuEvent) {
-    run_action(app, event.id().0.clone());
+    let id = event.id().0.clone();
+    // ⌃F is the shell's forward-char (and less's page down): pressed in a
+    // terminal, it goes there rather than starting Explore Tabs.
+    #[cfg(target_os = "macos")]
+    if id == "explore"
+        && !browser::exploring(app)
+        && browser::main_window(app)
+            .is_ok_and(|window| crate::native::key_pressed_in_terminal(&window))
+    {
+        return run_action(app, "terminal-ctrl-f".into());
+    }
+    run_action(app, id)
 }
 
 pub fn run_action(app: &AppHandle, id: String) {
@@ -330,6 +341,8 @@ pub fn run_action(app: &AppHandle, id: String) {
             "split-terminal" => browser::split_with_new_terminal(&app),
             "unsplit" => browser::end_group_of_active(&app),
             "welcome" => welcome::open(&app),
+            // ⌃F typed in a terminal (see `handle`).
+            "terminal-ctrl-f" => browser::type_in_terminal(&app, "\x06"),
             "explore" => browser::toggle_explore(&app),
             "next-tab" => browser::cycle_tab(&app, 1),
             "previous-tab" => browser::cycle_tab(&app, -1),

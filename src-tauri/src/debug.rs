@@ -460,6 +460,40 @@ pub async fn debug_takes_mouse(app: AppHandle, label: String, x: f64, y: f64) ->
     rx.recv().map_err(|e| e.to_string())
 }
 
+/// Press ⌃ + `key` as the keyboard would: a key-down event posted to the
+/// app's queue, so menu shortcuts see it as a key press.
+#[tauri::command]
+pub async fn debug_ctrl_key(app: AppHandle, key: String) -> Result<(), String> {
+    let window = app.get_window(MAIN_WINDOW).ok_or("no window")?;
+    let ns_window = window.ns_window().map_err(|e| e.to_string())? as usize;
+    window
+        .run_on_main_thread(move || unsafe {
+            use objc2::runtime::AnyObject;
+            use objc2_foundation::NSString;
+            let ns_window = &*(ns_window as *const AnyObject);
+            let number: isize = objc2::msg_send![ns_window, windowNumber];
+            let chars = NSString::from_str(&key);
+            // ⌃ (NSEventModifierFlagControl) and the control character itself.
+            let control = NSString::from_str(&((key.as_bytes()[0] & 0x1f) as char).to_string());
+            let event: *mut AnyObject = objc2::msg_send![
+                objc2::class!(NSEvent),
+                keyEventWithType: 10usize,
+                location: objc2_foundation::NSPoint::new(0.0, 0.0),
+                modifierFlags: 1usize << 18,
+                timestamp: 0f64,
+                windowNumber: number,
+                context: std::ptr::null::<AnyObject>(),
+                characters: &*control,
+                charactersIgnoringModifiers: &*chars,
+                isARepeat: false,
+                keyCode: 3u16
+            ];
+            let app: *mut AnyObject = objc2::msg_send![objc2::class!(NSApplication), sharedApplication];
+            let _: () = objc2::msg_send![app, postEvent: event, atStart: false];
+        })
+        .map_err(|e| e.to_string())
+}
+
 /// Answer the JavaScript dialog sheet on the main window: type `text` into
 /// a prompt's field (if given), then press OK or Cancel. Returns the
 /// dialog's texts (title, message), or `None` if no dialog is showing.

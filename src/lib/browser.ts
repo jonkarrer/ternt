@@ -190,7 +190,7 @@ export const browser = {
   moveTab: (id: number, zone: Zone, folder: number | null, index: number | null) =>
     invoke("move_tab", { id, zone, folder, index }),
   tabContextMenu: (id: number) => invoke("tab_context_menu", { id }),
-  /** Explore mode (⌘F): show a tab without leaving the mode. */
+  /** Explore mode (⌃F): show a tab without leaving the mode. */
   explorePreview: (id: number) => invoke("explore_preview", { id }),
   /** Leave explore mode: open a tab, cancel back to the start, or stay put. */
   exploreEnd: (open: number | null, cancel = false) => invoke("explore_end", { open, cancel }),
@@ -255,7 +255,7 @@ export const browser = {
   checkForUpdates: () => invoke("check_for_updates"),
   onUpdate: (cb: (status: UpdateStatus) => void): Promise<UnlistenFn> =>
     listen<UpdateStatus>("update:status", (e) => cb(e.payload)),
-  /** Explore mode (⌘F) started or ended. */
+  /** Explore mode (⌃F) started or ended. */
   onExplore: (cb: (on: boolean) => void): Promise<UnlistenFn> => listen<boolean>("browser:explore", (e) => cb(e.payload)),
   /** Rust asks the sidebar to show the icon picker for a space. */
   onIconPicker: (cb: (space: number) => void): Promise<UnlistenFn> =>

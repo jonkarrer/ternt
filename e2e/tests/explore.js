@@ -1,4 +1,4 @@
-// Explore mode (⌘F): dim the page, move a cursor over the tabs with j/k,
+// Explore mode (⌃F): dim the page, move a cursor over the tabs with j/k,
 // peek with Space, open with Enter, go back with Escape.
 const S = () => t.state();
 const F = "http://localhost:8765";
@@ -48,13 +48,13 @@ key("j");
 key("Enter");
 await t.until(() => !exploring() && S().active === page2, "enter opens the tab");
 
-// ⌘F again leaves the mode on what's showing
+// ⌃F again leaves the mode on what's showing
 await explore();
 key("k");
 key(" ");
 await t.until(() => S().active === spa, "peek SPA");
 await t.invoke("menu_action", { id: "explore" });
-await t.until(() => !exploring() && S().active === spa, "⌘F again keeps the peeked tab");
+await t.until(() => !exploring() && S().active === spa, "⌃F again keeps the peeked tab");
 
 // Clicking a tab opens it and leaves the mode
 await explore();
@@ -111,6 +111,6 @@ await t.until(async () => !exploring() && (await focused()) === `tab-${workTab}`
 await explore();
 await t.invoke("explore_preview", { id: term });
 await t.until(() => S().active === term, "peek the terminal again");
-await t.invoke("menu_action", { id: "explore" }); // ⌘F again: stay on it
+await t.invoke("menu_action", { id: "explore" }); // ⌃F again: stay on it
 await t.until(async () => !exploring() && (await focused()) === "term", "leaving on a terminal gives it the keyboard");
 await t.quit();

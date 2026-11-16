@@ -35,7 +35,7 @@ export const SHORTCUTS: ShortcutGroup[] = [
   ]),
   group("Sidebar and spaces", [
     ["⌘S", "Toggle sidebar"],
-    ["⌘F", "Explore tabs: j/k move, h/l switch space, Space peeks, Enter opens"],
+    ["⌃F", "Explore tabs: j/k move, h/l switch space, Space peeks, Enter opens"],
     ["⌃1 – ⌃9", "Select space"],
     ["⌥⌘←  ⌥⌘→", "Previous / next space"],
   ]),

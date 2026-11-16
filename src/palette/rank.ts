@@ -53,7 +53,7 @@ export type Command = {
 
 export const COMMANDS: Command[] = [
   { id: "new-terminal", label: "New Terminal", shortcut: "⌥⌘T", keywords: "shell console", suggest: true },
-  { id: "explore", label: "Explore Tabs", shortcut: "⌘F", keywords: "switch browse find", suggest: true },
+  { id: "explore", label: "Explore Tabs", shortcut: "⌃F", keywords: "switch browse find", suggest: true },
   { id: "new-space", label: "New Space", keywords: "profile", suggest: true },
   { id: "reopen-tab", label: "Reopen Closed Tab", shortcut: "⇧⌘T", keywords: "undo restore", suggest: true },
   { id: "copy-url", label: "Copy URL", keywords: "link clipboard", web: true },

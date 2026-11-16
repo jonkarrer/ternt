@@ -484,6 +484,36 @@ pub fn watch_focus(window: &tauri::Window, app: AppHandle) {
     });
 }
 
+/// Whether a key press (not a click) chose the menu item being handled, while
+/// a terminal has the keyboard (the window's first responder is in the
+/// shared terminal view). Main thread only: called from menu events.
+pub fn key_pressed_in_terminal(window: &tauri::Window) -> bool {
+    let Ok(ns_window) = window.ns_window() else {
+        return false;
+    };
+    unsafe {
+        let app: *mut AnyObject = msg_send![objc2::class!(NSApplication), sharedApplication];
+        let event: *mut AnyObject = msg_send![app, currentEvent];
+        let Some(event) = event.as_ref() else {
+            return false;
+        };
+        let kind: usize = msg_send![event, type];
+        // NSEventTypeKeyDown
+        if kind != 10 {
+            return false;
+        }
+        let window = &*(ns_window as *const AnyObject);
+        let responder: *mut AnyObject = msg_send![window, firstResponder];
+        match (responder.as_ref(), TERM_VIEW.get()) {
+            (Some(responder), Some(term)) => {
+                let is_view: bool = msg_send![responder, isKindOfClass: objc2::class!(NSView)];
+                is_view && msg_send![responder, isDescendantOf: &*(term as *const AnyObject)]
+            }
+            _ => false,
+        }
+    }
+}
+
 /// Remember the shared terminal view, so focus in it maps to its tab.
 pub fn register_terminal_view(webview: &Webview) {
     let _ = webview.with_webview(|platform| {
@@ -525,7 +555,7 @@ pub fn copy_to_clipboard(app: &AppHandle, text: String) {
 
 // --- Explore mode dimming --------------------------------------------------
 //
-// One translucent view over the content area while exploring tabs (⌘F). It
+// One translucent view over the content area while exploring tabs (⌃F). It
 // sits above every content webview, so pages get no input; a click on it
 // ends explore mode. AppKit resizes it with the window like the webviews.
 

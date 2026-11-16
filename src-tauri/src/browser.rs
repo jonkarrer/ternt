@@ -71,7 +71,7 @@ pub struct NativeState {
 pub struct Browser {
     state: Mutex<State>,
     emit_pending: AtomicBool,
-    /// Set while exploring tabs (⌘F).
+    /// Set while exploring tabs (⌃F).
     explore: Mutex<Option<Explore>>,
     /// Labels of the content views on screen: the active tab's, or its
     /// group's.
@@ -100,7 +100,7 @@ fn tab_label(id: u32) -> String {
     format!("tab-{id}")
 }
 
-fn main_window(app: &AppHandle) -> tauri::Result<Window> {
+pub fn main_window(app: &AppHandle) -> tauri::Result<Window> {
     app.get_window(MAIN_WINDOW)
         .ok_or(tauri::Error::WindowNotFound)
 }
@@ -1611,7 +1611,7 @@ pub fn delete_folder(app: &AppHandle, id: u32) {
     }
 }
 
-// --- Explore mode (⌘F) --------------------------------------------------------
+// --- Explore mode (⌃F) --------------------------------------------------------
 //
 // The content dims and the sidebar takes the keyboard: the UI moves a cursor
 // over the tabs (no IPC per keypress), previews with Space and opens with
@@ -1650,7 +1650,21 @@ fn emit_explore(app: &AppHandle, on: bool) {
     let _ = app.emit_to(EventTarget::webview(UI_WEBVIEW), "browser:explore", on);
 }
 
-/// ⌘F: start exploring, or (pressed again) stop on what's showing.
+/// Type `text` into the active terminal's focused pane.
+pub fn type_in_terminal(app: &AppHandle, text: &str) -> tauri::Result<()> {
+    let target = with(app, |s| {
+        let tab = s.tab(s.active?)?;
+        Some((tab.id, tab.panes.as_ref()?.focused))
+    });
+    if let Some((id, pane)) = target
+        && let Err(err) = crate::pty::pty_write(app.clone(), id, pane, text.to_string())
+    {
+        eprintln!("couldn't type in terminal {id}: {err}");
+    }
+    Ok(())
+}
+
+/// ⌃F: start exploring, or (pressed again) stop on what's showing.
 pub fn toggle_explore(app: &AppHandle) -> tauri::Result<()> {
     if exploring(app) {
         end_explore(app, ExploreEnd::Commit);

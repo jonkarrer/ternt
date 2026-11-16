@@ -21,7 +21,7 @@ describe("help sheet", () => {
   });
 
   test("by key", () => {
-    expect(filterHelp("⌘F").shortcuts[0].items[0].action).toMatch(/Explore/);
+    expect(filterHelp("⌃F").shortcuts[0].items[0].action).toMatch(/Explore/);
   });
 
   test("nothing", () => {

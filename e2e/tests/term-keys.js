@@ -1,6 +1,8 @@
 // Keys a terminal translates: Shift+Enter types a newline (ESC + CR, as
 // Option+Enter) instead of submitting, so Claude Code's prompt gets a new line;
-// ⌘+ / ⌘− / ⌘0 size the text of every terminal, and the size is saved.
+// ⌘+ / ⌘− / ⌘0 size the text of every terminal, and the size is saved; ⌃F
+// goes to the shell (forward-char) rather than starting Explore Tabs.
+const S = () => t.state();
 const term = await t.invoke("new_terminal");
 const text = () => t.read("term", `window.__termText(${term})`).catch(() => "");
 const run = (cmd) => t.invoke("pty_write", { id: term, pane: 0, data: cmd + "\r" });
@@ -33,4 +35,21 @@ const other = await t.invoke("new_terminal");
 await t.until(async () => (await font(other))?.size === 14, "a new terminal starts at that size");
 await press({ key: "0", code: "Digit0", metaKey: true });
 await t.until(async () => (await size()) === 13, "⌘0 goes back to 13px");
+
+// ⌃F, pressed as a key: the terminal gets it, Explore Tabs doesn't start
+const exploring = () => !!document.querySelector(".app.exploring");
+await t.invoke("activate_tab", { id: term });
+await t.invoke("debug_focus", { label: "term" });
+await run("clear; stty raw -echo; head -c 1 | od -c; stty sane; echo ctrl-f-done");
+await t.sleep(500);
+await t.invoke("debug_ctrl_key", { key: "f" });
+await t.until(async () => /ctrl-f-done/.test(await text()), "⌃F reaches the shell");
+await t.assert(/006/.test(await text()), "as ^F (forward-char)");
+await t.assert(!exploring(), "without exploring tabs");
+// Anywhere else it explores tabs
+const page = await t.invoke("new_tab", { url: "http://localhost:8765/" });
+await t.until(() => S().tabs.find((x) => x.id === page)?.title === "Fixture Home", "on a page");
+await t.invoke("debug_focus", { label: `tab-${page}` });
+await t.invoke("debug_ctrl_key", { key: "f" });
+await t.until(exploring, "⌃F explores tabs");
 await t.quit();
