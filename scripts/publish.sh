@@ -98,6 +98,15 @@ build() {
 
   config='{}'
   if [[ -z $DRY ]]; then
+    # The signing certificate lives in its own keychain (the login keychain is
+    # locked to background sessions). A reboot locks it; unlock it from the
+    # password file when there is one, so codesign does not fail with
+    # errSecInternalComponent.
+    sign_keychain=$HOME/Library/Keychains/ternt-sign.keychain-db
+    if [[ -f $sign_keychain && -f ~/.tauri/ternt-sign.keychain.password ]]; then
+      security unlock-keychain -p "$(cat ~/.tauri/ternt-sign.keychain.password)" $sign_keychain
+      security set-keychain-settings $sign_keychain # no auto-lock
+    fi
     # Developer ID: signs the app; an App Store Connect API key (the one bernt and
     # lernt upload with) notarizes it. Tauri reads APPLE_API_*; notarytool below
     # takes the same key.
