@@ -25,64 +25,158 @@ use crate::browser::{self, NativeState};
 // to each view's tracking area over its whole visible rect, which ignores
 // sibling views on top. With the UI webview spanning the window under the
 // pages (or a hidden terminal view still holding the keyboard), two webviews
-// handled each move over a link and fought over the cursor: arrow, pointer,
-// arrow. Each webview now only takes moves over the part of it that shows.
+// handled each move over a link or text and fought over the cursor: arrow,
+// pointer, arrow. Each webview now only takes moves over the part of it that
+// shows. WebKit's tracking areas belong to a `WKMouseTrackingObserver`, not
+// the view, so both get the guard.
 
-type MouseMoved = unsafe extern "C-unwind" fn(&AnyObject, objc2::runtime::Sel, &AnyObject);
-static MOUSE_MOVED: std::sync::OnceLock<MouseMoved> = std::sync::OnceLock::new();
+type MouseEvent = unsafe extern "C-unwind" fn(&AnyObject, objc2::runtime::Sel, &AnyObject);
 
-/// Install the guard on the webview class (wry's, shared by every webview).
+/// The originals: the view's mouseMoved:, the observer's mouseMoved:,
+/// mouseEntered: and mouseExited:.
+static VIEW_MOVED: std::sync::OnceLock<MouseEvent> = std::sync::OnceLock::new();
+static OBSERVER_MOVED: std::sync::OnceLock<MouseEvent> = std::sync::OnceLock::new();
+static OBSERVER_ENTERED: std::sync::OnceLock<MouseEvent> = std::sync::OnceLock::new();
+static OBSERVER_EXITED: std::sync::OnceLock<MouseEvent> = std::sync::OnceLock::new();
+/// Observers whose view the mouse left for a view on top (told with a
+/// mouseExited:, so hover doesn't stick on what it last passed over).
+static COVERED: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+/// Install the guards (once: wry's webview class is shared by every
+/// webview, WebKit's observer class by every page).
 pub fn guard_mouse_moves(webview: &Webview) {
     let _ = webview.with_webview(|platform| unsafe {
+        if VIEW_MOVED.get().is_some() {
+            return;
+        }
         let view = &*(platform.inner() as *const AnyObject);
-        let class = objc2::ffi::object_getClass(view) as *mut objc2::runtime::AnyClass;
-        let sel = objc2::sel!(mouseMoved:);
-        if MOUSE_MOVED.get().is_some() {
-            return;
-        }
-        // Inherited (WKWebView's) or the class's own.
-        let method = objc2::ffi::class_getInstanceMethod(class, sel);
-        if method.is_null() {
-            return;
-        }
-        let Some(original) = objc2::ffi::method_getImplementation(method) else {
-            return;
-        };
-        let _ = MOUSE_MOVED.set(std::mem::transmute::<objc2::runtime::Imp, MouseMoved>(original));
-        let imp = std::mem::transmute::<MouseMoved, objc2::runtime::Imp>(mouse_moved);
-        if !objc2::ffi::class_addMethod(class, sel, imp, c"v@:@".as_ptr()).as_bool() {
-            // The class has its own: replace it (the original runs after).
-            objc2::ffi::method_setImplementation(objc2::ffi::class_getInstanceMethod(class, sel), imp);
+        let class = objc2::ffi::object_getClass(view);
+        replace(class, objc2::sel!(mouseMoved:), view_moved, &VIEW_MOVED);
+        if let Some(observer) = objc2::runtime::AnyClass::get(c"WKMouseTrackingObserver") {
+            replace(observer, objc2::sel!(mouseMoved:), observer_moved, &OBSERVER_MOVED);
+            replace(observer, objc2::sel!(mouseEntered:), observer_entered, &OBSERVER_ENTERED);
+            replace(observer, objc2::sel!(mouseExited:), observer_exited, &OBSERVER_EXITED);
         }
     });
 }
 
-unsafe extern "C-unwind" fn mouse_moved(
-    this: &AnyObject,
-    cmd: objc2::runtime::Sel,
-    event: &AnyObject,
+/// Put `imp` in place of `class`'s method `sel` (its own or inherited),
+/// keeping the original in `original`.
+unsafe fn replace(
+    class: *const objc2::runtime::AnyClass,
+    sel: objc2::runtime::Sel,
+    imp: MouseEvent,
+    original: &std::sync::OnceLock<MouseEvent>,
 ) {
     unsafe {
-        if !shows_at(this, event) {
+        let method = objc2::ffi::class_getInstanceMethod(class, sel);
+        if method.is_null() {
             return;
         }
-        if let Some(original) = MOUSE_MOVED.get() {
+        let Some(old) = objc2::ffi::method_getImplementation(method) else {
+            return;
+        };
+        let _ = original.set(std::mem::transmute::<objc2::runtime::Imp, MouseEvent>(old));
+        let imp = std::mem::transmute::<MouseEvent, objc2::runtime::Imp>(imp);
+        let class = class as *mut objc2::runtime::AnyClass;
+        if !objc2::ffi::class_addMethod(class, sel, imp, c"v@:@".as_ptr()).as_bool() {
+            // The class has its own: replace it (the original runs after).
+            objc2::ffi::method_setImplementation(method, imp);
+        }
+    }
+}
+
+unsafe extern "C-unwind" fn view_moved(this: &AnyObject, cmd: objc2::runtime::Sel, event: &AnyObject) {
+    unsafe {
+        if shows_at(this, event)
+            && let Some(original) = VIEW_MOVED.get()
+        {
             original(this, cmd, event);
         }
     }
 }
 
-/// Whether `view` is what's on top where `event` happened.
-pub unsafe fn shows_at(view: &AnyObject, event: &AnyObject) -> bool {
+unsafe extern "C-unwind" fn observer_moved(this: &AnyObject, cmd: objc2::runtime::Sel, event: &AnyObject) {
+    unsafe { observer_event(this, cmd, event, &OBSERVER_MOVED) }
+}
+
+unsafe extern "C-unwind" fn observer_entered(this: &AnyObject, cmd: objc2::runtime::Sel, event: &AnyObject) {
+    unsafe { observer_event(this, cmd, event, &OBSERVER_ENTERED) }
+}
+
+unsafe extern "C-unwind" fn observer_exited(this: &AnyObject, cmd: objc2::runtime::Sel, event: &AnyObject) {
     unsafe {
-        let window: *mut AnyObject = msg_send![view, window];
-        let Some(window) = window.as_ref() else {
+        let me = this as *const AnyObject as usize;
+        COVERED.lock().unwrap().retain(|&o| o != me);
+        if let Some(original) = OBSERVER_EXITED.get() {
+            original(this, cmd, event);
+        }
+    }
+}
+
+/// A move or enter for an observer's view: passed on only where the view
+/// shows. The first one dropped tells the view the mouse left.
+unsafe fn observer_event(
+    this: &AnyObject,
+    cmd: objc2::runtime::Sel,
+    event: &AnyObject,
+    original: &std::sync::OnceLock<MouseEvent>,
+) {
+    unsafe {
+        let me = this as *const AnyObject as usize;
+        if observer_shows_at(this, event) {
+            COVERED.lock().unwrap().retain(|&o| o != me);
+            if let Some(original) = original.get() {
+                original(this, cmd, event);
+            }
+            return;
+        }
+        let newly_covered = {
+            let mut covered = COVERED.lock().unwrap();
+            let newly = !covered.contains(&me);
+            if newly {
+                covered.push(me);
+            }
+            newly
+        };
+        if newly_covered && let Some(exited) = OBSERVER_EXITED.get() {
+            exited(this, objc2::sel!(mouseExited:), event);
+        }
+    }
+}
+
+/// Whether the view on top where `event` happened is (in) the view that
+/// `observer` tracks the mouse for.
+pub unsafe fn observer_shows_at(observer: &AnyObject, event: &AnyObject) -> bool {
+    unsafe {
+        let Some(mut view) = hit_view(event) else {
             return true;
         };
-        let content: *mut AnyObject = msg_send![window, contentView];
-        let Some(content) = content.as_ref() else {
-            return true;
-        };
+        loop {
+            let areas: *mut AnyObject = msg_send![&*view, trackingAreas];
+            let count: usize = msg_send![&*areas, count];
+            for i in 0..count {
+                let area: *mut AnyObject = msg_send![&*areas, objectAtIndex: i];
+                let owner: *mut AnyObject = msg_send![&*area, owner];
+                if std::ptr::eq(owner, observer) {
+                    return true;
+                }
+            }
+            let parent: *mut AnyObject = msg_send![&*view, superview];
+            match Retained::retain(parent) {
+                Some(parent) => view = parent,
+                None => return false,
+            }
+        }
+    }
+}
+
+/// The view on top where `event` happened, if it's in a window.
+unsafe fn hit_view(event: &AnyObject) -> Option<Retained<AnyObject>> {
+    unsafe {
+        let window: *mut AnyObject = msg_send![event, window];
+        let content: *mut AnyObject = msg_send![window.as_ref()?, contentView];
+        let content = content.as_ref()?;
         let location: NSPoint = msg_send![event, locationInWindow];
         // hitTest: takes a point in the superview's coordinates.
         let parent: *mut AnyObject = msg_send![content, superview];
@@ -92,9 +186,19 @@ pub unsafe fn shows_at(view: &AnyObject, event: &AnyObject) -> bool {
             None => location,
         };
         let hit: *mut AnyObject = msg_send![content, hitTest: point];
-        match hit.as_ref() {
-            Some(hit) => msg_send![hit, isDescendantOf: view],
-            None => false,
+        Retained::retain(hit)
+    }
+}
+
+/// Whether `view` is (in) the view on top where `event` happened.
+pub unsafe fn shows_at(view: &AnyObject, event: &AnyObject) -> bool {
+    unsafe {
+        match hit_view(event) {
+            Some(hit) => msg_send![&*hit, isDescendantOf: view],
+            None => {
+                let window: *mut AnyObject = msg_send![event, window];
+                window.is_null()
+            }
         }
     }
 }

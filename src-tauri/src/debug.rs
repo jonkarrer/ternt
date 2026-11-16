@@ -411,9 +411,11 @@ pub async fn debug_click(
 }
 
 /// Whether `label`'s view would take a mouse move at window point
-/// (`x`, `y`) from the top left (see `native::guard_mouse_moves`).
+/// (`x`, `y`) from the top left (see `native::guard_mouse_moves`): through
+/// the first responder path and through each of its tracking areas, all of
+/// which must agree.
 #[tauri::command]
-pub async fn debug_takes_mouse(app: AppHandle, label: String, x: f64, y: f64) -> Result<bool, String> {
+pub async fn debug_takes_mouse(app: AppHandle, label: String, x: f64, y: f64) -> Result<Option<bool>, String> {
     let webview = app.get_webview(&label).ok_or_else(|| format!("no webview {label}"))?;
     let (tx, rx) = std::sync::mpsc::channel();
     webview
@@ -436,7 +438,23 @@ pub async fn debug_takes_mouse(app: AppHandle, label: String, x: f64, y: f64) ->
                 clickCount: 0isize,
                 pressure: 0f32
             ];
-            let _ = tx.send(crate::native::shows_at(view, &*event));
+            let mut takes = vec![crate::native::shows_at(view, &*event)];
+            let areas: *mut AnyObject = objc2::msg_send![view, trackingAreas];
+            let count: usize = objc2::msg_send![&*areas, count];
+            for i in 0..count {
+                let area: *mut AnyObject = objc2::msg_send![&*areas, objectAtIndex: i];
+                let owner: *mut AnyObject = objc2::msg_send![&*area, owner];
+                if !std::ptr::eq(owner, view) {
+                    takes.push(crate::native::observer_shows_at(&*owner, &*event));
+                }
+            }
+            // Only the view itself, or no tracking areas: not what's tested.
+            let answer = if takes.len() < 2 || takes.iter().any(|&t| t != takes[0]) {
+                None
+            } else {
+                Some(takes[0])
+            };
+            let _ = tx.send(answer);
         })
         .map_err(|e| e.to_string())?;
     rx.recv().map_err(|e| e.to_string())
