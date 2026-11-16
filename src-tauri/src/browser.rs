@@ -440,7 +440,10 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
     let _ui = window.add_child(ui, LogicalPosition::new(0.0, 0.0), size)?;
 
     #[cfg(target_os = "macos")]
-    crate::native::track_window_size(&_ui);
+    {
+        crate::native::track_window_size(&_ui);
+        crate::native::guard_mouse_moves(&_ui);
+    }
 
     crate::palette::create(&window)?;
 

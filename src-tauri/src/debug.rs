@@ -410,6 +410,38 @@ pub async fn debug_click(
     rx.recv().map_err(|e| e.to_string())
 }
 
+/// Whether `label`'s view would take a mouse move at window point
+/// (`x`, `y`) from the top left (see `native::guard_mouse_moves`).
+#[tauri::command]
+pub async fn debug_takes_mouse(app: AppHandle, label: String, x: f64, y: f64) -> Result<bool, String> {
+    let webview = app.get_webview(&label).ok_or_else(|| format!("no webview {label}"))?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    webview
+        .with_webview(move |p| unsafe {
+            use objc2::runtime::AnyObject;
+            let view = &*(p.inner() as *const AnyObject);
+            let window: *mut AnyObject = objc2::msg_send![view, window];
+            let content: *mut AnyObject = objc2::msg_send![&*window, contentView];
+            let frame: objc2_foundation::NSRect = objc2::msg_send![&*content, frame];
+            let number: isize = objc2::msg_send![&*window, windowNumber];
+            let event: *mut AnyObject = objc2::msg_send![
+                objc2::class!(NSEvent),
+                mouseEventWithType: 5usize,
+                location: objc2_foundation::NSPoint::new(x, frame.size.height - y),
+                modifierFlags: 0usize,
+                timestamp: 0f64,
+                windowNumber: number,
+                context: std::ptr::null::<AnyObject>(),
+                eventNumber: 0isize,
+                clickCount: 0isize,
+                pressure: 0f32
+            ];
+            let _ = tx.send(crate::native::shows_at(view, &*event));
+        })
+        .map_err(|e| e.to_string())?;
+    rx.recv().map_err(|e| e.to_string())
+}
+
 /// Answer the JavaScript dialog sheet on the main window: type `text` into
 /// a prompt's field (if given), then press OK or Cancel. Returns the
 /// dialog's texts (title, message), or `None` if no dialog is showing.

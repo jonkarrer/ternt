@@ -19,6 +19,86 @@ use tauri::{AppHandle, Manager, Webview};
 
 use crate::browser::{self, NativeState};
 
+// --- Mouse moves ---------------------------------------------------------------
+//
+// AppKit sends mouse moves to the first responder wherever the mouse is, and
+// to each view's tracking area over its whole visible rect, which ignores
+// sibling views on top. With the UI webview spanning the window under the
+// pages (or a hidden terminal view still holding the keyboard), two webviews
+// handled each move over a link and fought over the cursor: arrow, pointer,
+// arrow. Each webview now only takes moves over the part of it that shows.
+
+type MouseMoved = unsafe extern "C-unwind" fn(&AnyObject, objc2::runtime::Sel, &AnyObject);
+static MOUSE_MOVED: std::sync::OnceLock<MouseMoved> = std::sync::OnceLock::new();
+
+/// Install the guard on the webview class (wry's, shared by every webview).
+pub fn guard_mouse_moves(webview: &Webview) {
+    let _ = webview.with_webview(|platform| unsafe {
+        let view = &*(platform.inner() as *const AnyObject);
+        let class = objc2::ffi::object_getClass(view) as *mut objc2::runtime::AnyClass;
+        let sel = objc2::sel!(mouseMoved:);
+        if MOUSE_MOVED.get().is_some() {
+            return;
+        }
+        // Inherited (WKWebView's) or the class's own.
+        let method = objc2::ffi::class_getInstanceMethod(class, sel);
+        if method.is_null() {
+            return;
+        }
+        let Some(original) = objc2::ffi::method_getImplementation(method) else {
+            return;
+        };
+        let _ = MOUSE_MOVED.set(std::mem::transmute::<objc2::runtime::Imp, MouseMoved>(original));
+        let imp = std::mem::transmute::<MouseMoved, objc2::runtime::Imp>(mouse_moved);
+        if !objc2::ffi::class_addMethod(class, sel, imp, c"v@:@".as_ptr()).as_bool() {
+            // The class has its own: replace it (the original runs after).
+            objc2::ffi::method_setImplementation(objc2::ffi::class_getInstanceMethod(class, sel), imp);
+        }
+    });
+}
+
+unsafe extern "C-unwind" fn mouse_moved(
+    this: &AnyObject,
+    cmd: objc2::runtime::Sel,
+    event: &AnyObject,
+) {
+    unsafe {
+        if !shows_at(this, event) {
+            return;
+        }
+        if let Some(original) = MOUSE_MOVED.get() {
+            original(this, cmd, event);
+        }
+    }
+}
+
+/// Whether `view` is what's on top where `event` happened.
+pub unsafe fn shows_at(view: &AnyObject, event: &AnyObject) -> bool {
+    unsafe {
+        let window: *mut AnyObject = msg_send![view, window];
+        let Some(window) = window.as_ref() else {
+            return true;
+        };
+        let content: *mut AnyObject = msg_send![window, contentView];
+        let Some(content) = content.as_ref() else {
+            return true;
+        };
+        let location: NSPoint = msg_send![event, locationInWindow];
+        // hitTest: takes a point in the superview's coordinates.
+        let parent: *mut AnyObject = msg_send![content, superview];
+        let null: *const AnyObject = ptr::null();
+        let point: NSPoint = match parent.as_ref() {
+            Some(parent) => msg_send![parent, convertPoint: location, fromView: null],
+            None => location,
+        };
+        let hit: *mut AnyObject = msg_send![content, hitTest: point];
+        match hit.as_ref() {
+            Some(hit) => msg_send![hit, isDescendantOf: view],
+            None => false,
+        }
+    }
+}
+
 /// Pin the view's margins to its superview so AppKit resizes it in the same
 /// frame as the window. This avoids an event-loop/IPC hop per frame during
 /// live resize, which is what makes multi-webview layouts lag.
