@@ -94,6 +94,32 @@ let pendingFocus: Session | null = null;
 
 const theme = () => (dark.matches ? DARK : LIGHT);
 
+/** Text size for every terminal, in px; ⌘+ / ⌘− / ⌘0 change it (saved in
+    prefs, which clamp it). */
+const FONT_SIZE = 13;
+const MIN_FONT_SIZE = 8;
+const MAX_FONT_SIZE = 36;
+let fontSize = FONT_SIZE;
+browser.getPrefs().then((p) => setFontSize(p.terminalFontSize, false));
+
+function setFontSize(size: number, save = true) {
+  size = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(size)));
+  if (size === fontSize) return;
+  fontSize = size;
+  for (const s of sessions.values()) s.term.options.fontSize = size;
+  layout();
+  if (save) browser.updatePrefs({ terminalFontSize: size });
+}
+
+/** ⌘= (⌘+), ⌘− and ⌘0: the size change they ask for, if any. */
+function zoomKey(event: KeyboardEvent): ((size: number) => number) | null {
+  if (!event.metaKey || event.ctrlKey || event.altKey) return null;
+  if (event.key === "=" || event.key === "+") return (size) => size + 1;
+  if (event.key === "-" || event.key === "_") return (size) => size - 1;
+  if (event.key === "0") return () => FONT_SIZE;
+  return null;
+}
+
 function create(id: number, pane: number): Session {
   const el = document.createElement("div");
   el.className = "pane";
@@ -104,7 +130,7 @@ function create(id: number, pane: number): Session {
 
   const term = new Terminal({
     fontFamily: '"SF Mono", Menlo, monospace',
-    fontSize: 13,
+    fontSize,
     lineHeight: 1.2,
     cursorBlink: true,
     macOptionIsMeta: true,
@@ -123,6 +149,14 @@ function create(id: number, pane: number): Session {
   // prompts): send ESC + CR, as Option+Enter does and as `/terminal-setup`
   // configures in other terminals. Plain Enter is just CR.
   term.attachCustomKeyEventHandler((event) => {
+    const zoom = zoomKey(event);
+    if (zoom) {
+      if (event.type === "keydown") {
+        event.preventDefault();
+        setFontSize(zoom(fontSize));
+      }
+      return false;
+    }
     if (event.key !== "Enter" || !event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return true;
     if (event.type === "keydown") {
       event.preventDefault();
@@ -464,6 +498,10 @@ if (import.meta.env.DEV) {
     const s = sessions.get(keyOf(id, pane))!;
     const r = s.el.querySelector(".xterm-screen")!.getBoundingClientRect();
     return [r.x + 2, r.y + (r.height / s.term.rows) * (row - 0.5)];
+  };
+  (window as any).__termFont = (id: number, pane = 0) => {
+    const term = sessions.get(keyOf(id, pane))?.term;
+    return term && { size: term.options.fontSize, cols: term.cols };
   };
   (window as any).__termSelection = (id: number, pane = 0) => sessions.get(keyOf(id, pane))?.term.getSelection();
 }

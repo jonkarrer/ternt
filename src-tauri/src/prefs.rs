@@ -40,11 +40,27 @@ impl Account {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// Terminal text size, in px (⌘+ / ⌘− / ⌘0 in a terminal).
+pub const TERMINAL_FONT_SIZE: f64 = 13.0;
+const MIN_TERMINAL_FONT_SIZE: f64 = 8.0;
+const MAX_TERMINAL_FONT_SIZE: f64 = 36.0;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Prefs {
     pub external_links: LinkTarget,
     pub account: Account,
+    pub terminal_font_size: f64,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Self {
+            external_links: LinkTarget::default(),
+            account: Account::default(),
+            terminal_font_size: TERMINAL_FONT_SIZE,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -95,6 +111,13 @@ pub fn get_prefs(app: AppHandle) -> Prefs {
 #[tauri::command]
 pub fn set_prefs(app: AppHandle, mut prefs: Prefs) {
     prefs.account = prefs.account.tidy();
+    prefs.terminal_font_size = if prefs.terminal_font_size.is_finite() {
+        prefs
+            .terminal_font_size
+            .clamp(MIN_TERMINAL_FONT_SIZE, MAX_TERMINAL_FONT_SIZE)
+    } else {
+        TERMINAL_FONT_SIZE
+    };
     *app.state::<Store>().0.lock().unwrap() = prefs.clone();
     save(&app, &prefs);
     let _ = app.emit_to(
@@ -115,6 +138,7 @@ mod tests {
         let prefs: Prefs = serde_json::from_str(r#"{"externalLinks":"tab","future":1}"#).unwrap();
         assert_eq!(prefs.external_links, LinkTarget::Tab);
         assert_eq!(prefs.account, Account::default());
+        assert_eq!(prefs.terminal_font_size, TERMINAL_FONT_SIZE);
     }
 
     #[test]

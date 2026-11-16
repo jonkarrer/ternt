@@ -29,6 +29,7 @@ export const SHORTCUTS: ShortcutGroup[] = [
   group("Terminals", [
     ["⌘D", "Split Right: a new terminal pane beside this one"],
     ["⇧⌘D", "Split Down: a new terminal pane below this one"],
+    ["⌘+ / ⌘− / ⌘0", "Terminal text bigger / smaller / back to normal"],
     ["⌘[  ⌘]", "Previous / next pane"],
     ["⌘W", "Close the focused pane"],
   ]),

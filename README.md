@@ -47,6 +47,7 @@ them run under `doppler run --`.
 | ⌘[ / ⌘] / ⌘R | Back / forward / reload (in a split terminal, ⌘[ / ⌘] move between panes) |
 | ⌥⌘I | Developer Tools: the Web Inspector for the page, in its own window (right-click → Inspect Element works too) |
 | ⌘D / ⇧⌘D | Split the terminal: a new pane to the right / below |
+| ⌘+ / ⌘− / ⌘0 | Terminal text bigger / smaller / back to normal (every terminal; remembered) |
 | ⌘S | Toggle sidebar (hidden, it slides out over the page when the pointer touches the window's left edge) |
 | ⌘F | Explore tabs: j/k or ↑/↓ move, h/l or ←/→ switch space, Space peeks, Enter opens, Esc goes back |
 | ⌃1–⌃9, ⌘⌥← / ⌘⌥→ | Switch spaces, stopping at the first and last (or swipe two fingers across the sidebar; with a mouse, scroll sideways or Shift-scroll over it) |

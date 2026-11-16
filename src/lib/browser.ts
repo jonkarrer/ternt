@@ -142,6 +142,8 @@ export interface Prefs {
   externalLinks: "little" | "tab";
   /** Who uses this Ternt (Settings → Account). */
   account: { name: string; email: string };
+  /** Terminal text size in px (⌘+ / ⌘− / ⌘0 in a terminal). */
+  terminalFontSize: number;
 }
 
 export type PaletteMode = "newTab" | "edit" | "help";
