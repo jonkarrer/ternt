@@ -78,7 +78,7 @@ export const HOW_TOS: HowTo[] = [
   },
   {
     title: "Switch spaces",
-    text: "Swipe two fingers across the sidebar, scroll sideways (or Shift-scroll) with a mouse, or press ⌃1–⌃9.",
+    text: "Swipe two fingers left across the sidebar for the next space, right for the previous one; scroll sideways (or Shift-scroll) with a mouse, or press ⌃1–⌃9.",
   },
   {
     title: "Separate logins",

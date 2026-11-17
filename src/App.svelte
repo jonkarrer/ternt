@@ -520,11 +520,11 @@
     return event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL || (ticks !== 0 && ticks % 120 === 0);
   }
 
-  /** The space a scroll of `dx` leads to. Content follows the fingers: a
-   *  swipe to the right (negative delta) brings in the space on the left. */
+  /** The space a scroll of `dx` leads to: a swipe to the left (positive
+   *  delta) brings in the space on the right, like turning a page. */
   function spaceToward(dx: number) {
     const at = browserState.spaces.findIndex((s) => s.id === activeSpace);
-    return browserState.spaces[at + (dx > 0 ? -1 : 1)];
+    return browserState.spaces[at + (dx > 0 ? 1 : -1)];
   }
 
   function onwheel(event: WheelEvent) {
@@ -562,7 +562,7 @@
     }
     // Slide away from the space coming in (it then slides in from that
     // side); past the first or last space, stay put.
-    pull = next ? swipe * 0.5 : 0;
+    pull = next ? -swipe * 0.5 : 0;
   }
 
   function focusSelect(node: HTMLInputElement) {

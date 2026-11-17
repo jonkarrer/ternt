@@ -50,7 +50,7 @@ them run under `doppler run --`.
 | ⌘+ / ⌘− / ⌘0 | Terminal text bigger / smaller / back to normal (every terminal; remembered) |
 | ⌘S | Toggle sidebar (hidden, it slides out over the page when the pointer touches the window's left edge) |
 | ⌃F | Explore tabs: j/k or ↑/↓ move, h/l or ←/→ switch space, Space peeks, Enter opens, Esc goes back (in a terminal, ⌃F goes to the shell) |
-| ⌃1–⌃9, ⌘⌥← / ⌘⌥→ | Switch spaces, stopping at the first and last (or swipe two fingers across the sidebar; with a mouse, scroll sideways or Shift-scroll over it) |
+| ⌃1–⌃9, ⌘⌥← / ⌘⌥→ | Switch spaces, stopping at the first and last (or swipe two fingers across the sidebar: left for the next space, right for the previous; with a mouse, scroll sideways or Shift-scroll over it) |
 | ⌥⌘\ | A new terminal beside the current tab (in a group) |
 | ⌘, | Settings (⌘1–⌘6 switch its pages, ⌘W closes it) |
 | ⌘H | Shortcuts and how-tos, searchable (also in the Help menu). Hide Ternt is in the app menu without a shortcut |
