@@ -36,9 +36,12 @@
       history = [];
       return;
     }
-    browser.searchHistory(q, 8).then((hits) => {
-      if (seq === historySeq) history = hits;
-    });
+    browser
+      .searchHistory(q, 8)
+      .catch(() => [])
+      .then((hits) => {
+        if (seq === historySeq) history = hits;
+      });
   });
 
   onMount(() => {
@@ -49,7 +52,9 @@
     return () => unlisten.then((off) => off());
   });
 
+  let showSeq = 0;
   async function show(next: PaletteRequest) {
+    const seq = ++showSeq;
     request = next;
     lastPointer = "";
     query = next.url ?? "";
@@ -58,6 +63,8 @@
     input?.focus();
     input?.select();
     const state = await browser.getState();
+    // Opened again meanwhile: that one's state is newer.
+    if (seq !== showSeq) return;
     tabs = state.tabs;
     spaces = state.spaces;
     activeId = state.active;
@@ -124,6 +131,11 @@
     // Reset the highlight whenever the result set changes.
     void query;
     selected = 0;
+  });
+
+  $effect(() => {
+    // History results arrive after the rest: keep the highlight on the list.
+    if (selected >= items.length) selected = Math.max(0, items.length - 1);
   });
 
   $effect(() => {

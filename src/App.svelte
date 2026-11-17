@@ -151,12 +151,16 @@
     pendingRatio = { column, ratio };
     if (ratioInFlight) return;
     ratioInFlight = true;
-    while (pendingRatio != null) {
-      const next = pendingRatio;
-      pendingRatio = null;
-      await browser.setGroupRatio(next.column, next.ratio);
+    try {
+      while (pendingRatio != null) {
+        const next = pendingRatio;
+        pendingRatio = null;
+        await browser.setGroupRatio(next.column, next.ratio);
+      }
+    } finally {
+      // A failed call mustn't stop every later one.
+      ratioInFlight = false;
     }
-    ratioInFlight = false;
   }
 
   function startGroupResize(event: PointerEvent, column: number | null) {
@@ -181,6 +185,11 @@
     return browserState.tabs.filter((t) => t.zone === "pinned" && t.space === activeSpace && t.folder === folder);
   }
 
+  function exists(s: BrowserState, item: NonNullable<typeof renaming>) {
+    const list = { space: s.spaces, folder: s.folders, group: s.groups, tab: s.tabs }[item.kind];
+    return list.some((x) => x.id === item.id);
+  }
+
   function applyState(s: BrowserState) {
     const from = browserState.spaces.findIndex((x) => x.id === browserState.activeSpace);
     const to = s.spaces.findIndex((x) => x.id === s.activeSpace);
@@ -189,6 +198,9 @@
     // what's showing.
     if (explore && (from !== to || !s.tabs.some((t) => t.id === cursor))) cursor = s.active;
     browserState = s;
+    // A rename or icon picker whose space, folder or tab went away.
+    if (renaming && !exists(s, renaming)) renaming = null;
+    if (pickingIcon != null && !s.spaces.some((x) => x.id === pickingIcon)) pickingIcon = null;
     // Rust owns the width; don't fight an in-progress drag.
     if (!resizing) sidebarWidth = s.sidebarWidth;
   }
@@ -228,12 +240,15 @@
     pendingWidth = width;
     if (inFlight) return;
     inFlight = true;
-    while (pendingWidth != null) {
-      const next = pendingWidth;
-      pendingWidth = null;
-      await browser.setSidebarWidth(next);
+    try {
+      while (pendingWidth != null) {
+        const next = pendingWidth;
+        pendingWidth = null;
+        await browser.setSidebarWidth(next);
+      }
+    } finally {
+      inFlight = false;
     }
-    inFlight = false;
   }
 
   function startResize(event: PointerEvent) {
@@ -318,12 +333,15 @@
     dropPoint = point;
     if (previewing) return;
     previewing = true;
-    let sent: [number, number] | null | undefined;
-    while (sent !== dropPoint) {
-      sent = dropPoint;
-      await browser.previewGroupDrop(tab, sent);
+    try {
+      let sent: [number, number] | null | undefined;
+      while (sent !== dropPoint) {
+        sent = dropPoint;
+        await browser.previewGroupDrop(tab, sent);
+      }
+    } finally {
+      previewing = false;
     }
-    previewing = false;
   }
 
   function startDrag(event: PointerEvent, tab: Tab) {
@@ -347,10 +365,22 @@
       const over = e.clientX >= contentLeft && browserState.active != null;
       if (over || content) previewDrop(tab.id, over ? [e.clientX, e.clientY] : null);
       content = over ? [e.clientX, e.clientY] : null;
-      drag = { id: tab.id, target: over ? null : hitTest(e.clientX, e.clientY, tab) };
+      const target = over ? null : hitTest(e.clientX, e.clientY, tab);
+      // Every row reads `drag`: only touch it when the drop spot changes.
+      if (!drag || JSON.stringify(drag.target) !== JSON.stringify(target)) drag = { id: tab.id, target };
+    };
+    const stop = () => {
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", cancel);
+    };
+    const cancel = () => {
+      stop();
+      drag = null;
+      if (content) previewDrop(tab.id, null);
     };
     const up = async () => {
-      el.removeEventListener("pointermove", move);
+      stop();
       const target = drag?.target;
       drag = null;
       if (!dragging) {
@@ -363,15 +393,8 @@
       }
     };
     el.addEventListener("pointermove", move);
-    el.addEventListener("pointerup", up, { once: true });
-    el.addEventListener(
-      "pointercancel",
-      () => {
-        drag = null;
-        if (content) previewDrop(tab.id, null);
-      },
-      { once: true },
-    );
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", cancel);
   }
 
   function markFor(tab: Tab): "before" | "after" | null {
@@ -423,18 +446,28 @@
     const move = (e: PointerEvent) => {
       if (!dragging && Math.hypot(e.clientX - startX, e.clientY - startY) < 4) return;
       dragging = true;
-      folderDrag = folderHitTest(e.clientX, e.clientY, folder.id);
+      const next = folderHitTest(e.clientX, e.clientY, folder.id);
+      if (JSON.stringify(next) !== JSON.stringify(folderDrag)) folderDrag = next;
+    };
+    const stop = () => {
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", cancel);
+    };
+    const cancel = () => {
+      stop();
+      folderDrag = null;
     };
     const up = async () => {
-      el.removeEventListener("pointermove", move);
+      stop();
       const index = folderDrag?.index;
       folderDrag = null;
       if (!dragging) browser.setFolderOpen(folder.id, !folder.open);
       else if (index != null) await browser.moveFolder(folder.id, index);
     };
     el.addEventListener("pointermove", move);
-    el.addEventListener("pointerup", up, { once: true });
-    el.addEventListener("pointercancel", () => (folderDrag = null), { once: true });
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", cancel);
   }
 
   function folderMark(id: number) {

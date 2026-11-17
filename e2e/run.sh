@@ -32,7 +32,7 @@ for name in $tests; do
   key=$name
   [[ $name =~ ^(.+)-[0-9]+$ ]] && key=${BASH_REMATCH[1]}
   if [[ $name == $key || $name == *-1 ]]; then
-    rm -f $OUT/$key.session.json $OUT/$key.history.json $OUT/$key.prefs.json
+    rm -f $OUT/$key.{session,history,prefs}.json{,.bak,.tmp-*,.unreadable-*}(N)
     # A missing session file is a first launch, which opens the welcome page;
     # suites start from an empty session instead, except the welcome suite.
     [[ $key == welcome ]] || echo '{"tabs":[],"active":null,"sidebarWidth":240,"sidebarCollapsed":false}' > $OUT/$key.session.json

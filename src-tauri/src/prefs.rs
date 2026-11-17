@@ -75,12 +75,9 @@ fn path(app: &AppHandle) -> Option<PathBuf> {
 }
 
 pub fn load(app: &AppHandle) {
-    let Some(data) = path(app).and_then(|p| std::fs::read(p).ok()) else {
-        return;
-    };
-    match serde_json::from_slice(&data) {
-        Ok(prefs) => *app.state::<Store>().0.lock().unwrap() = prefs,
-        Err(err) => eprintln!("ignoring unreadable prefs: {err}"),
+    let Some(path) = path(app) else { return };
+    if let crate::persist::Loaded::Read(prefs) = crate::persist::load(&path) {
+        *app.state::<Store>().0.lock().unwrap() = prefs;
     }
 }
 
@@ -90,14 +87,9 @@ pub fn get(app: &AppHandle) -> Prefs {
 
 fn save(app: &AppHandle, prefs: &Prefs) {
     let Some(path) = path(app) else { return };
-    let result = (|| -> std::io::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(prefs)?)?;
-        std::fs::rename(tmp, &path)
-    })();
+    let result = serde_json::to_vec_pretty(prefs)
+        .map_err(std::io::Error::from)
+        .and_then(|data| crate::persist::write(&path, &data, true));
     if let Err(err) = result {
         eprintln!("failed to save prefs: {err}");
     }

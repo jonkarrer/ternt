@@ -77,6 +77,8 @@ pub struct Updates {
     pending: Mutex<Option<Pending>>,
     /// A download is under way (shown or not).
     downloading: Mutex<bool>,
+    /// A check is under way (the loop, a focus and a manual one can overlap).
+    checking: std::sync::atomic::AtomicBool,
     /// When the last check started (wall clock, which keeps counting
     /// while the Mac sleeps).
     last_check: Mutex<Option<SystemTime>>,
@@ -214,6 +216,18 @@ pub async fn check(app: &AppHandle, manual: bool) -> Result<(), String> {
     if matches!(status(app), Status::Installing { .. }) || *app.state::<Updates>().downloading.lock().unwrap() {
         return Ok(());
     }
+    use std::sync::atomic::Ordering;
+    if app.state::<Updates>().checking.swap(true, Ordering::AcqRel) {
+        return Ok(());
+    }
+    struct Done<'a>(&'a std::sync::atomic::AtomicBool);
+    impl Drop for Done<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Release);
+        }
+    }
+    let updates = app.state::<Updates>();
+    let _done = Done(&updates.checking);
     *app.state::<Updates>().last_check.lock().unwrap() = Some(SystemTime::now());
     let found = updater(app).map_err(|e| e.to_string())?.check().await;
     match found {
@@ -276,6 +290,7 @@ async fn download(app: &AppHandle, shown: bool) -> Result<(), String> {
         .as_ref()
         .and_then(|p| std::fs::read(p).ok())
         .filter(|bytes| update.verify(bytes).is_ok());
+    let kept = on_disk.is_some();
     let bytes = match on_disk {
         Some(bytes) => bytes,
         None => {
@@ -332,13 +347,11 @@ async fn download(app: &AppHandle, shown: bool) -> Result<(), String> {
             }
         }
     };
-    if let Some(path) = &path {
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        if !path.exists() && let Err(err) = std::fs::write(path, &bytes) {
-            eprintln!("couldn't keep the update for the next launch: {err}");
-        }
+    if let Some(path) = &path
+        && !kept
+        && let Err(err) = crate::persist::write(path, &bytes, false)
+    {
+        eprintln!("couldn't keep the update for the next launch: {err}");
     }
     if let Some(pending) = app.state::<Updates>().pending.lock().unwrap().as_mut() {
         pending.bytes = Some(bytes);

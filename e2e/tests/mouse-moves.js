@@ -28,4 +28,8 @@ for (const [label, X, where] of [["ui", px, "the sidebar's webview, under the pa
     await t.assert(r.length === 0, `${selector} for ${where} raises nothing (${r})`);
   }
 }
+
+// Freeing a page's view sometimes makes WebKit's Screen Time observer raise
+// (a WebKit bug), which aborted the app: it stops through a guard
+await t.assert(await t.invoke("debug_screen_time_guarded"), "WebKit's Screen Time observer is guarded");
 await t.quit();

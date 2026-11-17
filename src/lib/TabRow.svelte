@@ -30,7 +30,7 @@
     indent?: boolean;
     /** Its side, if the tab is in a split view. */
     split?: "left" | "right" | null;
-    /** Its split's color, shared with the other tab of the split. */
+    /** Its group's color, shared by every tab in the group. */
     splitColor?: string | null;
     /** On screen beside the active tab (the other pane of its split). */
     beside?: boolean;

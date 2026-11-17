@@ -541,6 +541,13 @@ pub async fn debug_observer_event(
     rx.recv().map_err(|e| e.to_string())
 }
 
+/// Whether WebKit's Screen Time observer stops through the guard in
+/// `native` (its exceptions can't be triggered on purpose).
+#[tauri::command]
+pub fn debug_screen_time_guarded() -> bool {
+    crate::native::screen_time_guarded()
+}
+
 /// Press ⌃ + `key` as the keyboard would: a key-down event posted to the
 /// app's queue, so menu shortcuts see it as a key press.
 #[tauri::command]

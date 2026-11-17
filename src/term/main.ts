@@ -26,6 +26,8 @@ interface Session {
   webgl?: WebglAddon;
   /** The latest title its shell set (the tab shows the focused pane's). */
   title?: string;
+  /** Closed: output still on its way is dropped. */
+  disposed?: boolean;
 }
 
 const DARK: ITheme = {
@@ -87,6 +89,8 @@ let shown: { tab: Tab; box: HTMLDivElement; rect: Rect | null }[] = [];
 const boxes = new Map<number, HTMLDivElement>();
 /** Its sessions, and the one with the keyboard. */
 let visible: Session[] = [];
+/** What the last layout placed (see `reconcile`). */
+let laidOut = "";
 let focused: Session | null = null;
 /** A pane just clicked into, until the state says it's focused (so a
     state update already on its way doesn't pull the keyboard back). */
@@ -195,6 +199,7 @@ async function start(s: Session) {
   const { id, pane } = s;
   const channel = new Channel<ArrayBuffer>();
   channel.onmessage = (data) => {
+    if (s.disposed) return;
     const bytes = new Uint8Array(data);
     // Ack once xterm has parsed the chunk; Rust pauses output when too much
     // is unacked, so a flood of output can't outrun rendering.
@@ -205,8 +210,16 @@ async function start(s: Session) {
     s.title = title;
     if (focused === s) nameTab(s);
   });
-  await invoke("pty_spawn", { id, pane, cols: s.term.cols, rows: s.term.rows, channel });
+  const { cols, rows } = s.term;
+  try {
+    await invoke("pty_spawn", { id, pane, cols, rows, channel });
+  } catch (err) {
+    s.term.write(`\x1b[31mCouldn't start the shell: ${err}\x1b[0m\r\n`);
+    return;
+  }
   s.term.onResize(({ cols, rows }) => invoke("pty_resize", { id, pane, cols, rows }));
+  // Fitted again while the shell was starting.
+  if (s.term.cols !== cols || s.term.rows !== rows) invoke("pty_resize", { id, pane, cols: s.term.cols, rows: s.term.rows });
 }
 
 /** The tab is named after its focused pane. */
@@ -260,6 +273,7 @@ function conceal(s: Session) {
 }
 
 function dispose(s: Session) {
+  s.disposed = true;
   s.webgl?.dispose();
   s.term.dispose();
   s.el.remove();
@@ -345,8 +359,11 @@ function divider(tab: number, node: Extract<PaneNode, { kind: "split" }>, room: 
         handle.removeEventListener("pointermove", move);
         handle.removeEventListener("pointerup", up);
         handle.removeEventListener("pointercancel", up);
-        if (ratio != null) await invoke("set_pane_ratio", { id: tab, split, ratio });
-        dragging.delete(key);
+        try {
+          if (ratio != null) await invoke("set_pane_ratio", { id: tab, split, ratio });
+        } finally {
+          dragging.delete(key);
+        }
       };
       handle.addEventListener("pointermove", move);
       handle.addEventListener("pointerup", up);
@@ -411,7 +428,16 @@ function reconcile(state: BrowserState) {
   const onScreen = state.screen
     .map((f) => ({ frame: f, tab: terminals.find((t) => t.id === f.tab) }))
     .filter((x): x is { frame: (typeof state.screen)[number]; tab: Tab } => x.tab != null);
-  if (!onScreen.length) return;
+  if (!onScreen.length) {
+    // A page has the view: let the terminals go (their WebGL contexts too).
+    for (const s of visible) conceal(s);
+    visible = [];
+    shown = [];
+    laidOut = "";
+    pendingFocus = null;
+    setFocused(null);
+    return;
+  }
   const grouped = state.screen.length > 1;
   document.documentElement.classList.toggle("grouped", grouped);
   const left = Math.min(...onScreen.map((x) => x.frame.x));
@@ -438,7 +464,13 @@ function reconcile(state: BrowserState) {
   for (const s of visible) if (!next.includes(s)) conceal(s);
   visible = next;
   for (const s of visible) reveal(s);
-  layout();
+  // Most updates are about pages (titles, loading): only lay out when what's
+  // shown, or where, changed.
+  const placed = JSON.stringify(shown.map(({ tab, rect }) => [tab.id, tab.panes?.root ?? null, rect]));
+  if (placed !== laidOut) {
+    laidOut = placed;
+    layout();
+  }
   for (const s of visible) if (!s.started) start(s);
 
   // The keyboard: the active terminal's focused pane (none while a page of

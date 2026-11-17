@@ -50,7 +50,9 @@ pub fn guard_mouse_moves(webview: &Webview) {
             return;
         }
         let view = &*(platform.inner() as *const AnyObject);
-        let class = objc2::ffi::object_getClass(view);
+        // The view's own class, not a KVO subclass of it (which only the
+        // observed views would have).
+        let class: *const objc2::runtime::AnyClass = msg_send![view, class];
         replace(class, objc2::sel!(mouseMoved:), view_moved, &VIEW_MOVED);
         if let Some(observer) = objc2::runtime::AnyClass::get(c"WKMouseTrackingObserver") {
             replace(observer, objc2::sel!(mouseMoved:), observer_moved, &OBSERVER_MOVED);
@@ -86,17 +88,64 @@ unsafe fn replace(
     }
 }
 
-/// Run a mouse handler, stopping any Objective-C exception it raises there:
-/// unwinding through these Rust frames would abort the app (release builds
-/// abort on unwind), where AppKit would have logged it and carried on.
-fn caught(handler: impl FnOnce()) {
-    if let Err(exception) = objc2::exception::catch(std::panic::AssertUnwindSafe(handler)) {
-        RAISED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        eprintln!("mouse event handler raised: {exception:?}");
+// --- WebKit's Screen Time observer ------------------------------------------
+//
+// Freeing a WKWebView stops its Screen Time observer, which sometimes raises
+// ("Cannot remove an observer <WKScreenTimeConfigurationObserver> for the key
+// path configuration.enforcesChildRestrictions …", a WebKit bug). It raises
+// inside wry's dealloc, through Rust frames, so closing a tab aborted the
+// app. The observer now stops inside `caught`.
+
+type Stop = unsafe extern "C-unwind" fn(&AnyObject, objc2::runtime::Sel);
+static STOP_OBSERVING: std::sync::OnceLock<Stop> = std::sync::OnceLock::new();
+
+/// Install the guard (once; call before any page view is freed).
+pub fn guard_screen_time() {
+    unsafe {
+        let Some(class) = objc2::runtime::AnyClass::get(c"WKScreenTimeConfigurationObserver") else {
+            return;
+        };
+        let sel = objc2::sel!(stopObserving);
+        let method = objc2::ffi::class_getInstanceMethod(class, sel);
+        if method.is_null() || STOP_OBSERVING.get().is_some() {
+            return;
+        }
+        let Some(old) = objc2::ffi::method_getImplementation(method) else {
+            return;
+        };
+        let _ = STOP_OBSERVING.set(std::mem::transmute::<objc2::runtime::Imp, Stop>(old));
+        let imp = std::mem::transmute::<Stop, objc2::runtime::Imp>(stop_observing);
+        objc2::ffi::method_setImplementation(method, imp);
     }
 }
 
-/// How many exceptions the mouse handlers stopped (for tests).
+/// Whether the guard is in place (for tests).
+#[cfg(debug_assertions)]
+pub fn screen_time_guarded() -> bool {
+    STOP_OBSERVING.get().is_some()
+}
+
+unsafe extern "C-unwind" fn stop_observing(this: &AnyObject, cmd: objc2::runtime::Sel) {
+    caught(|| unsafe {
+        if let Some(original) = STOP_OBSERVING.get() {
+            original(this, cmd);
+        }
+    });
+}
+
+/// Run a callback from AppKit or WebKit, stopping any Objective-C exception
+/// it raises there: unwinding through these Rust frames would abort the app
+/// (release builds abort on unwind; 0.16.0 crashed this way), where AppKit
+/// would have logged it and carried on. Every `extern "C-unwind"` method we
+/// add or swap in runs its body in here.
+fn caught(handler: impl FnOnce()) {
+    if let Err(exception) = objc2::exception::catch(std::panic::AssertUnwindSafe(handler)) {
+        RAISED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        eprintln!("native callback raised: {exception:?}");
+    }
+}
+
+/// How many exceptions `caught` stopped (for tests).
 pub static RAISED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 unsafe extern "C-unwind" fn view_moved(this: &AnyObject, cmd: objc2::runtime::Sel, event: &AnyObject) {
@@ -767,10 +816,16 @@ pub fn detach_inspector(webview: &tauri::Webview, then: impl FnOnce() + Send + '
             let (tx, rx) = std::sync::mpsc::channel();
             let sent = webview.with_webview(move |p| unsafe {
                 let view = &*(p.inner() as *const AnyObject);
+                // Private API: make sure this WebKit still has it.
+                let has = |o: &AnyObject, sel| -> bool { msg_send![o, respondsToSelector: sel] };
+                if !has(view, objc2::sel!(_inspector)) {
+                    let _ = tx.send(true);
+                    return;
+                }
                 let inspector: *mut AnyObject = msg_send![view, _inspector];
                 let done = inspector.as_ref().is_some_and(|inspector| {
                     let visible: bool = msg_send![inspector, isVisible];
-                    if visible {
+                    if visible && has(inspector, objc2::sel!(detach)) {
                         let _: () = msg_send![inspector, detach];
                     }
                     visible
@@ -994,7 +1049,7 @@ unsafe extern "C-unwind" fn window_frame(
     web_view: &AnyObject,
     completion: &block2::Block<dyn Fn(NSRect)>,
 ) {
-    unsafe {
+    caught(|| unsafe {
         let bounds: NSRect = msg_send![web_view, bounds];
         let window: *mut AnyObject = msg_send![web_view, window];
         let frame = match window.as_ref() {
@@ -1006,7 +1061,7 @@ unsafe extern "C-unwind" fn window_frame(
             None => bounds,
         };
         completion.call((frame,));
-    }
+    });
 }
 
 type DidClose = unsafe extern "C-unwind" fn(&AnyObject, objc2::runtime::Sel, &AnyObject);
@@ -1018,18 +1073,20 @@ unsafe extern "C-unwind" fn did_close(
     _cmd: objc2::runtime::Sel,
     web_view: &AnyObject,
 ) {
-    let view = web_view as *const AnyObject as usize;
-    let label = PAGE_LABELS
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|(v, _)| *v == view)
-        .map(|(_, label)| label.clone());
-    if let (Some(app), Some(label)) = (APP.get(), label) {
-        let app = app.clone();
-        // Closing views blocks on the main thread.
-        std::thread::spawn(move || browser::on_page_closed(&app, &label));
-    }
+    caught(|| {
+        let view = web_view as *const AnyObject as usize;
+        let label = PAGE_LABELS
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(v, _)| *v == view)
+            .map(|(_, label)| label.clone());
+        if let (Some(app), Some(label)) = (APP.get(), label) {
+            let app = app.clone();
+            // Closing views blocks on the main thread.
+            std::thread::spawn(move || browser::on_page_closed(&app, &label));
+        }
+    });
 }
 
 unsafe extern "C-unwind" fn js_alert(
@@ -1040,11 +1097,11 @@ unsafe extern "C-unwind" fn js_alert(
     frame: &AnyObject,
     completion: &block2::Block<dyn Fn()>,
 ) {
-    unsafe {
+    caught(|| unsafe {
         let alert = js_dialog_alert(frame, message, false);
         let completion = completion.copy();
         js_dialog_show(web_view, &alert, move |_| completion.call(()));
-    }
+    });
 }
 
 unsafe extern "C-unwind" fn js_confirm(
@@ -1055,13 +1112,13 @@ unsafe extern "C-unwind" fn js_confirm(
     frame: &AnyObject,
     completion: &block2::Block<dyn Fn(objc2::runtime::Bool)>,
 ) {
-    unsafe {
+    caught(|| unsafe {
         let alert = js_dialog_alert(frame, message, true);
         let completion = completion.copy();
         js_dialog_show(web_view, &alert, move |ok| {
             completion.call((objc2::runtime::Bool::new(ok),))
         });
-    }
+    });
 }
 
 unsafe extern "C-unwind" fn js_prompt(
@@ -1073,7 +1130,7 @@ unsafe extern "C-unwind" fn js_prompt(
     frame: &AnyObject,
     completion: &block2::Block<dyn Fn(*mut NSString)>,
 ) {
-    unsafe {
+    caught(|| unsafe {
         let alert = js_dialog_alert(frame, prompt, true);
         let field: objc2::rc::Allocated<AnyObject> = msg_send![objc2::class!(NSTextField), alloc];
         let field: Retained<AnyObject> = msg_send![field, initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(260.0, 24.0))];
@@ -1092,7 +1149,7 @@ unsafe extern "C-unwind" fn js_prompt(
                 completion.call((ptr::null_mut(),));
             }
         });
-    }
+    });
 }
 
 /// A page's icon links as `<link>` tags with absolute hrefs, read from the

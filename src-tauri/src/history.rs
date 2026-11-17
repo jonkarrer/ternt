@@ -51,8 +51,18 @@ pub struct History {
     last_url: HashMap<u32, String>,
 }
 
+/// What recording a page changed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Change {
+    None,
+    /// Only a known page's title.
+    Retitled,
+    /// A visit (new page or a return to one).
+    Visited,
+}
+
 impl History {
-    /// Note that `tab` is showing `url`. Returns whether anything changed.
+    /// Note that `tab` is showing `url`.
     pub fn record(
         &mut self,
         tab: u32,
@@ -60,9 +70,9 @@ impl History {
         url: &str,
         title: &str,
         now: u64,
-    ) -> bool {
+    ) -> Change {
         if !(url.starts_with("https://") || url.starts_with("http://")) {
-            return false;
+            return Change::None;
         }
         let new_visit = self.last_url.get(&tab).is_none_or(|last| last != url);
         if new_visit {
@@ -82,7 +92,11 @@ impl History {
                     entry.visits += 1;
                     entry.last_visit = now;
                 }
-                new_visit || retitled
+                match (new_visit, retitled) {
+                    (true, _) => Change::Visited,
+                    (false, true) => Change::Retitled,
+                    (false, false) => Change::None,
+                }
             }
             None => {
                 self.entries.push(Entry {
@@ -95,7 +109,7 @@ impl History {
                 if self.entries.len() > MAX_ENTRIES {
                     self.prune(now);
                 }
-                true
+                Change::Visited
             }
         }
     }
@@ -191,6 +205,8 @@ fn now() -> u64 {
 pub struct Store {
     history: Mutex<History>,
     save_pending: AtomicBool,
+    /// Changed since the last save (saves with nothing new are skipped).
+    unsaved: AtomicBool,
 }
 
 /// `TERNT_HISTORY_FILE` overrides the location (used by the e2e suite).
@@ -203,36 +219,32 @@ fn path(app: &AppHandle) -> Option<PathBuf> {
 
 /// Read the saved history. Called at startup, before any page loads.
 pub fn load(app: &AppHandle) {
-    let Some(data) = path(app).and_then(|p| std::fs::read(p).ok()) else {
-        return;
-    };
-    match serde_json::from_slice::<History>(&data) {
-        Ok(saved) => *app.state::<Store>().history.lock().unwrap() = saved,
-        Err(err) => eprintln!("ignoring unreadable history: {err}"),
+    let Some(path) = path(app) else { return };
+    if let crate::persist::Loaded::Read(saved) = crate::persist::load::<History>(&path) {
+        *app.state::<Store>().history.lock().unwrap() = saved;
     }
 }
 
 pub fn save_now(app: &AppHandle) {
     let Some(path) = path(app) else { return };
+    if !app.state::<Store>().unsaved.swap(false, Ordering::AcqRel) {
+        return;
+    }
     let data = {
         let store = app.state::<Store>();
         let history = store.history.lock().unwrap();
         serde_json::to_vec(&*history)
     };
-    let result = (|| -> std::io::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, data?)?;
-        std::fs::rename(tmp, &path)
-    })();
+    let result = data
+        .map_err(std::io::Error::from)
+        .and_then(|data| crate::persist::write(&path, &data, false));
     if let Err(err) = result {
         eprintln!("failed to save history: {err}");
     }
 }
 
 fn schedule_save(app: &AppHandle) {
+    app.state::<Store>().unsaved.store(true, Ordering::Release);
     if app
         .state::<Store>()
         .save_pending
@@ -251,14 +263,18 @@ fn schedule_save(app: &AppHandle) {
 }
 
 pub fn record(app: &AppHandle, tab: u32, profile: Option<&str>, url: &str, title: &str) {
-    let changed =
-        app.state::<Store>()
-            .history
-            .lock()
-            .unwrap()
-            .record(tab, profile, url, title, now());
-    if changed {
-        schedule_save(app);
+    let store = app.state::<Store>();
+    let change = store
+        .history
+        .lock()
+        .unwrap()
+        .record(tab, profile, url, title, now());
+    match change {
+        Change::Visited => schedule_save(app),
+        // Some pages change their title every second (timers, chats): those
+        // are saved with the next visit, or on quit.
+        Change::Retitled => store.unsaved.store(true, Ordering::Release),
+        Change::None => {}
     }
 }
 
@@ -286,7 +302,7 @@ mod tests {
     const NOW: u64 = 1_000_000_000;
 
     fn visit(h: &mut History, tab: u32, url: &str, title: &str, days_ago: u64) -> bool {
-        h.record(tab, None, url, title, NOW - days_ago * 86_400)
+        h.record(tab, None, url, title, NOW - days_ago * 86_400) != Change::None
     }
 
     fn urls(hits: Vec<Hit>) -> Vec<String> {

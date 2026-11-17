@@ -1173,8 +1173,14 @@ pub struct Saved {
     pub groups: Vec<SavedGroup>,
     #[serde(default)]
     pub group_shown: bool,
+    #[serde(default = "default_sidebar_width")]
     pub sidebar_width: f64,
+    #[serde(default)]
     pub sidebar_collapsed: bool,
+}
+
+fn default_sidebar_width() -> f64 {
+    DEFAULT_SIDEBAR_WIDTH
 }
 
 #[cfg(test)]

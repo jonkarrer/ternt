@@ -2,7 +2,8 @@
 //! The format lives in `model.rs` (`Saved`).
 //!
 //! Saves are debounced (state changes in bursts while pages load) and written
-//! atomically; a final save runs on exit.
+//! atomically with a backup of the previous one (`persist`); a final save
+//! runs on exit.
 
 use std::{
     path::PathBuf,
@@ -12,11 +13,13 @@ use std::{
 
 use tauri::{AppHandle, Manager};
 
-use crate::{browser, model::Saved};
+use crate::{browser, model::Saved, persist::Loaded};
 
 const SAVE_DELAY: Duration = Duration::from_millis(750);
 
 static SAVE_PENDING: AtomicBool = AtomicBool::new(false);
+/// What the last save wrote.
+static LAST_SAVED: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 
 /// `TERNT_SESSION_FILE` overrides the location (the e2e suite uses this to
 /// stay away from the real session).
@@ -39,31 +42,30 @@ pub fn data_dir(app: &AppHandle) -> Option<PathBuf> {
     })
 }
 
-pub fn load(app: &AppHandle) -> Option<Saved> {
-    let data = std::fs::read(path(app)?).ok()?;
-    match serde_json::from_slice(&data) {
-        Ok(session) => Some(session),
-        Err(err) => {
-            eprintln!("ignoring unreadable session: {err}");
-            None
-        }
+/// The saved session (its backup if the file is damaged, see `persist`).
+pub fn load(app: &AppHandle) -> Loaded<Saved> {
+    match path(app) {
+        Some(path) => crate::persist::load(&path),
+        None => Loaded::Missing,
     }
 }
 
 pub fn save_now(app: &AppHandle) {
     let Some(path) = path(app) else { return };
     let session = browser::session(app);
-    let result = (|| -> std::io::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        // Write then rename, so a crash mid-write can't corrupt the session.
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec(&session)?)?;
-        std::fs::rename(tmp, &path)
-    })();
-    if let Err(err) = result {
-        eprintln!("failed to save session: {err}");
+    let data = match serde_json::to_vec(&session) {
+        Ok(data) => data,
+        Err(err) => return eprintln!("failed to save session: {err}"),
+    };
+    // Most state changes (a page's title, loading) aren't saved: skip
+    // rewriting the same session.
+    let mut last = LAST_SAVED.lock().unwrap_or_else(|e| e.into_inner());
+    if *last == data {
+        return;
+    }
+    match crate::persist::write(&path, &data, true) {
+        Ok(()) => *last = data,
+        Err(err) => eprintln!("failed to save session: {err}"),
     }
 }
 

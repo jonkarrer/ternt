@@ -1,6 +1,7 @@
 // Dev-only test hooks. Exposes `window.__ternt` for scripts run via the
 // TERNT_TEST env var (see src-tauri/src/debug.rs). Tree-shaken from release.
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -9,6 +10,8 @@ type State = { tabs: { id: number }[]; active: number | null };
 export function installTestHooks(getState: () => State) {
   const hooks = {
     invoke,
+    /** Events sent to this webview. */
+    listen: (event: string, handler: (e: { payload: unknown }) => void) => getCurrentWebview().listen(event, handler),
     sleep,
     state: getState,
     /** The fixture server (e2e/fixtures). */

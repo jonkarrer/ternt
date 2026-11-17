@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { EventCallback, UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+
+/** Events sent to this webview. (The global `listen` also gets every event
+ *  sent to any other webview: each state update arrived once per target.) */
+const listen = <T>(event: string, handler: EventCallback<T>): Promise<UnlistenFn> =>
+  getCurrentWebview().listen<T>(event, handler);
 
 export { hostOf, parseInput, tabLabel, type ParsedInput } from "./url";
 
@@ -250,7 +256,7 @@ export const browser = {
   onPaletteOpen: (cb: (request: PaletteRequest) => void): Promise<UnlistenFn> =>
     listen<PaletteRequest>("palette:open", (e) => cb(e.payload)),
   updateStatus: () => invoke<UpdateStatus>("update_status"),
-  /** Download, install and relaunch. */
+  /** Install the update (downloading it first if needed) and relaunch. */
   installUpdate: () => invoke("install_update"),
   checkForUpdates: () => invoke("check_for_updates"),
   onUpdate: (cb: (status: UpdateStatus) => void): Promise<UnlistenFn> =>
@@ -261,7 +267,8 @@ export const browser = {
   onIconPicker: (cb: (space: number) => void): Promise<UnlistenFn> =>
     listen<number>("browser:icon-picker", (e) => cb(e.payload)),
   /** Rust asks the sidebar to start inline-renaming a space or folder. */
+  /** The context menu's Rename… (Rust sends spaces, folders and tabs). */
   onRename: (cb: (target: { kind: "space" | "folder" | "tab"; id: number }) => void): Promise<UnlistenFn> =>
-    listen<{ kind: "space" | "folder"; id: number }>("browser:rename", (e) => cb(e.payload)),
+    listen<{ kind: "space" | "folder" | "tab"; id: number }>("browser:rename", (e) => cb(e.payload)),
 };
 

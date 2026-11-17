@@ -12,6 +12,7 @@ mod native;
 mod palette;
 mod panes;
 mod prefs;
+mod persist;
 mod pty;
 mod session;
 mod settings;
@@ -50,14 +51,19 @@ pub fn run() {
 
             // Restore the last session, then open any `ternt <url>...` args.
             // No session at all means a first launch: show the welcome page.
-            // A session with no tabs just opens the command bar.
-            let saved = session::load(app.handle());
-            let first_launch = saved.is_none();
+            // A session with no tabs (or one that couldn't be read) just
+            // opens the command bar.
+            let loaded = session::load(app.handle());
+            let first_launch = matches!(loaded, persist::Loaded::Missing);
+            let saved = match loaded {
+                persist::Loaded::Read(saved) => Some(saved),
+                _ => None,
+            };
             let urls: Vec<_> = std::env::args()
                 .skip(1)
                 .filter_map(|arg| tauri::Url::parse(&arg).ok())
                 .collect();
-            if urls.is_empty() && !first_launch && saved.as_ref().is_some_and(|s| s.tabs.is_empty())
+            if urls.is_empty() && !first_launch && saved.as_ref().is_none_or(|s| s.tabs.is_empty())
             {
                 palette::open(app.handle(), palette::Mode::NewTab)?;
             }
@@ -185,6 +191,8 @@ pub fn run() {
             debug::debug_takes_mouse,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_observer_event,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_screen_time_guarded,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_answer_dialog,
             #[cfg(all(debug_assertions, target_os = "macos"))]

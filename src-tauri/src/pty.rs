@@ -50,9 +50,10 @@ impl Output {
 
 struct Session {
     master: Box<dyn MasterPty + Send>,
-    // Separate lock so a blocked write (program not reading input) never
-    // holds up the session map.
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    /// Input, written in order by the session's own thread: a program not
+    /// reading its input blocks that thread, never the caller (`pty_write`
+    /// runs on the main thread, so a blocked write froze the whole app).
+    input: std::sync::mpsc::Sender<Vec<u8>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     output: Arc<Output>,
     pid: Option<u32>,
@@ -164,9 +165,16 @@ fn spawn(app: &AppHandle, key: Key, cols: u16, rows: u16) -> Result<Session, Str
     });
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = Arc::new(Mutex::new(
-        pair.master.take_writer().map_err(|e| e.to_string())?,
-    ));
+    let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let (input, typed) = std::sync::mpsc::channel::<Vec<u8>>();
+    // Ends when the session goes (its sender with it) or the shell does.
+    std::thread::spawn(move || {
+        for bytes in typed {
+            if writer.write_all(&bytes).is_err() {
+                break;
+            }
+        }
+    });
     // The tty buffers this until the shell reads it, so no need to wait.
     let startup = {
         let mut queue = STARTUP_INPUT.lock().unwrap();
@@ -176,7 +184,7 @@ fn spawn(app: &AppHandle, key: Key, cols: u16, rows: u16) -> Result<Session, Str
             .map(|i| queue.remove(i).1)
     };
     if let Some(text) = startup {
-        let _ = writer.lock().unwrap().write_all(text.as_bytes());
+        let _ = input.send(text.into_bytes());
     }
     let output = Arc::new(Output {
         pipe: Mutex::new(Pipe::default()),
@@ -234,7 +242,7 @@ fn spawn(app: &AppHandle, key: Key, cols: u16, rows: u16) -> Result<Session, Str
 
     Ok(Session {
         master: pair.master,
-        writer,
+        input,
         killer,
         output,
         pid,
@@ -322,17 +330,14 @@ pub async fn pty_spawn(
 
 #[tauri::command]
 pub fn pty_write(app: AppHandle, id: u32, pane: u32, data: String) -> Result<(), String> {
-    let writer = {
-        let terminals = app.state::<Terminals>();
-        let sessions = terminals.0.lock().unwrap();
-        sessions
-            .get(&(id, pane))
-            .ok_or("no such terminal")?
-            .writer
-            .clone()
-    };
-    let mut writer = writer.lock().unwrap();
-    writer.write_all(data.as_bytes()).map_err(|e| e.to_string())
+    let terminals = app.state::<Terminals>();
+    let sessions = terminals.0.lock().unwrap();
+    sessions
+        .get(&(id, pane))
+        .ok_or("no such terminal")?
+        .input
+        .send(data.into_bytes())
+        .map_err(|_| "the shell has exited".to_string())
 }
 
 #[tauri::command]

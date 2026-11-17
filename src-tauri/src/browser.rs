@@ -18,7 +18,7 @@ use std::{
     path::PathBuf,
     sync::{
         Mutex,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -252,13 +252,23 @@ fn snapshot(app: &AppHandle) -> Snapshot {
     snapshot
 }
 
+/// Set while a batch of changes runs (see `clear_today`): one emit at the end
+/// instead of one full state per change.
+static EMITS_HELD: AtomicBool = AtomicBool::new(false);
+
 fn emit_state(app: &AppHandle) {
-    let snapshot = snapshot(app);
-    for label in [UI_WEBVIEW, TERM_WEBVIEW, crate::settings::SETTINGS_WINDOW] {
+    if EMITS_HELD.load(Ordering::Acquire) {
+        return;
+    }
+    // Serialized once for all the webviews that show it.
+    let Ok(snapshot) = serde_json::value::to_raw_value(&snapshot(app)) else {
+        return;
+    };
+    for label in [UI_WEBVIEW, PEEK_WEBVIEW, TERM_WEBVIEW, crate::settings::SETTINGS_WINDOW] {
         let _ = app.emit_to(
             EventTarget::webview(label),
             "browser:state",
-            snapshot.clone(),
+            &snapshot,
         );
     }
     session::schedule_save(app);
@@ -387,10 +397,35 @@ fn place(webview: &Webview, frame: group::Frame, whole: bool) -> tauri::Result<(
 /// switching tabs never shows a stale size): the tabs on screen in their
 /// frames, everything else in the whole content area.
 fn layout_tabs(app: &AppHandle) -> tauri::Result<()> {
+    layout_views(app, true)
+}
+
+/// While a divider or the sidebar edge is dragged: the views on screen now,
+/// the hidden ones once the drag pauses (each placement is a trip to the
+/// main thread, and there can be dozens of loaded tabs).
+fn layout_while_dragging(app: &AppHandle) -> tauri::Result<()> {
+    static GENERATION: AtomicU64 = AtomicU64::new(0);
+    layout_views(app, false)?;
+    let generation = GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(250));
+        if GENERATION.load(Ordering::Acquire) == generation {
+            let _ = layout_tabs(&app);
+        }
+    });
+    Ok(())
+}
+
+fn layout_views(app: &AppHandle, hidden_too: bool) -> tauri::Result<()> {
     let frames = screen_frames(app)?;
     let whole = frame_of(content_bounds(app)?);
     let grouped = frames.len() > 1;
-    let ids = with(app, |s| s.tabs.iter().map(|t| t.id).collect::<Vec<_>>());
+    let ids = if hidden_too {
+        with(app, |s| s.tabs.iter().map(|t| t.id).collect::<Vec<_>>())
+    } else {
+        frames.iter().map(|&(id, _)| id).collect()
+    };
     for id in ids {
         if let Some(webview) = app.get_webview(&tab_label(id)) {
             let frame = frames.iter().find(|(t, _)| *t == id).map_or(whole, |f| f.1);
@@ -443,6 +478,7 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
     {
         crate::native::track_window_size(&_ui);
         crate::native::guard_mouse_moves(&_ui);
+        crate::native::guard_screen_time();
     }
 
     crate::palette::create(&window)?;
@@ -1020,10 +1056,11 @@ pub fn clear_today(app: &AppHandle) -> tauri::Result<()> {
     // Close the active tab last, so focus never lands on (and lazily loads)
     // a tab that is about to close.
     ids.sort_by_key(|&id| Some(id) == active);
-    for id in ids {
-        close_tab_by_id(app, id)?;
-    }
-    Ok(())
+    EMITS_HELD.store(true, Ordering::Release);
+    let result = ids.into_iter().try_for_each(|id| close_tab_by_id(app, id));
+    EMITS_HELD.store(false, Ordering::Release);
+    emit_state(app);
+    result
 }
 
 /// Reopen a closed tab (`None`: the most recent one), in the space it was
@@ -1947,8 +1984,8 @@ pub async fn set_group_ratio(
     }) else {
         return Ok(None);
     };
-    layout_tabs(&app).map_err(err)?;
-    emit_state(&app);
+    layout_while_dragging(&app).map_err(err)?;
+    schedule_emit(&app);
     Ok(Some(applied))
 }
 
@@ -2016,7 +2053,7 @@ pub async fn drop_on_content(app: AppHandle, tab: u32, x: f64, y: f64) -> Result
 pub async fn set_sidebar_width(app: AppHandle, width: f64) -> Result<f64, String> {
     let width = width.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
     with(&app, |s| s.sidebar_width = width);
-    layout_tabs(&app).map_err(err)?;
+    layout_while_dragging(&app).map_err(err)?;
     session::schedule_save(&app);
     Ok(width)
 }

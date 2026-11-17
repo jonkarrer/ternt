@@ -72,4 +72,17 @@ await t.invoke("close_tab", { id: term3 });
 await t.until(() => !S().tabs.some((x) => x.id === term3), "background terminal closed");
 await t.sleep(300);
 await t.shot("terminal-active");
+
+// A big paste into a program that isn't reading its input doesn't freeze
+// the app (writes used to block the main thread)
+await run(term1, "clear; stty raw; sleep 5; stty sane");
+await t.sleep(300);
+const paste = "x".repeat(200_000);
+const pasted = t.invoke("pty_write", { id: term1, pane: 0, data: paste });
+const asked = performance.now();
+await t.invoke("get_state");
+const waited = performance.now() - asked;
+await t.assert(waited < 1000, `the app still answers while the paste waits (${Math.round(waited)}ms)`);
+await pasted;
+await t.invoke("pty_write", { id: term1, pane: 0, data: "\x03" });
 await t.quit();
