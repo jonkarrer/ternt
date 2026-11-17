@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The same list ⌘H shows (src/lib/help.ts).
+  // The same list ⌃H shows (src/lib/help.ts).
   import { SHORTCUTS } from "../lib/help";
 </script>
 

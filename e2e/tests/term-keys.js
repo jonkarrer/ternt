@@ -1,7 +1,8 @@
 // Keys a terminal translates: Shift+Enter types a newline (ESC + CR, as
 // Option+Enter) instead of submitting, so Claude Code's prompt gets a new line;
 // ⌘+ / ⌘− / ⌘0 size the text of every terminal, and the size is saved; ⌃F
-// goes to the shell (forward-char) rather than starting Explore Tabs.
+// and ⌃H go to the shell (forward-char, backspace) rather than starting
+// Explore Tabs or the help sheet.
 const S = () => t.state();
 const term = await t.invoke("new_terminal");
 const text = () => t.read("term", `window.__termText(${term})`).catch(() => "");
@@ -46,10 +47,23 @@ await t.invoke("debug_ctrl_key", { key: "f" });
 await t.until(async () => /ctrl-f-done/.test(await text()), "⌃F reaches the shell");
 await t.assert(/006/.test(await text()), "as ^F (forward-char)");
 await t.assert(!exploring(), "without exploring tabs");
+// ⌃H likewise: backspace in the shell, not the help sheet
+const helping = async () => (await t.palette.request())?.mode === "help";
+await run("clear; stty raw -echo; head -c 1 | od -c; stty sane; echo ctrl-h-done");
+await t.sleep(500);
+await t.invoke("debug_ctrl_key", { key: "h" });
+await t.until(async () => /ctrl-h-done/.test(await text()), "⌃H reaches the shell");
+await t.assert(/\\b/.test(await text()), "as ^H (backspace)");
+await t.assert(!(await helping()), "without opening the help sheet");
 // Anywhere else it explores tabs
 const page = await t.invoke("new_tab", { url: "http://localhost:8765/" });
 await t.until(() => S().tabs.find((x) => x.id === page)?.title === "Fixture Home", "on a page");
 await t.invoke("debug_focus", { label: `tab-${page}` });
 await t.invoke("debug_ctrl_key", { key: "f" });
 await t.until(exploring, "⌃F explores tabs");
+await t.invoke("menu_action", { id: "explore" });
+await t.until(() => !exploring(), "stop exploring");
+await t.invoke("debug_focus", { label: `tab-${page}` });
+await t.invoke("debug_ctrl_key", { key: "h" });
+await t.until(helping, "⌃H opens the help sheet");
 await t.quit();

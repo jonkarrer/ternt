@@ -198,7 +198,7 @@
       {#if help}
         <footer>
           <span>Type to filter</span>
-          <span><kbd>esc</kbd> or <kbd>⌘H</kbd> close</span>
+          <span><kbd>esc</kbd> or <kbd>⌃H</kbd> close</span>
         </footer>
       {:else if request.mode === "newTab"}
         <footer>

@@ -1,4 +1,4 @@
-// What ⌘H shows (the help sheet in the command bar overlay) and Settings →
+// What ⌃H shows (the help sheet in the command bar overlay) and Settings →
 // Shortcuts lists. Mirrors the menu accelerators in src-tauri/src/menu.rs.
 
 export type Shortcut = { keys: string; action: string };
@@ -40,7 +40,8 @@ export const SHORTCUTS: ShortcutGroup[] = [
     ["⌥⌘←  ⌥⌘→", "Previous / next space"],
   ]),
   group("App", [
-    ["⌘H", "Shortcuts and how-tos (this sheet)"],
+    ["⌃H", "Shortcuts and how-tos (this sheet)"],
+    ["⌘H", "Hide Ternt"],
     ["⌘,", "Settings"],
     ["⌥⌘H", "Hide other apps"],
     ["⌘Q", "Quit"],

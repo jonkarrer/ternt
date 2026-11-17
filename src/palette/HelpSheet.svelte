@@ -1,5 +1,5 @@
 <script lang="ts">
-  // ⌘H: every shortcut and a few how-tos, filtered by what's typed in the
+  // ⌃H: every shortcut and a few how-tos, filtered by what's typed in the
   // command bar's field (see src/lib/help.ts).
   import { filterHelp } from "../lib/help";
 

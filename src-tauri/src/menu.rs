@@ -38,8 +38,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 None::<&str>,
             )?,
             &PredefinedMenuItem::separator(app)?,
-            // ⌘H shows the help sheet instead.
-            &MenuItem::with_id(app, "hide-app", "Hide Ternt", true, None::<&str>)?,
+            &MenuItem::with_id(app, "hide-app", "Hide Ternt", true, Some("CmdOrCtrl+H"))?,
             &PredefinedMenuItem::hide_others(app, None)?,
             &PredefinedMenuItem::show_all(app, None)?,
             &PredefinedMenuItem::separator(app)?,
@@ -245,7 +244,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 "help",
                 "Shortcuts and How-Tos",
                 true,
-                Some("CmdOrCtrl+H"),
+                Some("Ctrl+H"),
             )?,
             &MenuItem::with_id(app, "welcome", "Welcome to Ternt", true, None::<&str>)?,
         ],
@@ -261,15 +260,15 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 
 pub fn handle(app: &AppHandle, event: MenuEvent) {
     let id = event.id().0.clone();
-    // ⌃F is the shell's forward-char (and less's page down): pressed in a
-    // terminal, it goes there rather than starting Explore Tabs.
+    // ⌃F is the shell's forward-char (and less's page down), ⌃H its
+    // backspace: pressed in a terminal, they go there rather than starting
+    // Explore Tabs or the help sheet.
     #[cfg(target_os = "macos")]
-    if id == "explore"
-        && !browser::exploring(app)
+    if ((id == "explore" && !browser::exploring(app)) || id == "help")
         && browser::main_window(app)
             .is_ok_and(|window| crate::native::key_pressed_in_terminal(&window))
     {
-        return run_action(app, "terminal-ctrl-f".into());
+        return run_action(app, format!("terminal-{id}"));
     }
     run_action(app, id)
 }
@@ -342,7 +341,8 @@ pub fn run_action(app: &AppHandle, id: String) {
             "unsplit" => browser::end_group_of_active(&app),
             "welcome" => welcome::open(&app),
             // ⌃F typed in a terminal (see `handle`).
-            "terminal-ctrl-f" => browser::type_in_terminal(&app, "\x06"),
+            "terminal-explore" => browser::type_in_terminal(&app, "\x06"),
+            "terminal-help" => browser::type_in_terminal(&app, "\x08"),
             "explore" => browser::toggle_explore(&app),
             "next-tab" => browser::cycle_tab(&app, 1),
             "previous-tab" => browser::cycle_tab(&app, -1),
