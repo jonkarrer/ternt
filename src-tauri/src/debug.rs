@@ -460,6 +460,87 @@ pub async fn debug_takes_mouse(app: AppHandle, label: String, x: f64, y: f64) ->
     rx.recv().map_err(|e| e.to_string())
 }
 
+/// Send each of `label`'s tracking observers `selector` (`mouseMoved:`,
+/// `mouseEntered:` or `mouseExited:`) with an event of `kind` (5 moved,
+/// 8 entered, 9 exited) at (`x`, `y`): the Objective-C exceptions raised,
+/// as text, whether the guards in `native` stopped them or not.
+#[tauri::command]
+pub async fn debug_observer_event(
+    app: AppHandle,
+    label: String,
+    selector: String,
+    kind: usize,
+    x: f64,
+    y: f64,
+) -> Result<Vec<String>, String> {
+    let webview = app.get_webview(&label).ok_or_else(|| format!("no webview {label}"))?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    webview
+        .with_webview(move |p| unsafe {
+            use objc2::runtime::AnyObject;
+            let view = &*(p.inner() as *const AnyObject);
+            let window: *mut AnyObject = objc2::msg_send![view, window];
+            let content: *mut AnyObject = objc2::msg_send![&*window, contentView];
+            let frame: objc2_foundation::NSRect = objc2::msg_send![&*content, frame];
+            let number: isize = objc2::msg_send![&*window, windowNumber];
+            let location = objc2_foundation::NSPoint::new(x, frame.size.height - y);
+            let null = std::ptr::null::<AnyObject>();
+            let event: *mut AnyObject = if kind == 5 {
+                objc2::msg_send![
+                    objc2::class!(NSEvent),
+                    mouseEventWithType: kind,
+                    location: location,
+                    modifierFlags: 0usize,
+                    timestamp: 0f64,
+                    windowNumber: number,
+                    context: null,
+                    eventNumber: 0isize,
+                    clickCount: 0isize,
+                    pressure: 0f32
+                ]
+            } else {
+                objc2::msg_send![
+                    objc2::class!(NSEvent),
+                    enterExitEventWithType: kind,
+                    location: location,
+                    modifierFlags: 0usize,
+                    timestamp: 0f64,
+                    windowNumber: number,
+                    context: null,
+                    eventNumber: 0isize,
+                    trackingNumber: 0isize,
+                    userData: std::ptr::null_mut::<std::ffi::c_void>()
+                ]
+            };
+            let selector = objc2::runtime::Sel::register(
+                &std::ffi::CString::new(selector).unwrap_or_default(),
+            );
+            let mut raised = Vec::new();
+            let stopped = || crate::native::RAISED.load(std::sync::atomic::Ordering::Relaxed);
+            let before = stopped();
+            let areas: *mut AnyObject = objc2::msg_send![view, trackingAreas];
+            let count: usize = objc2::msg_send![&*areas, count];
+            for i in 0..count {
+                let area: *mut AnyObject = objc2::msg_send![&*areas, objectAtIndex: i];
+                let owner: *mut AnyObject = objc2::msg_send![&*area, owner];
+                if std::ptr::eq(owner, view) {
+                    continue;
+                }
+                let owner = &*owner;
+                let send = std::panic::AssertUnwindSafe(|| {
+                    let _: () = objc2::msg_send![owner, performSelector: selector, withObject: &*event];
+                });
+                if let Err(exception) = objc2::exception::catch(send) {
+                    raised.push(format!("{exception:?}"));
+                }
+            }
+            raised.extend((before..stopped()).map(|_| "stopped by a guard".to_string()));
+            let _ = tx.send(raised);
+        })
+        .map_err(|e| e.to_string())?;
+    rx.recv().map_err(|e| e.to_string())
+}
+
 /// Press ⌃ + `key` as the keyboard would: a key-down event posted to the
 /// app's queue, so menu shortcuts see it as a key press.
 #[tauri::command]

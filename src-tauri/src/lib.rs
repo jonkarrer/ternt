@@ -183,6 +183,7 @@ pub fn run() {
             debug::debug_click,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_takes_mouse,
+            debug::debug_observer_event,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_answer_dialog,
             #[cfg(all(debug_assertions, target_os = "macos"))]

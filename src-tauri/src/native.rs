@@ -86,32 +86,45 @@ unsafe fn replace(
     }
 }
 
+/// Run a mouse handler, stopping any Objective-C exception it raises there:
+/// unwinding through these Rust frames would abort the app (release builds
+/// abort on unwind), where AppKit would have logged it and carried on.
+fn caught(handler: impl FnOnce()) {
+    if let Err(exception) = objc2::exception::catch(std::panic::AssertUnwindSafe(handler)) {
+        RAISED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        eprintln!("mouse event handler raised: {exception:?}");
+    }
+}
+
+/// How many exceptions the mouse handlers stopped (for tests).
+pub static RAISED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 unsafe extern "C-unwind" fn view_moved(this: &AnyObject, cmd: objc2::runtime::Sel, event: &AnyObject) {
-    unsafe {
+    caught(|| unsafe {
         if shows_at(this, event)
             && let Some(original) = VIEW_MOVED.get()
         {
             original(this, cmd, event);
         }
-    }
+    });
 }
 
 unsafe extern "C-unwind" fn observer_moved(this: &AnyObject, cmd: objc2::runtime::Sel, event: &AnyObject) {
-    unsafe { observer_event(this, cmd, event, &OBSERVER_MOVED) }
+    caught(|| unsafe { observer_event(this, cmd, event, &OBSERVER_MOVED) });
 }
 
 unsafe extern "C-unwind" fn observer_entered(this: &AnyObject, cmd: objc2::runtime::Sel, event: &AnyObject) {
-    unsafe { observer_event(this, cmd, event, &OBSERVER_ENTERED) }
+    caught(|| unsafe { observer_event(this, cmd, event, &OBSERVER_ENTERED) });
 }
 
 unsafe extern "C-unwind" fn observer_exited(this: &AnyObject, cmd: objc2::runtime::Sel, event: &AnyObject) {
-    unsafe {
+    caught(|| unsafe {
         let me = this as *const AnyObject as usize;
         COVERED.lock().unwrap().retain(|&o| o != me);
         if let Some(original) = OBSERVER_EXITED.get() {
             original(this, cmd, event);
         }
-    }
+    });
 }
 
 /// A move or enter for an observer's view: passed on only where the view
@@ -139,9 +152,37 @@ unsafe fn observer_event(
             }
             newly
         };
-        if newly_covered && let Some(exited) = OBSERVER_EXITED.get() {
-            exited(this, objc2::sel!(mouseExited:), event);
+        // A mouse-exited event: WebKit asks it for its tracking area, which
+        // raises for any other kind.
+        if newly_covered
+            && let Some(exited) = OBSERVER_EXITED.get()
+            && let Some(exit) = exit_event(event)
+        {
+            exited(this, objc2::sel!(mouseExited:), &exit);
         }
+    }
+}
+
+/// A mouse-exited event where and when `event` happened.
+unsafe fn exit_event(event: &AnyObject) -> Option<Retained<AnyObject>> {
+    unsafe {
+        let location: NSPoint = msg_send![event, locationInWindow];
+        let flags: usize = msg_send![event, modifierFlags];
+        let timestamp: f64 = msg_send![event, timestamp];
+        let window: isize = msg_send![event, windowNumber];
+        let exit: *mut AnyObject = msg_send![
+            objc2::class!(NSEvent),
+            enterExitEventWithType: 9usize, // NSEventTypeMouseExited
+            location: location,
+            modifierFlags: flags,
+            timestamp: timestamp,
+            windowNumber: window,
+            context: ptr::null::<AnyObject>(),
+            eventNumber: 0isize,
+            trackingNumber: 0isize,
+            userData: ptr::null_mut::<std::ffi::c_void>()
+        ];
+        Retained::retain(exit)
     }
 }
 
