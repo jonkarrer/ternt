@@ -145,6 +145,13 @@ fn caught(handler: impl FnOnce()) {
     }
 }
 
+/// `caught` for a body with a result: `fallback` if it raised.
+fn caught_or<T>(fallback: T, body: impl FnOnce() -> T) -> T {
+    let mut result = None;
+    caught(|| result = Some(body()));
+    result.unwrap_or(fallback)
+}
+
 /// How many exceptions `caught` stopped (for tests).
 pub static RAISED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -869,6 +876,269 @@ pub fn detach_inspector(webview: &tauri::Webview, then: impl FnOnce() + Send + '
     });
 }
 
+// --- Downloads -----------------------------------------------------------------
+//
+// wry tells Tauri only a download's URL, when it starts and when it ends. Its
+// download delegate methods now also hand Ternt the `WKDownload` itself (see
+// `with_download`), for its progress, to cancel it, and to tell two
+// downloads of the same URL apart. And a response the server marks
+// `Content-Disposition: attachment` downloads, as in Safari: wry downloaded
+// only types WebKit can't show, so an attached PDF or text file opened in
+// the tab instead.
+
+type DecideDestination = unsafe extern "C-unwind" fn(
+    &AnyObject,
+    objc2::runtime::Sel,
+    &AnyObject,
+    &AnyObject,
+    &NSString,
+    &block2::Block<dyn Fn(*const NSURL)>,
+);
+type DownloadDone = unsafe extern "C-unwind" fn(&AnyObject, objc2::runtime::Sel, &AnyObject);
+type DownloadFailed = unsafe extern "C-unwind" fn(
+    &AnyObject,
+    objc2::runtime::Sel,
+    &AnyObject,
+    &AnyObject,
+    *mut AnyObject,
+);
+type ResponsePolicy = unsafe extern "C-unwind" fn(
+    &AnyObject,
+    objc2::runtime::Sel,
+    &AnyObject,
+    &AnyObject,
+    &block2::Block<dyn Fn(isize)>,
+);
+
+type SetDelegate = unsafe extern "C-unwind" fn(&AnyObject, objc2::runtime::Sel, *mut AnyObject);
+
+static SET_DELEGATE: std::sync::OnceLock<SetDelegate> = std::sync::OnceLock::new();
+static DECIDE_DESTINATION: std::sync::OnceLock<DecideDestination> = std::sync::OnceLock::new();
+static DOWNLOAD_DONE: std::sync::OnceLock<DownloadDone> = std::sync::OnceLock::new();
+static DOWNLOAD_FAILED: std::sync::OnceLock<DownloadFailed> = std::sync::OnceLock::new();
+static RESPONSE_POLICY: std::sync::OnceLock<ResponsePolicy> = std::sync::OnceLock::new();
+
+/// `WKNavigationResponsePolicyDownload`.
+const RESPONSE_DOWNLOAD: isize = 2;
+
+/// A download WebKit is asking wry about, on the main thread.
+pub struct Download {
+    pub download: Retained<AnyObject>,
+    /// Its page view never showed a page: a link opened in a new tab (or
+    /// window) that turned out to be a file.
+    pub nothing_shown: bool,
+}
+
+thread_local! {
+    static CURRENT_DOWNLOAD: RefCell<Option<Retained<AnyObject>>> = const { RefCell::new(None) };
+}
+
+/// The download whose delegate method is running (wry's download handlers
+/// run inside it), if any.
+pub fn current_download() -> Option<Download> {
+    let download = CURRENT_DOWNLOAD.with(|d| d.borrow().clone())?;
+    let nothing_shown = caught_or(false, || unsafe {
+        let view: *mut AnyObject = msg_send![&*download, webView];
+        let Some(view) = view.as_ref() else {
+            return false;
+        };
+        let list: *mut AnyObject = msg_send![view, backForwardList];
+        let item: *mut AnyObject = match list.as_ref() {
+            Some(list) => msg_send![list, currentItem],
+            None => ptr::null_mut(),
+        };
+        item.is_null()
+    });
+    Some(Download { download, nothing_shown })
+}
+
+/// Bytes received so far and the size (-1 when the server didn't say).
+pub fn download_progress(download: &AnyObject) -> (i64, i64) {
+    caught_or((0, -1), || unsafe {
+        let progress: *mut AnyObject = msg_send![download, progress];
+        match progress.as_ref() {
+            Some(p) => (msg_send![p, completedUnitCount], msg_send![p, totalUnitCount]),
+            None => (0, -1),
+        }
+    })
+}
+
+pub fn cancel_download(download: &AnyObject) {
+    caught(|| unsafe {
+        let none: Option<&block2::Block<dyn Fn(*mut AnyObject)>> = None;
+        let _: () = msg_send![download, cancel: none];
+    });
+}
+
+/// Hook wry's navigation and download delegates (once; call after the first
+/// page view is made, when wry has defined its navigation delegate class).
+pub fn guard_downloads(view: &AnyObject) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        let delegate: *mut AnyObject = msg_send![view, navigationDelegate];
+        if let Some(delegate) = delegate.as_ref()
+            && let Some(old) = swizzle(
+                delegate.class(),
+                objc2::sel!(webView:decidePolicyForNavigationResponse:decisionHandler:),
+                std::mem::transmute::<ResponsePolicy, objc2::runtime::Imp>(response_policy),
+            )
+        {
+            let _ = RESPONSE_POLICY.set(std::mem::transmute::<objc2::runtime::Imp, ResponsePolicy>(old));
+        }
+        // wry's download delegate class has a generated name: hook it when
+        // wry first hands a download its delegate.
+        let Some(class) = objc2::runtime::AnyClass::get(c"WKDownload") else {
+            return;
+        };
+        if let Some(old) = swizzle(
+            class,
+            objc2::sel!(setDelegate:),
+            std::mem::transmute::<SetDelegate, objc2::runtime::Imp>(set_delegate),
+        ) {
+            let _ = SET_DELEGATE.set(std::mem::transmute::<objc2::runtime::Imp, SetDelegate>(old));
+        }
+    });
+}
+
+unsafe extern "C-unwind" fn set_delegate(this: &AnyObject, cmd: objc2::runtime::Sel, delegate: *mut AnyObject) {
+    caught(|| unsafe {
+        if let Some(original) = SET_DELEGATE.get() {
+            original(this, cmd, delegate);
+        }
+        if let Some(delegate) = delegate.as_ref() {
+            guard_download_delegate(delegate.class());
+        }
+    });
+}
+
+/// Hook wry's download delegate class (once).
+unsafe fn guard_download_delegate(class: &objc2::runtime::AnyClass) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        if let Some(old) = swizzle(
+            class,
+            objc2::sel!(download:decideDestinationUsingResponse:suggestedFilename:completionHandler:),
+            std::mem::transmute::<DecideDestination, objc2::runtime::Imp>(decide_destination),
+        ) {
+            let _ = DECIDE_DESTINATION.set(std::mem::transmute::<objc2::runtime::Imp, DecideDestination>(old));
+        }
+        if let Some(old) = swizzle(
+            class,
+            objc2::sel!(downloadDidFinish:),
+            std::mem::transmute::<DownloadDone, objc2::runtime::Imp>(download_done),
+        ) {
+            let _ = DOWNLOAD_DONE.set(std::mem::transmute::<objc2::runtime::Imp, DownloadDone>(old));
+        }
+        if let Some(old) = swizzle(
+            class,
+            objc2::sel!(download:didFailWithError:resumeData:),
+            std::mem::transmute::<DownloadFailed, objc2::runtime::Imp>(download_failed),
+        ) {
+            let _ = DOWNLOAD_FAILED.set(std::mem::transmute::<objc2::runtime::Imp, DownloadFailed>(old));
+        }
+    });
+}
+
+/// Replace `class`'s method for `sel` with `imp`, returning the original.
+unsafe fn swizzle(
+    class: &objc2::runtime::AnyClass,
+    sel: objc2::runtime::Sel,
+    imp: objc2::runtime::Imp,
+) -> Option<objc2::runtime::Imp> {
+    unsafe {
+        let method = objc2::ffi::class_getInstanceMethod(class, sel);
+        if method.is_null() {
+            return None;
+        }
+        let old = objc2::ffi::method_getImplementation(method)?;
+        objc2::ffi::method_setImplementation(method, imp);
+        Some(old)
+    }
+}
+
+/// Run `body` with `download` as the current download.
+fn with_download(download: &AnyObject, body: impl FnOnce()) {
+    CURRENT_DOWNLOAD.with(|d| *d.borrow_mut() = Some(download.retain()));
+    caught(body);
+    CURRENT_DOWNLOAD.with(|d| *d.borrow_mut() = None);
+}
+
+unsafe extern "C-unwind" fn decide_destination(
+    this: &AnyObject,
+    cmd: objc2::runtime::Sel,
+    download: &AnyObject,
+    response: &AnyObject,
+    filename: &NSString,
+    handler: &block2::Block<dyn Fn(*const NSURL)>,
+) {
+    with_download(download, || unsafe {
+        if let Some(original) = DECIDE_DESTINATION.get() {
+            original(this, cmd, download, response, filename, handler);
+        }
+    });
+}
+
+unsafe extern "C-unwind" fn download_done(this: &AnyObject, cmd: objc2::runtime::Sel, download: &AnyObject) {
+    with_download(download, || unsafe {
+        if let Some(original) = DOWNLOAD_DONE.get() {
+            original(this, cmd, download);
+        }
+    });
+}
+
+unsafe extern "C-unwind" fn download_failed(
+    this: &AnyObject,
+    cmd: objc2::runtime::Sel,
+    download: &AnyObject,
+    error: &AnyObject,
+    resume_data: *mut AnyObject,
+) {
+    with_download(download, || unsafe {
+        if let Some(original) = DOWNLOAD_FAILED.get() {
+            original(this, cmd, download, error, resume_data);
+        }
+    });
+}
+
+unsafe extern "C-unwind" fn response_policy(
+    this: &AnyObject,
+    cmd: objc2::runtime::Sel,
+    web_view: &AnyObject,
+    response: &AnyObject,
+    handler: &block2::Block<dyn Fn(isize)>,
+) {
+    let attachment = caught_or(false, || unsafe {
+        let response: *mut AnyObject = msg_send![response, response];
+        let Some(response) = response.as_ref() else {
+            return false;
+        };
+        let is_http: bool = msg_send![response, isKindOfClass: objc2::class!(NSHTTPURLResponse)];
+        if !is_http {
+            return false;
+        }
+        let name = NSString::from_str("Content-Disposition");
+        let value: *mut NSString = msg_send![response, valueForHTTPHeaderField: &*name];
+        value.as_ref().is_some_and(|v| is_attachment(&v.to_string()))
+    });
+    if attachment {
+        handler.call((RESPONSE_DOWNLOAD,));
+        return;
+    }
+    caught(|| unsafe {
+        if let Some(original) = RESPONSE_POLICY.get() {
+            original(this, cmd, web_view, response, handler);
+        }
+    });
+}
+
+/// Whether a `Content-Disposition` header says to save the file.
+fn is_attachment(header: &str) -> bool {
+    header
+        .split(';')
+        .next()
+        .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("attachment"))
+}
+
 /// Tell Finder a download finished: the Dock's Downloads stack bounces, as
 /// it does for Safari.
 pub fn download_finished(path: &std::path::Path) {
@@ -933,6 +1203,7 @@ fn prepare_page_view(webview: tauri::webview::PlatformWebview, label: String) {
             // set it again so it sees the added ones.
             let _: () = msg_send![view, setUIDelegate: delegate];
         }
+        guard_downloads(view);
     }
 }
 
@@ -1218,4 +1489,15 @@ pub async fn page_icon_links(webview: &Webview) -> Option<String> {
         .await
         .ok()?
         .ok()?
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn attachments_are_saved_inline_ones_shown() {
+        assert!(super::is_attachment("attachment"));
+        assert!(super::is_attachment(r#"Attachment; filename="a.pdf""#));
+        assert!(!super::is_attachment(r#"inline; filename="attachment.pdf""#));
+        assert!(!super::is_attachment(""));
+    }
 }

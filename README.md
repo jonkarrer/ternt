@@ -131,7 +131,11 @@ for side projects).
 A profile no space uses any more is deleted.
 
 **Downloads** (download links, files a site sends to save) go to `~/Downloads`, numbered rather
-than overwriting, and the Dock's Downloads stack bounces when one finishes. Links for other apps
+than overwriting, and the Dock's Downloads stack bounces when one finishes. A box at the bottom of
+the sidebar shows each one's progress (Cancel stops it); click a finished file to open it, or the
+magnifier to show it in Finder. The button at the bottom left shows or hides the box, with a ring
+of progress while something downloads. A link opened in a new tab that turns out to be a file
+leaves no empty tab behind. Links for other apps
 (`mailto:`, `tel:`, Zoom, Slack…) open in those apps.
 
 ## Little Ternt

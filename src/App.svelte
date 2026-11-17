@@ -11,6 +11,8 @@
   import TabRow from "./lib/TabRow.svelte";
   import { shareState } from "./lib/share";
   import UpdateCard from "./lib/UpdateCard.svelte";
+  import DownloadsBox from "./lib/DownloadsBox.svelte";
+  import { downloads, toggleDownloads } from "./lib/downloads.svelte";
   import {
     browser,
     hostOf,
@@ -20,6 +22,7 @@
     MAX_SIDEBAR_WIDTH,
     MIN_SIDEBAR_WIDTH,
     type BrowserState,
+    type Download,
     type Group,
     type Tab,
     type Zone,
@@ -992,8 +995,30 @@
         </p>
       {/if}
 
+      <DownloadsBox />
       <UpdateCard />
       <footer class="spaces">
+        {#if downloads.list.length}
+          {@const active = downloads.list.filter((d: Download) => d.state === "active")}
+          {@const total = active.reduce((sum: number, d: Download) => sum + (d.total ?? 0), 0)}
+          {@const received = active.reduce((sum: number, d: Download) => sum + (d.total ? d.received : 0), 0)}
+          <button
+            class="icon small downloads-button"
+            class:on={downloads.open}
+            aria-label="Downloads"
+            aria-expanded={downloads.open}
+            title={active.length ? `Downloading ${active.length} file${active.length > 1 ? "s" : ""}` : "Downloads"}
+            onclick={toggleDownloads}
+          >
+            <svg viewBox="0 0 16 16"><path d="M8 3v7M5 7.5 8 10.5 11 7.5M4 13h8" /></svg>
+            {#if active.length}
+              <!-- Progress of everything downloading, around the button. -->
+              <svg class="ring" class:unknown={!total} viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10.5" pathLength="1" style:--progress={total ? received / total : 0.25} />
+              </svg>
+            {/if}
+          </button>
+        {/if}
         {#each browserState.spaces as s (s.id)}
           <button
             class="space-switch"
@@ -1613,6 +1638,38 @@
     justify-content: center;
     gap: 10px;
     padding-top: 6px;
+  }
+  /* Bottom left, like Arc's, so the spaces stay centered. */
+  .downloads-button {
+    position: absolute;
+    left: 2px;
+    bottom: 0;
+  }
+  .downloads-button.on {
+    background: var(--fill-strong);
+  }
+  .downloads-button .ring {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+  }
+  .ring circle {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-dasharray: var(--progress) 1;
+    transition: stroke-dasharray 200ms linear;
+  }
+  .ring.unknown {
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(270deg);
+    }
   }
   /* Each space's icon, faded until it's the active one, which sits on a
      pill of the space's color. */

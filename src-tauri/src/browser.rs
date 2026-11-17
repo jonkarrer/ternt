@@ -15,7 +15,6 @@
 //! state changes) take the lock, so holding it would deadlock.
 
 use std::{
-    path::PathBuf,
     sync::{
         Mutex,
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
@@ -611,33 +610,19 @@ pub fn on_navigation(app: &AppHandle, url: &Url) -> bool {
     false
 }
 
-/// Where each download in progress is being saved, by URL (WebKit doesn't
-/// say when it finishes).
-static DOWNLOADS: Mutex<Vec<(Url, PathBuf)>> = Mutex::new(Vec::new());
-
 /// Download hook for every page view: files go to ~/Downloads (named as the
-/// site suggests, numbered rather than overwriting). Without it WebKit
-/// cancels downloads: another dead click.
-pub fn on_download(event: DownloadEvent<'_>) -> bool {
+/// site suggests, numbered rather than overwriting), listed in the sidebar's
+/// Downloads box (src/downloads.rs). Without it WebKit cancels downloads:
+/// another dead click.
+pub fn on_download(webview: &Webview, event: DownloadEvent<'_>) -> bool {
     match event {
         DownloadEvent::Requested { url, destination } => {
             #[cfg(all(debug_assertions, target_os = "macos"))]
             crate::debug::redirect_download(destination);
-            DOWNLOADS.lock().unwrap().push((url, destination.clone()));
+            crate::downloads::started(webview, &url, destination);
         }
         DownloadEvent::Finished { url, success, .. } => {
-            let mut downloads = DOWNLOADS.lock().unwrap();
-            if let Some(i) = downloads.iter().position(|(u, _)| *u == url) {
-                let (_, path) = downloads.remove(i);
-                #[cfg(all(debug_assertions, target_os = "macos"))]
-                crate::debug::record_download(&path, success);
-                #[cfg(target_os = "macos")]
-                if success {
-                    crate::native::download_finished(&path);
-                }
-                #[cfg(not(target_os = "macos"))]
-                let _ = (path, success);
-            }
+            crate::downloads::finished(webview.app_handle(), &url, success);
         }
         _ => {}
     }
@@ -660,7 +645,7 @@ fn open_popup(
     )
     .window_features(features)
     .on_navigation(move |url| on_navigation(&nav_app, url))
-    .on_download(|_, event| on_download(event))
+    .on_download(|webview, event| on_download(&webview, event))
     .devtools(true)
     .title(url.host_str().unwrap_or("Ternt"))
     .on_document_title_changed(|window, title| {
@@ -738,7 +723,7 @@ pub fn page_builder(
         // Web pages can be inspected in every build (⌥⌘I, Inspect Element).
         .devtools(true)
         .on_navigation(move |url| on_navigation(&nav_app, url))
-        .on_download(|_, event| on_download(event))
+        .on_download(|webview, event| on_download(&webview, event))
         .on_new_window(move |url, features| on_new_window(&popup_app, url, features, opener));
     #[cfg(target_os = "macos")]
     let builder = {

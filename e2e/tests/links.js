@@ -15,7 +15,7 @@ const tabs = S().tabs.length;
 await click(page, "download");
 await t.until(async () => (await downloads()).some(([p, ok, text]) => p.endsWith("saved-page.html") && ok && text.includes("Fixture Page 2")), "a download link saves the file");
 await click(page, "attachment");
-await t.until(async () => (await downloads()).some(([p, ok, text]) => p.endsWith("report.csv") && ok && text === "attached file"), "so does a file the server sends as an attachment");
+await t.until(async () => (await downloads()).some(([p, ok, text]) => /report( \(\d+\))?\.csv$/.test(p) && ok && text === "attached file"), "so does a file the server sends as an attachment");
 await t.assert(tab()?.url.endsWith("/links.html") && S().tabs.length === tabs, "the page stays put");
 
 await click(page, "mail");

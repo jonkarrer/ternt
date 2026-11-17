@@ -303,6 +303,19 @@ pub fn redirect_download(destination: &mut std::path::PathBuf) {
     *destination = dir.join(name);
 }
 
+/// Downloads opened (or shown in Finder, with "reveal:") from the sidebar.
+static OPENED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+pub fn record_opened(path: &std::path::Path, reveal: bool) {
+    let kind = if reveal { "reveal" } else { "open" };
+    OPENED.lock().unwrap().push(format!("{kind}:{}", path.display()));
+}
+
+#[tauri::command]
+pub fn debug_opened() -> Vec<String> {
+    OPENED.lock().unwrap().clone()
+}
+
 pub fn record_download(path: &std::path::Path, success: bool) {
     DOWNLOADS
         .lock()

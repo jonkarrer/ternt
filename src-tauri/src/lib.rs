@@ -1,6 +1,7 @@
 mod browser;
 #[cfg(all(debug_assertions, target_os = "macos"))]
 mod debug;
+mod downloads;
 mod group;
 mod history;
 mod icons;
@@ -43,12 +44,14 @@ pub fn run() {
         .manage(little::Littles::default())
         .manage(icons::Icons::default())
         .manage(unload::Seen::default())
+        .manage(downloads::Downloads::default())
         .register_asynchronous_uri_scheme_protocol(welcome::SCHEME, welcome::respond)
         .setup(|app| {
             browser::create_main_window(app.handle())?;
             app.set_menu(menu::build(app.handle())?)?;
             history::load(app.handle());
             prefs::load(app.handle());
+            downloads::load(app.handle());
             updater::start(app.handle());
             unload::start(app.handle());
 
@@ -149,6 +152,11 @@ pub fn run() {
             updater::check_for_updates,
             updater::install_update,
             updater::app_version,
+            downloads::downloads,
+            downloads::open_download,
+            downloads::reveal_download,
+            downloads::cancel_download,
+            downloads::clear_downloads,
             settings::reveal_data_dir,
             settings::default_browser,
             settings::make_default_browser,
@@ -162,6 +170,8 @@ pub fn run() {
             debug::debug_other_app_links,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_downloads,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_opened,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_log,
             #[cfg(all(debug_assertions, target_os = "macos"))]

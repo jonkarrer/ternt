@@ -142,6 +142,22 @@ export type UpdateStatus =
   | { state: "installing"; version: string }
   | { state: "failed"; message: string };
 
+/** A file downloaded from a page (src-tauri/src/downloads.rs). */
+export interface Download {
+  id: number;
+  url: string;
+  path: string;
+  name: string;
+  state: "active" | "done" | "failed" | "canceled";
+  received: number;
+  /** The size, when the server said (and once it's done). */
+  total: number | null;
+  /** When it started (ms since 1970). */
+  started: number;
+  /** Moved or deleted since. */
+  missing: boolean;
+}
+
 /** App preferences (src-tauri/src/prefs.rs). */
 export interface Prefs {
   /** Where links opened from other apps go. */
@@ -263,6 +279,15 @@ export const browser = {
   checkForUpdates: () => invoke("check_for_updates"),
   onUpdate: (cb: (status: UpdateStatus) => void): Promise<UnlistenFn> =>
     listen<UpdateStatus>("update:status", (e) => cb(e.payload)),
+  /** Newest first. */
+  downloads: () => invoke<Download[]>("downloads"),
+  onDownloads: (cb: (list: Download[]) => void): Promise<UnlistenFn> =>
+    listen<Download[]>("downloads", (e) => cb(e.payload)),
+  openDownload: (id: number) => invoke("open_download", { id }),
+  revealDownload: (id: number) => invoke("reveal_download", { id }),
+  cancelDownload: (id: number) => invoke("cancel_download", { id }),
+  /** Take one finished download (or all of them) off the list; the files stay. */
+  clearDownloads: (id?: number) => invoke("clear_downloads", { id: id ?? null }),
   /** Explore mode (⌃F) started or ended. */
   onExplore: (cb: (on: boolean) => void): Promise<UnlistenFn> => listen<boolean>("browser:explore", (e) => cb(e.payload)),
   /** Rust asks the sidebar to show the icon picker for a space. */
