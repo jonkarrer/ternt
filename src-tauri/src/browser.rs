@@ -819,6 +819,45 @@ fn close_webview(app: &AppHandle, id: u32) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Loaded web tabs that aren't on screen (candidates for unloading).
+pub fn background_pages(app: &AppHandle) -> Vec<u32> {
+    let shown = app.state::<Browser>().shown.lock().unwrap().clone();
+    with(app, |s| {
+        s.tabs
+            .iter()
+            .filter(|t| t.kind == TabKind::Web && t.loaded && Some(t.id) != s.active)
+            .filter(|t| !shown.contains(&tab_label(t.id)))
+            .map(|t| t.id)
+            .collect()
+    })
+}
+
+/// Whether tab `id`'s page is playing audio or using the camera or
+/// microphone (so it shouldn't be unloaded).
+pub fn page_in_use(app: &AppHandle, id: u32) -> bool {
+    #[cfg(target_os = "macos")]
+    if let Some(webview) = app.get_webview(&tab_label(id)) {
+        return crate::native::page_in_use(&webview);
+    }
+    let _ = (app, id);
+    false
+}
+
+/// Unload background tab `id` (see `unload`), unless it came on screen
+/// meanwhile. Returns whether it did; the caller emits the state.
+pub fn unload_background_tab(app: &AppHandle, id: u32) -> tauri::Result<bool> {
+    if !background_pages(app).contains(&id) {
+        return Ok(false);
+    }
+    unload_tab(app, id)?;
+    Ok(true)
+}
+
+/// Tell the webviews the state changed.
+pub fn state_changed(app: &AppHandle) {
+    emit_state(app);
+}
+
 /// Destroy a web tab's webview but keep the tab (it reloads when shown).
 fn unload_tab(app: &AppHandle, id: u32) -> tauri::Result<()> {
     close_webview(app, id)?;
@@ -916,6 +955,13 @@ fn set_shown(app: &AppHandle, views: &[&Webview]) -> tauri::Result<()> {
         &mut *app.state::<Browser>().shown.lock().unwrap(),
         labels.clone(),
     );
+    let tabs = |labels: &[String]| -> Vec<u32> {
+        labels
+            .iter()
+            .filter_map(|l| l.strip_prefix("tab-")?.parse().ok())
+            .collect()
+    };
+    crate::unload::on_shown(app, &tabs(&before), &tabs(&labels));
     for label in before.iter().filter(|l| !labels.contains(l)) {
         if let Some(webview) = app.get_webview(label) {
             webview.hide()?;

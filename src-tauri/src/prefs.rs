@@ -51,6 +51,8 @@ pub struct Prefs {
     pub external_links: LinkTarget,
     pub account: Account,
     pub terminal_font_size: f64,
+    /// Unload tabs that have been off screen a while (see `unload`).
+    pub unload_tabs: bool,
 }
 
 impl Default for Prefs {
@@ -59,6 +61,7 @@ impl Default for Prefs {
             external_links: LinkTarget::default(),
             account: Account::default(),
             terminal_font_size: TERMINAL_FONT_SIZE,
+            unload_tabs: true,
         }
     }
 }

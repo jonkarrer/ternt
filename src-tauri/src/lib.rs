@@ -16,6 +16,7 @@ mod persist;
 mod pty;
 mod session;
 mod settings;
+mod unload;
 mod updater;
 mod welcome;
 
@@ -41,6 +42,7 @@ pub fn run() {
         .manage(prefs::Store::default())
         .manage(little::Littles::default())
         .manage(icons::Icons::default())
+        .manage(unload::Seen::default())
         .register_asynchronous_uri_scheme_protocol(welcome::SCHEME, welcome::respond)
         .setup(|app| {
             browser::create_main_window(app.handle())?;
@@ -48,6 +50,7 @@ pub fn run() {
             history::load(app.handle());
             prefs::load(app.handle());
             updater::start(app.handle());
+            unload::start(app.handle());
 
             // Restore the last session, then open any `ternt <url>...` args.
             // No session at all means a first launch: show the welcome page.

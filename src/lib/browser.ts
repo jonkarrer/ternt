@@ -150,6 +150,8 @@ export interface Prefs {
   account: { name: string; email: string };
   /** Terminal text size in px (⌘+ / ⌘− / ⌘0 in a terminal). */
   terminalFontSize: number;
+  /** Unload tabs off screen for 30 minutes, to save memory. */
+  unloadTabs: boolean;
 }
 
 export type PaletteMode = "newTab" | "edit" | "help";

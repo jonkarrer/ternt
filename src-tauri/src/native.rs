@@ -363,6 +363,34 @@ fn pin_to_superview(view: &NSView) {
 
 /// How AppKit resizes a content view with the window until the next exact
 /// layout: the whole content area tracks it, a group's pane scales with it.
+/// Whether a page is playing audio or capturing the camera or microphone.
+pub fn page_in_use(webview: &Webview) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let sent = webview.with_webview(move |p| {
+        let mut busy = false;
+        caught(|| unsafe {
+            let view = &*(p.inner() as *const AnyObject);
+            let has = |sel| -> bool { msg_send![view, respondsToSelector: sel] };
+            if has(objc2::sel!(_isPlayingAudio)) {
+                let playing: bool = msg_send![view, _isPlayingAudio];
+                busy |= playing;
+            }
+            // WKMediaCaptureState: 0 none, 1 active, 2 muted.
+            if has(objc2::sel!(cameraCaptureState)) {
+                let state: isize = msg_send![view, cameraCaptureState];
+                busy |= state != 0;
+            }
+            if has(objc2::sel!(microphoneCaptureState)) {
+                let state: isize = msg_send![view, microphoneCaptureState];
+                busy |= state != 0;
+            }
+        });
+        let _ = tx.send(busy);
+    });
+    // Unknown counts as in use: better to keep a page than lose a call.
+    sent.is_err() || rx.recv().unwrap_or(true)
+}
+
 pub fn set_pane(webview: &Webview, whole: bool) {
     let _ = webview.with_webview(move |platform| unsafe {
         let sizable = NSAutoresizingMaskOptions::ViewWidthSizable

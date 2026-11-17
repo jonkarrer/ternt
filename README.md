@@ -74,6 +74,11 @@ Arc-style, top to bottom:
 - **Terminals**: per space, at the bottom of the sidebar under *New Terminal*. A long Today list
   pushes them down, and they scroll with it.
 
+**Idle tabs unload**: a web tab off screen for 30 minutes lets go of its page (each loaded page
+keeps a WebKit process, often 50–150 MB). It stays in the sidebar and reloads when you open it.
+Tabs playing sound or using the camera or microphone stay loaded; *Settings → General* turns this
+off.
+
 **Renaming tabs**: double-click a tab's title (or right-click → *Rename Tab…*) to give it a name;
 Enter saves, Escape cancels. The name replaces the page's or shell's own title in the sidebar, the
 top bar and the command bar (which still finds the tab by its title), is saved with the session and

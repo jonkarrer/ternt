@@ -39,7 +39,10 @@ for name in $tests; do
     # Or a suite's own starting session (e2e/tests/<suite>.session.json).
     [[ -f $E2E/tests/$key.session.json ]] && cp $E2E/tests/$key.session.json $OUT/$key.session.json
   fi
-  TERNT_TEST=$E2E/tests/$name.js TERNT_SHOTS=$OUT TERNT_SESSION_FILE=$OUT/$key.session.json \
+  # A suite's own settings (e2e/tests/<suite>.env: KEY=VALUE lines).
+  suite_env=()
+  [[ -f $E2E/tests/$name.env ]] && suite_env=(${(f)"$(<$E2E/tests/$name.env)"})
+  env $suite_env TERNT_TEST=$E2E/tests/$name.js TERNT_SHOTS=$OUT TERNT_SESSION_FILE=$OUT/$key.session.json \
     TERNT_HISTORY_FILE=$OUT/$key.history.json TERNT_PREFS_FILE=$OUT/$key.prefs.json $ROOT/src-tauri/target/debug/ternt > $OUT/$name.log 2>&1 &
   pid=$!
   for i in {1..400}; do grep -q "TEST DONE" $OUT/$name.log && break; kill -0 $pid 2>/dev/null || break; sleep 0.25; done

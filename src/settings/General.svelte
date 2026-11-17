@@ -4,12 +4,19 @@
   import { updates, watchUpdates } from "../lib/updates.svelte";
 
   let version = $state("");
+  let unloadTabs = $state(true);
   watchUpdates();
   const status = $derived(updates.status);
 
   onMount(() => {
     browser.appVersion().then((v) => (version = v));
+    browser.getPrefs().then((p) => (unloadTabs = p.unloadTabs));
   });
+
+  function setUnloadTabs(event: Event) {
+    unloadTabs = (event.currentTarget as HTMLInputElement).checked;
+    browser.updatePrefs({ unloadTabs });
+  }
 
   const busy = $derived(status.state === "downloading" || status.state === "installing");
   const updateText = $derived.by(() => {
@@ -45,6 +52,16 @@
       <button class="button" disabled={busy} onclick={() => browser.checkForUpdates()}>Check for Updates</button>
     {/if}
   </div>
+  <label class="row">
+    <div class="label">
+      Unload tabs you haven't looked at in 30 minutes
+      <div class="hint">
+        Saves memory: the tab stays in the sidebar and reloads when you open it. Tabs playing sound or using the
+        camera or microphone stay loaded.
+      </div>
+    </div>
+    <input class="unload" type="checkbox" {...{ switch: true }} checked={unloadTabs} onchange={setUnloadTabs} />
+  </label>
   <div class="row">
     <div class="label">
       Welcome page
@@ -53,3 +70,11 @@
     <button class="button" onclick={() => browser.menuAction("welcome")}>Open</button>
   </div>
 </div>
+
+<style>
+  .unload {
+    flex: none;
+    margin: 0;
+    accent-color: var(--accent);
+  }
+</style>

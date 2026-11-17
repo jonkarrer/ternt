@@ -40,6 +40,13 @@ await t.assert(
 await t.shot("settings-account", "settings");
 await click(`.page-tab:nth-child(2)`);
 await t.until(async () => (await read(`document.querySelector("main").textContent`)).includes("Version"), "General shows the version");
+await t.until(async () => (await read(`String(document.querySelector("input.unload")?.checked)`)) === "true", "unloading idle tabs is on by default");
+await t.sleep(200);
+await t.shot("settings-general", "settings");
+await click(`input.unload`);
+await t.until(async () => (await t.invoke("get_prefs")).unloadTabs === false, "its switch turns it off");
+await click(`input.unload`);
+await t.until(async () => (await t.invoke("get_prefs")).unloadTabs === true, "and on");
 
 // Opening again reuses the window
 await t.invoke("menu_action", { id: "settings" });
