@@ -131,7 +131,7 @@ export interface HistoryHit {
 export type UpdateStatus =
   | { state: "idle" }
   | { state: "upToDate" }
-  | { state: "available"; version: string }
+  | { state: "ready"; version: string }
   | { state: "downloading"; version: string; progress: number | null }
   | { state: "installing"; version: string }
   | { state: "failed"; message: string };

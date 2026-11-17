@@ -43,12 +43,13 @@ release version:
     scripts/release.sh {{version}}
 
 # Release: bump (asks patch/minor/major unless given: `just upload minor`), build, sign, notarize, upload
-upload bump="":
-    doppler run -- scripts/publish.sh {{bump}}
+# Add --required for a release installed copies take right away (`just upload patch --required`)
+upload *args:
+    doppler run -- scripts/publish.sh {{args}}
 
 # Publish the files the last `just upload` built, after a push or upload error (no rebuild)
-upload-resume:
-    doppler run -- scripts/publish.sh --resume
+upload-resume *args:
+    doppler run -- scripts/publish.sh --resume {{args}}
 
 # Build and verify the release tagged at HEAD without Apple signing or upload
 upload-dry-run:

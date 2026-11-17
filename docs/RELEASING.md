@@ -104,8 +104,16 @@ Add one with `doppler secrets set NAME` (it prompts, so the value stays out of s
    - `Ternt_<version>_universal.app.tar.gz`: the update installed copies download
    - `latest.json`: what installed copies check, at
      `https://github.com/jonkarrer/ternt/releases/latest/download/latest.json`
-3. Within a few seconds of launch (or via *Ternt → Check for Updates…*), installed copies pop up
-   an update card at the bottom of the sidebar.
+3. Within a few seconds of launch (or via *Ternt → Check for Updates…*), installed copies
+   download the update in the background, install it when they quit, and meanwhile say it's
+   ready on a card at the bottom of the sidebar (*Restart Now* installs it right away).
+
+### A required release (fixing a bad one)
+
+`just upload patch --required` adds `"required": true` to `latest.json`: installed copies
+download, install and relaunch as soon as they see it, without waiting for a quit or a click.
+To mark files already built, `just upload-resume --required`. This only reaches copies that
+have the required-update support (0.16.1 and later); older ones still show the card.
 
 If something fails halfway, nothing is published until the last step. The bump commit and tag
 stay local, and the built, notarized files stay in the bundle's `publish` folder: fix the cause
@@ -115,6 +123,7 @@ tag at HEAD. To redo a published release, delete it on GitHub first.
 
 ## Testing the updater without publishing
 
-`just test-update` (any Mac with Doppler access or the updater key) builds 0.1.0 and 0.1.1 test bundles,
-installs 0.1.0, serves 0.1.1 from a local server and checks the full update: card, download,
-swap, relaunch as 0.1.1.
+`just test-update` (any Mac with Doppler access or the updater key) builds 0.1.0 to 0.1.3 test
+bundles, installs 0.1.0 and serves the others from a local server, checking each way an update
+lands: downloaded in the background then installed at the next launch after the app was killed
+(0.1.1), required and installed with no click (0.1.2), and installed on quit (0.1.3).

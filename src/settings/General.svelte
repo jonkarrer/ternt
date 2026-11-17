@@ -15,8 +15,8 @@
   const busy = $derived(status.state === "downloading" || status.state === "installing");
   const updateText = $derived.by(() => {
     switch (status.state) {
-      case "available":
-        return `Ternt ${status.version} is available.`;
+      case "ready":
+        return `Ternt ${status.version} is downloaded and installs when you quit.`;
       case "downloading":
         return status.progress == null
           ? `Downloading ${status.version}…`
@@ -28,7 +28,7 @@
       case "failed":
         return `The last check or update failed: ${status.message}`;
       default:
-        return "Ternt checks for updates shortly after launch and every 4 hours.";
+        return "Ternt checks for updates shortly after launch and every 15 minutes, and installs them when you quit.";
     }
   });
 </script>
@@ -40,8 +40,8 @@
       Version {version}
       <div class="hint">{updateText}</div>
     </div>
-    {#if status.state === "available" || status.state === "failed"}
-      <button class="button primary" onclick={() => browser.installUpdate()}>Install and Restart</button>
+    {#if status.state === "ready" || status.state === "failed"}
+      <button class="button primary" onclick={() => browser.installUpdate()}>Restart to Update</button>
     {:else}
       <button class="button" disabled={busy} onclick={() => browser.checkForUpdates()}>Check for Updates</button>
     {/if}

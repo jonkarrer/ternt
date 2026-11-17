@@ -3,17 +3,18 @@
   import { browser } from "./browser";
   import { updates, watchUpdates } from "./updates.svelte";
 
-  // Pops up over the bottom of the sidebar when an update turns up, at launch
-  // or while Ternt is in use, and stays through the download and restart
-  // (src-tauri/src/updater.rs). Later puts it off for that version; Settings →
-  // General can still install it. Also answers Check for Updates… (up to date,
-  // or why it failed: only checks the user asked for report failures).
+  // Pops up over the bottom of the sidebar once an update has downloaded in
+  // the background: it installs when Ternt quits, or now with Restart Now
+  // (src-tauri/src/updater.rs). Later puts the card off for that version (the
+  // update still installs on quit). A required update shows its download and
+  // restart with no buttons. Also answers Check for Updates… (up to date, or
+  // why it failed: only checks the user asked for report failures).
   watchUpdates();
   const status = $derived(updates.status);
   const version = $derived("version" in status ? status.version : null);
   const failed = $derived(status.state === "failed");
   const shown = $derived(
-    status.state !== "idle" && !(status.state === "available" && updates.dismissed === status.version),
+    status.state !== "idle" && !(status.state === "ready" && updates.dismissed === status.version),
   );
   const progress = $derived(
     status.state === "downloading" ? (status.progress ?? 0) : status.state === "installing" ? 1 : 0,
@@ -39,9 +40,9 @@
       <svg viewBox="0 0 16 16"><path d="M8 3v7.5M4.5 7 8 10.5 11.5 7M4 13h8" /></svg>
     {/if}
     <div class="text">
-      {#if status.state === "available"}
+      {#if status.state === "ready"}
         <strong>Ternt {status.version} is ready</strong>
-        <span>Restart to update. Your tabs and spaces come back as they are.</span>
+        <span>It installs when you quit, or restart now. Your tabs and spaces come back as they are.</span>
       {:else if status.state === "downloading"}
         <strong>Updating to {status.version}…</strong>
         <span>{status.progress == null ? "Downloading" : `Downloading ${Math.round(status.progress * 100)}%`}</span>

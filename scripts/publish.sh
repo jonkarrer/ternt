@@ -6,6 +6,7 @@
 #   just upload minor            # same, bump chosen up front
 #   just upload-resume           # publish the files an earlier run built (e.g. after an upload error)
 #   just upload-dry-run          # build and check the tag at HEAD: no Apple signing, no upload
+#   just upload patch --required # installed copies update right away, no click (a bad release)
 #
 # Produces a universal (Apple Silicon + Intel) app, notarized and stapled, in a
 # .dmg made with hdiutil (Tauri's dmg bundler lays out the window through
@@ -19,13 +20,14 @@ cd ${0:A:h:h}
 ROOT=$PWD
 fail() { echo "!! $*"; exit 1; }
 step() { echo "\n== $*"; }
-DRY= BUMP= RESUME=
+DRY= BUMP= RESUME= REQUIRED=
 for arg; do
   case $arg in
     --dry-run) DRY=1 ;;
     --resume) RESUME=1 ;;
+    --required) REQUIRED=1 ;;
     major|minor|patch) BUMP=$arg ;;
-    *) fail "usage: scripts/publish.sh [--dry-run | --resume] [major|minor|patch]" ;;
+    *) fail "usage: scripts/publish.sh [--dry-run | --resume] [--required] [major|minor|patch]" ;;
   esac
 done
 [[ -z $DRY || -z $RESUME ]] || fail "--dry-run and --resume don't combine"
@@ -192,6 +194,13 @@ else
   build
 fi
 
+# Required: installed copies install it as soon as they see it, without
+# waiting for a quit or a click (src-tauri/src/updater.rs).
+if [[ -n $REQUIRED ]]; then
+  bun -e "const f = '$dist/latest.json'; const m = await Bun.file(f).json(); m.required = true; await Bun.write(f, JSON.stringify(m, null, 2) + '\n')"
+  echo "marked required: installed copies update right away"
+fi
+
 if [[ -n $DRY ]]; then
   echo "\ndry run done: nothing signed by Apple, nothing uploaded ($dist)"
   exit 0
@@ -201,7 +210,7 @@ step "publishing $tag"
 git push origin HEAD:main $tag
 # A draft first, published once every file is up: installed copies never
 # see a latest.json whose update archive isn't there yet.
-notes="Download **Ternt_${version}_universal.dmg**, open it and drag Ternt to Applications. Installed copies update themselves: a card pops up at the bottom of the sidebar."
+notes="Download **Ternt_${version}_universal.dmg**, open it and drag Ternt to Applications. Installed copies update themselves: they download it in the background and install it when they quit."
 release=$(TAG=$tag NAME="Ternt $version" NOTES=$notes bun -e \
   'const e = process.env; console.log(JSON.stringify({ tag_name: e.TAG, name: e.NAME, body: e.NOTES, draft: true }))' |
   github POST /repos/$REPO/releases --data-binary @-) || fail "couldn't create the release (does the token have Contents: read and write?); fix it and run just upload-resume"

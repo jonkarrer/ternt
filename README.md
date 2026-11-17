@@ -11,10 +11,12 @@ The first launch opens a welcome page with the shortcuts (later: *Help → Welco
 No tabs are created for you: press ⌘T to open the first one.
 
 After that Ternt updates itself. It checks at launch, every 15 minutes, and when you come back to it
-(at most every 2 minutes); when a new version is out, a card pops up at the bottom of the sidebar.
-*Restart Now* downloads the update, swaps the app in place and relaunches (your tabs come back);
-*Later* hides it for that version (*Settings → General* can still install it). *Ternt → Check for
-Updates…* checks right away and answers on the same card.
+(at most every 2 minutes). A new version downloads in the background and installs when you quit;
+meanwhile a card at the bottom of the sidebar says it's ready, and *Restart Now* swaps it in right
+away (your tabs come back). *Later* hides the card for that version. If Ternt didn't quit normally
+(a crash), the next launch installs the downloaded update and relaunches. A release published as
+required (`just upload patch --required`) installs and relaunches as soon as Ternt sees it, no
+click needed. *Ternt → Check for Updates…* checks right away and answers on the same card.
 
 ## Development
 

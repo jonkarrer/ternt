@@ -202,6 +202,7 @@ pub fn run() {
                 tauri::RunEvent::Exit => {
                     session::save_now(app);
                     history::save_now(app);
+                    updater::install_on_exit(app);
                 }
                 // Links from other apps (Ternt as the default browser).
                 #[cfg(target_os = "macos")]
