@@ -32,7 +32,7 @@ build:
 test-e2e suite="":
     e2e/run.sh {{suite}}
 
-# Self-update test: installs 0.1.0, serves 0.1.1 locally, checks the swap (needs the updater key)
+# Self-update test: installs 0.1.0, serves 0.1.1–0.1.3 locally, checks each way an update lands (needs the updater key)
 test-update:
     doppler run -- e2e/update.sh
 
