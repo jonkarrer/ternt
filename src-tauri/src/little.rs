@@ -112,16 +112,7 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
         LogicalSize::new(size.width, BAR_HEIGHT),
     )?;
 
-    let popup_app = app.clone();
-    let nav_app = app.clone();
-    let page = WebviewBuilder::new(page_label(&label), WebviewUrl::External(url))
-        .zoom_hotkeys_enabled(true)
-        .devtools(true)
-        .on_navigation(move |url| crate::browser::on_navigation(&nav_app, url))
-        .on_download(|_, event| crate::browser::on_download(event))
-        .on_new_window(move |url, features| {
-            crate::browser::on_new_window(&popup_app, url, features, None)
-        })
+    let page = crate::browser::page_builder(app, page_label(&label), url, profile.as_deref(), None)
         .on_page_load(|webview, payload| {
             let loading = matches!(payload.event(), PageLoadEvent::Started);
             let url = payload.url().to_string();
@@ -137,16 +128,6 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
             }
             update(webview.app_handle(), webview.label(), |s| s.title = title);
         });
-    #[cfg(target_os = "macos")]
-    let page = {
-        let page = page.user_agent(crate::browser::USER_AGENT);
-        match profile.as_deref().and_then(crate::browser::profile_bytes) {
-            Some(store) => page.data_store_identifier(store),
-            None => page,
-        }
-    };
-    #[cfg(not(target_os = "macos"))]
-    let _ = profile;
     let page = window.add_child(
         page,
         LogicalPosition::new(0.0, BAR_HEIGHT),

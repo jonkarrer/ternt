@@ -705,34 +705,49 @@ fn remove_profile(app: &AppHandle, profile: String) {
 
 // --- Tabs -------------------------------------------------------------------
 
+/// A web page's view, as tabs and Little Ternt windows make it: inspectable,
+/// links and downloads handled here, popups opened (from tab `opener`, if
+/// any), signed in with `profile`.
+pub fn page_builder(
+    app: &AppHandle,
+    label: String,
+    url: Url,
+    profile: Option<&str>,
+    opener: Option<u32>,
+) -> WebviewBuilder<tauri::Wry> {
+    let popup_app = app.clone();
+    let nav_app = app.clone();
+    let builder = WebviewBuilder::new(label, WebviewUrl::External(url))
+        .zoom_hotkeys_enabled(true)
+        // Web pages can be inspected in every build (⌥⌘I, Inspect Element).
+        .devtools(true)
+        .on_navigation(move |url| on_navigation(&nav_app, url))
+        .on_download(|_, event| on_download(event))
+        .on_new_window(move |url, features| on_new_window(&popup_app, url, features, opener));
+    #[cfg(target_os = "macos")]
+    let builder = {
+        let builder = builder.user_agent(USER_AGENT);
+        match profile.and_then(profile_bytes) {
+            Some(store) => builder.data_store_identifier(store),
+            None => builder,
+        }
+    };
+    #[cfg(not(target_os = "macos"))]
+    let _ = profile;
+    builder
+}
+
 /// Create the webview for a web tab at its current URL. Must not be called
 /// from the main thread (it blocks on it).
 fn load_tab(app: &AppHandle, id: u32) -> tauri::Result<Webview> {
-    let (url, _profile) = with(app, |s| {
+    let (url, profile) = with(app, |s| {
         let tab = s.tab(id)?;
         Some((tab.url.clone(), s.profile_for(tab)))
     })
     .unwrap_or_default();
     let url = Url::parse(&url).unwrap_or_else(|_| "about:blank".parse().unwrap());
 
-    let popup_app = app.clone();
-    let nav_app = app.clone();
-    let builder = WebviewBuilder::new(tab_label(id), WebviewUrl::External(url))
-        .zoom_hotkeys_enabled(true)
-        // Web pages can be inspected in every build (⌥⌘I, Inspect Element).
-        .devtools(true)
-        .on_navigation(move |url| on_navigation(&nav_app, url))
-        .on_download(|_, event| on_download(event))
-        .on_new_window(move |url, features| on_new_window(&popup_app, url, features, Some(id)));
-
-    #[cfg(target_os = "macos")]
-    let builder = {
-        let builder = builder.user_agent(USER_AGENT);
-        match _profile.as_deref().and_then(profile_bytes) {
-            Some(store) => builder.data_store_identifier(store),
-            None => builder,
-        }
-    };
+    let builder = page_builder(app, tab_label(id), url, profile.as_deref(), Some(id));
 
     // macOS reads navigation state via KVO (see `native::observe`); elsewhere
     // fall back to load/title callbacks.

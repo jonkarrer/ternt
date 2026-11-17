@@ -1,15 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { browser, type UpdateStatus } from "../lib/browser";
+  import { browser } from "../lib/browser";
+  import { updates, watchUpdates } from "../lib/updates.svelte";
 
   let version = $state("");
-  let status = $state<UpdateStatus>({ state: "idle" });
+  watchUpdates();
+  const status = $derived(updates.status);
 
   onMount(() => {
     browser.appVersion().then((v) => (version = v));
-    const unlisten = browser.onUpdate((next) => (status = next));
-    unlisten.then(() => browser.updateStatus()).then((s) => (status = s));
-    return () => unlisten.then((off) => off());
   });
 
   const busy = $derived(status.state === "downloading" || status.state === "installing");
