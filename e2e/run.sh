@@ -36,6 +36,8 @@ for name in $tests; do
     # A missing session file is a first launch, which opens the welcome page;
     # suites start from an empty session instead, except the welcome suite.
     [[ $key == welcome ]] || echo '{"tabs":[],"active":null,"sidebarWidth":240,"sidebarCollapsed":false}' > $OUT/$key.session.json
+    # Or a suite's own starting session (e2e/tests/<suite>.session.json).
+    [[ -f $E2E/tests/$key.session.json ]] && cp $E2E/tests/$key.session.json $OUT/$key.session.json
   fi
   TERNT_TEST=$E2E/tests/$name.js TERNT_SHOTS=$OUT TERNT_SESSION_FILE=$OUT/$key.session.json \
     TERNT_HISTORY_FILE=$OUT/$key.history.json TERNT_PREFS_FILE=$OUT/$key.prefs.json $ROOT/src-tauri/target/debug/ternt > $OUT/$name.log 2>&1 &

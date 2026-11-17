@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 const MAX_ENTRIES: usize = 5000;
-const SAVE_DELAY: Duration = Duration::from_secs(2);
+/// Visits are batched: the whole file is rewritten (up to ~1 MB), and a
+/// quit saves what's left.
+const SAVE_DELAY: Duration = Duration::from_secs(10);
 const DAY: f64 = 86_400.0;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

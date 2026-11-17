@@ -178,6 +178,8 @@ pub fn run() {
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_quit,
             #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_bench_snapshot,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_clipboard,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_focused,

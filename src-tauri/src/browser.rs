@@ -252,6 +252,22 @@ fn snapshot(app: &AppHandle) -> Snapshot {
     snapshot
 }
 
+/// Benchmarks: build and serialize the state `n` times, as an emit does.
+/// Returns (ms per build, ms per serialization, bytes).
+#[cfg(debug_assertions)]
+pub fn bench_snapshot(app: &AppHandle, n: u32) -> (f64, f64, usize) {
+    let (mut build, mut ser, mut bytes) = (0.0, 0.0, 0);
+    for _ in 0..n {
+        let t = std::time::Instant::now();
+        let s = snapshot(app);
+        build += t.elapsed().as_secs_f64();
+        let t = std::time::Instant::now();
+        bytes = serde_json::to_vec(&s).map(|v| v.len()).unwrap_or(0);
+        ser += t.elapsed().as_secs_f64();
+    }
+    (build * 1000.0 / n as f64, ser * 1000.0 / n as f64, bytes)
+}
+
 /// Set while a batch of changes runs (see `clear_today`): one emit at the end
 /// instead of one full state per change.
 static EMITS_HELD: AtomicBool = AtomicBool::new(false);

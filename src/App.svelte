@@ -9,6 +9,7 @@
   import Omnibox from "./lib/Omnibox.svelte";
   import TabIcon from "./lib/TabIcon.svelte";
   import TabRow from "./lib/TabRow.svelte";
+  import { shareState } from "./lib/share";
   import UpdateCard from "./lib/UpdateCard.svelte";
   import {
     browser,
@@ -38,7 +39,9 @@
     | { kind: "zone"; zone: Zone | "terminals" };
   type DropTarget = { zone: Zone; folder: number | null; index: number; mark: Mark };
 
-  let browserState = $state<BrowserState>({
+  // Replaced whole on each update (never changed in place), sharing what
+  // didn't change with the last one so only changed rows re-render.
+  let browserState = $state.raw<BrowserState>({
     tabs: [],
     spaces: [],
     folders: [],
@@ -197,7 +200,7 @@
     // Exploring into another space (or the cursor's tab closed): follow
     // what's showing.
     if (explore && (from !== to || !s.tabs.some((t) => t.id === cursor))) cursor = s.active;
-    browserState = s;
+    browserState = shareState(browserState, s);
     // A rename or icon picker whose space, folder or tab went away.
     if (renaming && !exists(s, renaming)) renaming = null;
     if (pickingIcon != null && !s.spaces.some((x) => x.id === pickingIcon)) pickingIcon = null;
@@ -224,7 +227,7 @@
       // Test hooks: dev builds, and bundles built for the update test (e2e/update.sh).
       if (!PEEK_VIEW && (import.meta.env.DEV || import.meta.env.VITE_TERNT_TEST)) {
         const { installTestHooks } = await import("./lib/debug");
-        installTestHooks(() => browserState);
+        installTestHooks(() => browserState, applyState);
       }
     })();
     return () => unlisten.forEach((p) => p.then((off) => off()));

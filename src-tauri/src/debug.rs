@@ -130,6 +130,12 @@ pub fn debug_windows(app: AppHandle) -> Vec<String> {
     app.windows().into_keys().collect()
 }
 
+/// See `browser::bench_snapshot`.
+#[tauri::command]
+pub async fn debug_bench_snapshot(app: AppHandle, n: u32) -> (f64, f64, usize) {
+    crate::browser::bench_snapshot(&app, n)
+}
+
 #[tauri::command]
 pub fn debug_quit(app: AppHandle) {
     app.exit(0);
