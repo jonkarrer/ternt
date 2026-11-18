@@ -1,12 +1,17 @@
 <script lang="ts" module>
-  // Origins whose /favicon.ico failed, so we don't refetch on every render.
-  const failed = new Set<string>();
+  // Icons that failed to load, and when: not refetched on every render, but
+  // tried again after a while (the network may have been down).
+  const failed = new Map<string, number>();
+  const RETRY_AFTER = 60_000;
+  const hasFailed = (src: string) => Date.now() - (failed.get(src) ?? -Infinity) < RETRY_AFTER;
 </script>
 
 <script lang="ts">
   import { isAppPage } from "./url";
 
-  let { url, loading = false }: { url: string; loading?: boolean } = $props();
+  // `icon` is the one the page names (Tab.favicon); without it, or if it
+  // won't load, the site's /favicon.ico, then the site's first letter.
+  let { url, icon = null, loading = false }: { url: string; icon?: string | null; loading?: boolean } = $props();
 
   const origin = $derived.by(() => {
     try {
@@ -17,10 +22,18 @@
     }
   });
   const letter = $derived(origin ? new URL(origin).hostname.replace(/^www\./, "")[0] ?? "" : "");
-  let broken = $state(false);
+  const sources = $derived([icon, origin && `${origin}/favicon.ico`].filter((s): s is string => !!s));
+  let src = $state<string | null>(null);
+  // Re-picked when the icon changes, and when a load finishes.
   $effect(() => {
-    broken = origin == null || failed.has(origin);
+    loading;
+    src = sources.find((s) => !hasFailed(s)) ?? null;
   });
+  function onerror() {
+    if (!src) return;
+    failed.set(src, Date.now());
+    src = sources.find((s) => !hasFailed(s)) ?? null;
+  }
 </script>
 
 <span class="favicon" class:loading>
@@ -29,16 +42,8 @@
     <span class="bolt" aria-hidden="true">
       <svg viewBox="300 120 440 790"><polygon points="612,150 318,572 494,572 404,884 722,428 556,428 656,150" /></svg>
     </span>
-  {:else if !broken && origin}
-    <img
-      src="{origin}/favicon.ico"
-      alt=""
-      draggable="false"
-      onerror={() => {
-        failed.add(origin);
-        broken = true;
-      }}
-    />
+  {:else if src}
+    <img {src} alt="" draggable="false" {onerror} />
   {:else}
     <span class="letter">{letter.toUpperCase()}</span>
   {/if}

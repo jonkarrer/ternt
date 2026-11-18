@@ -61,6 +61,9 @@ pub struct Tab {
     /// opened from.
     pub can_go_back: bool,
     pub can_go_forward: bool,
+    /// Web tabs: the icon the page names (a URL), once read from it.
+    /// Without one the sidebar tries the site's `/favicon.ico`.
+    pub favicon: Option<String>,
     /// Terminals: the shells it's split into (one to start with).
     pub panes: Option<Panes>,
     /// The tab whose link opened this one (`target=_blank`): Back at the
@@ -87,6 +90,7 @@ impl Tab {
             loading: false,
             can_go_back: false,
             can_go_forward: false,
+            favicon: None,
             panes: (kind == TabKind::Terminal).then(Panes::default),
             opener: None,
             page_back: false,
@@ -1005,6 +1009,7 @@ impl State {
                 tab.zone = zone;
                 tab.folder = folder;
                 tab.name = t.name.filter(|n| !n.trim().is_empty());
+                tab.favicon = t.favicon;
                 if let (Some(panes), Some(saved)) = (&mut tab.panes, t.panes) {
                     *panes = Panes::restore(saved);
                 }
@@ -1070,6 +1075,7 @@ impl State {
                     space: Some(t.space),
                     folder: t.folder,
                     name: t.name.clone(),
+                    favicon: t.favicon.clone(),
                     panes: t
                         .panes
                         .as_ref()
@@ -1133,6 +1139,9 @@ pub struct SavedTab {
     /// A name the user gave the tab.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The page's icon, so it shows before the tab loads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub favicon: Option<String>,
     /// Terminals split into panes: the layout (each pane gets a new shell).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panes: Option<Node>,

@@ -2,7 +2,7 @@
   import Favicon from "./Favicon.svelte";
   import type { Tab } from "./browser";
 
-  let { tab }: { tab: Pick<Tab, "kind" | "url" | "loading"> } = $props();
+  let { tab }: { tab: Pick<Tab, "kind" | "url" | "loading"> & { favicon?: string | null } } = $props();
 </script>
 
 {#if tab.kind === "terminal"}
@@ -10,7 +10,7 @@
     <svg viewBox="0 0 16 16"><path d="m3.5 5 3 3-3 3M8.5 11.5h4" /></svg>
   </span>
 {:else}
-  <Favicon url={tab.url} loading={tab.loading} />
+  <Favicon url={tab.url} icon={tab.favicon} loading={tab.loading} />
 {/if}
 
 <style>

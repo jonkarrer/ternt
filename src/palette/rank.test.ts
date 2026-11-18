@@ -15,6 +15,7 @@ function tab(title: string, url: string, extra: Partial<Tab> = {}): Tab {
     folder: null,
     loaded: true,
     loading: false,
+    favicon: null,
     canGoBack: false,
     canGoForward: false,
     name: null,

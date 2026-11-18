@@ -27,6 +27,8 @@ export interface Tab {
   /** Web tabs: whether the page is in memory (tabs load lazily). */
   loaded: boolean;
   loading: boolean;
+  /** Web tabs: the icon the page names, once read (else its /favicon.ico). */
+  favicon: string | null;
   canGoBack: boolean;
   canGoForward: boolean;
   /** Terminals: the shells it's split into (see panes.rs); `null` for web tabs. */

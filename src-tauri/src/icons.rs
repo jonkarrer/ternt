@@ -177,6 +177,65 @@ fn icon_links(html: &str) -> Vec<String> {
     found.into_iter().map(|(_, href)| href).collect()
 }
 
+/// Longest `data:` icon kept as a tab's favicon (it's sent with every state
+/// update and saved in the session).
+const MAX_DATA_FAVICON: usize = 8 * 1024;
+
+/// A tab's favicon from its page's icon links (absolute hrefs, as
+/// `native::page_icon_links` gives them), for a 16 px tile: an SVG, else the
+/// smallest icon at least 32 px (sharp on Retina), else the largest; an app
+/// icon only if there's nothing else. `None`: the page names none, so the
+/// sidebar tries `/favicon.ico`.
+pub fn favicon_from_links(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    // (rank, href): lower is better.
+    let mut best: Option<(u32, String)> = None;
+    let mut from = 0;
+    while let Some(start) = lower[from..].find("<link").map(|i| from + i) {
+        let end = lower[start..].find('>').map_or(lower.len(), |i| start + i);
+        let tag = &html[start..end];
+        from = end;
+        let (Some(rel), Some(href)) = (attr(tag, "rel"), attr(tag, "href")) else {
+            continue;
+        };
+        let href = href.replace("&amp;", "&");
+        let usable = href.starts_with("https://")
+            || href.starts_with("http://")
+            || (href.starts_with("data:image/") && href.len() <= MAX_DATA_FAVICON);
+        if !usable {
+            continue;
+        }
+        let rel = rel.to_ascii_lowercase();
+        let tokens: Vec<&str> = rel.split_whitespace().collect();
+        let size = attr(tag, "sizes").and_then(|s| {
+            s.split(['x', 'X'])
+                .next()
+                .and_then(|n| n.trim().parse::<u32>().ok())
+        });
+        let svg = href.split(['?', '#']).next().is_some_and(|p| p.ends_with(".svg"))
+            || href.starts_with("data:image/svg");
+        let rank = if tokens.contains(&"icon") {
+            match (svg, size) {
+                (true, _) => 0,
+                // 32 px and up, smallest first.
+                (false, Some(n)) if n >= 32 => n,
+                // No size given: usually a 32 px favicon.
+                (false, None) => 2_000,
+                // Smaller than 32: larger first.
+                (false, Some(n)) => 3_000 - n.min(31),
+            }
+        } else if tokens.iter().any(|t| t.starts_with("apple-touch-icon")) {
+            5_000
+        } else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(r, _)| rank < *r) {
+            best = Some((rank, href));
+        }
+    }
+    best.map(|(_, href)| href)
+}
+
 /// An attribute's value in a tag (quoted or not), matched case-insensitively.
 fn attr(tag: &str, name: &str) -> Option<String> {
     let lower = tag.to_ascii_lowercase();
@@ -238,6 +297,29 @@ mod tests {
                 "/fav.ico"
             ]
         );
+    }
+
+    #[test]
+    fn favicons_prefer_svg_then_the_smallest_sharp_icon() {
+        let links = |tags: &[&str]| tags.concat();
+        let touch = r#"<link rel="apple-touch-icon" href="https://a.com/touch.png" sizes="">"#;
+        let ico = r#"<link rel="shortcut icon" href="https://a.com/favicon.ico" sizes="">"#;
+        let i16 = r#"<link rel="icon" href="https://a.com/16.png" sizes="16x16">"#;
+        let i32 = r#"<link rel="icon" href="https://a.com/32.png" sizes="32x32">"#;
+        let i192 = r#"<link rel="icon" href="https://a.com/192.png" sizes="192x192">"#;
+        let svg = r#"<link rel="icon" href="https://a.com/icon.svg?v=2" sizes="">"#;
+        let mask = r#"<link rel="mask-icon" href="https://a.com/mask.svg" sizes="">"#;
+        assert_eq!(favicon_from_links(&links(&[touch, i16, i192, i32])).as_deref(), Some("https://a.com/32.png"));
+        assert_eq!(favicon_from_links(&links(&[i192, svg, i32])).as_deref(), Some("https://a.com/icon.svg?v=2"));
+        assert_eq!(favicon_from_links(&links(&[i16, ico])).as_deref(), Some("https://a.com/favicon.ico"));
+        assert_eq!(favicon_from_links(&links(&[touch, i16])).as_deref(), Some("https://a.com/16.png"));
+        assert_eq!(favicon_from_links(&links(&[mask, touch])).as_deref(), Some("https://a.com/touch.png"));
+        assert_eq!(favicon_from_links(mask), None);
+        assert_eq!(favicon_from_links(""), None);
+        let big = format!(r#"<link rel="icon" href="data:image/png;base64,{}" sizes="">"#, "A".repeat(9000));
+        assert_eq!(favicon_from_links(&big), None, "too big to send with every update");
+        let small = r#"<link rel="icon" href="data:image/svg+xml,%3Csvg/%3E" sizes="">"#;
+        assert_eq!(favicon_from_links(small).as_deref(), Some("data:image/svg+xml,%3Csvg/%3E"));
     }
 
     #[test]

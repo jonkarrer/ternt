@@ -314,8 +314,13 @@ pub fn on_native_change(app: &AppHandle, id: u32, native: NativeState) {
     let changed = with(app, |s| {
         let profile = s.profile_for(s.tab(id)?);
         let tab = s.tab_mut(id)?;
+        let (was_loading, old_url) = (tab.loading, tab.url.clone());
         if let Some(url) = native.url {
             tab.url = url;
+        }
+        // Another site's icon would be wrong until the new page's is read.
+        if origin(&tab.url) != origin(&old_url) {
+            tab.favicon = None;
         }
         tab.title = native.title;
         tab.loading = native.loading;
@@ -323,15 +328,45 @@ pub fn on_native_change(app: &AppHandle, id: u32, native: NativeState) {
         tab.can_go_forward = native.can_go_forward;
         // A finished load is a visit (history ignores repeats of the same URL).
         let visit = (!tab.loading).then(|| (tab.url.clone(), tab.title.clone()));
-        Some((profile, visit))
+        // A page that finished loading (or a single-page app that moved on)
+        // may name a new icon.
+        let read_icon = !tab.loading && (was_loading || tab.url != old_url);
+        Some((profile, visit, read_icon))
     });
-    let Some((profile, visit)) = changed else {
+    let Some((profile, visit, read_icon)) = changed else {
         return;
     };
     if let Some((url, title)) = visit {
         crate::history::record(app, id, profile.as_deref(), &url, &title);
     }
+    if read_icon {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move { read_favicon(&app, id).await });
+    }
     schedule_emit(app);
+}
+
+fn origin(url: &str) -> Option<String> {
+    Url::parse(url).ok().map(|u| u.origin().ascii_serialization())
+}
+
+/// Read the icon a tab's page names into the tab.
+async fn read_favicon(app: &AppHandle, id: u32) {
+    let Some(url) = with(app, |s| s.tab(id).map(|t| t.url.clone())) else {
+        return;
+    };
+    let Some(links) = page_icon_links(app, id).await else {
+        return;
+    };
+    let icon = crate::icons::favicon_from_links(&links);
+    let changed = with(app, |s| {
+        let tab = s.tab_mut(id).filter(|t| t.url == url && t.favicon != icon)?;
+        tab.favicon = icon;
+        Some(())
+    });
+    if changed.is_some() {
+        schedule_emit(app);
+    }
 }
 
 /// Left edge of the content pane, in logical px (overlays center on it).

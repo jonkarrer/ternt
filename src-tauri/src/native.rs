@@ -1451,12 +1451,16 @@ unsafe extern "C-unwind" fn js_prompt(
     });
 }
 
-/// A page's icon links as `<link>` tags with absolute hrefs, read from the
-/// live page (signed in, with links its scripts added). Runs in an isolated
-/// script world, so the page's own scripts can't interfere.
+/// A page's icon links as `<link>` tags with absolute hrefs (`"`, `<` and `>`
+/// escaped: an inline SVG's data URL holds them), read from the
+/// live page (signed in, with links its scripts added). Only links for the
+/// current appearance: GitHub names a light icon for dark mode, invisible
+/// on a light sidebar. Runs in an isolated script world, so the page's own
+/// scripts can't interfere.
 pub async fn page_icon_links(webview: &Webview) -> Option<String> {
     const JS: &str = r#"[...document.querySelectorAll("link[rel][href]")]
-        .map((l) => `<link rel="${l.rel}" href="${l.href.replaceAll('"', "%22")}" sizes="${l.sizes?.value ?? ""}">`)
+        .filter((l) => !l.media || matchMedia(l.media).matches)
+        .map((l) => `<link rel="${l.rel}" href="${l.href.replaceAll('"', "%22").replaceAll("<", "%3C").replaceAll(">", "%3E")}" sizes="${l.sizes?.value ?? ""}">`)
         .join("")"#;
     let (tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
     let tx = std::sync::Mutex::new(Some(tx));
