@@ -5,10 +5,13 @@
   import TabIcon from "../lib/TabIcon.svelte";
   import HelpSheet from "./HelpSheet.svelte";
   import { browser, type ClosedTab, type HistoryHit, type Group, type PaletteRequest, type Space, type Tab } from "../lib/browser";
+  import { ENGINES, engineFor, type Engine } from "../lib/engines";
   import { buildItems, type Action, type Item } from "./rank";
 
   let request = $state<PaletteRequest | null>(null);
   let query = $state("");
+  /** The search engine in a pill before the query (`you` ⇥ YouTube). */
+  let engine = $state<Engine | null>(null);
   let selected = $state(0);
   let tabs = $state<Tab[]>([]);
   let spaces = $state<Space[]>([]);
@@ -26,13 +29,13 @@
 
   const help = $derived(request?.mode === "help");
   const items = $derived(
-    request && !help ? buildItems(query, { mode: request.mode, tabs, spaces, activeId, activeSpace, history, closed, groups }) : [],
+    request && !help ? buildItems(query, { mode: request.mode, tabs, spaces, activeId, activeSpace, history, closed, groups, engine }) : [],
   );
 
   $effect(() => {
     const q = query.trim();
     const seq = ++historySeq;
-    if (!request || help || !q || q.startsWith(">")) {
+    if (!request || help || !q || q.startsWith(">") || engine) {
       history = [];
       return;
     }
@@ -56,6 +59,7 @@
   async function show(next: PaletteRequest) {
     const seq = ++showSeq;
     request = next;
+    engine = null;
     lastPointer = "";
     query = next.url ?? "";
     selected = 0;
@@ -106,8 +110,21 @@
     }
   }
 
+  /** Put an engine's pill before the query, which then goes to it. */
+  function pick(next: Engine) {
+    engine = next;
+    query = "";
+    input?.focus();
+  }
+
   async function run(item: Item | undefined) {
     if (!item) return;
+    if (item.action.type === "engine") {
+      const id = item.action.id;
+      const next = ENGINES.find((e) => e.id === id);
+      if (next) pick(next);
+      return;
+    }
     await close();
     await perform(item.action);
   }
@@ -121,9 +138,18 @@
     } else if (event.key === "Enter") {
       event.preventDefault();
       run(items[selected]);
+    } else if (event.key === "Tab" && !event.shiftKey && !event.metaKey && !event.altKey && !event.ctrlKey) {
+      // The typed word names an engine: it becomes the pill.
+      event.preventDefault();
+      const next = engine ? null : engineFor(query);
+      if (next) pick(next);
+    } else if (event.key === "Backspace" && engine && !query && input?.selectionStart === 0) {
+      event.preventDefault();
+      engine = null;
     } else if (event.key === "Escape") {
       event.preventDefault();
-      close();
+      if (engine) engine = null;
+      else close();
     }
   }
 
@@ -151,13 +177,22 @@
     onclick={(e) => e.target === e.currentTarget && close()}
   >
     <div class="panel" class:help role="dialog" aria-label={help ? "Shortcuts and how-tos" : "Command bar"}>
+      <div class="field">
+      {#if engine}
+        <span class="engine" style:--engine={engine.color} data-engine={engine.id}>
+          <Favicon url={engine.home} />
+          {engine.name}
+        </span>
+      {/if}
       <input
         bind:this={input}
         bind:value={query}
         {onkeydown}
         placeholder={help
           ? "Search shortcuts and how-tos…"
-          : request.mode === "newTab"
+          : engine
+            ? `Search ${engine.name}…`
+            : request.mode === "newTab"
             ? "Search, open a URL, or type a command…"
             : "Enter URL…"}
         spellcheck="false"
@@ -166,6 +201,7 @@
         aria-expanded={items.length > 0}
         aria-controls="palette-results"
       />
+      </div>
       {#if help}
         <HelpSheet {query} />
       {:else if items.length}
@@ -188,6 +224,8 @@
               <span class="icon">
                 {#if item.kind === "search"}
                   <svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
+                {:else if item.engine}
+                  <Favicon url={item.engine.home} />
                 {:else if item.kind === "run"}
                   <svg viewBox="0 0 16 16"><path d="m3.5 5 3 3-3 3M8.5 11.5h4" /></svg>
                 {:else if item.space}
@@ -216,6 +254,7 @@
         <footer>
           <span><kbd>↑</kbd><kbd>↓</kbd> select</span>
           <span><kbd>↵</kbd> run</span>
+          <span><kbd>tab</kbd> search a site (you, goo, perp…)</span>
           <span><kbd>&gt;</kbd> run in terminal</span>
           <span><kbd>esc</kbd> close</span>
         </footer>
@@ -250,11 +289,40 @@
     top: 9vh;
     width: min(820px, calc(100vw - var(--content-left) - var(--inset) - 48px));
   }
+  .field {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 20px;
+  }
+  /* The engine the query goes to. */
+  .engine {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px 0 7px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--engine) 16%, transparent);
+    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--engine) 40%, transparent);
+    color: color-mix(in srgb, var(--engine) 70%, var(--text));
+    font-size: 14px;
+    font-weight: 600;
+    animation: pop 140ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  @keyframes pop {
+    from {
+      opacity: 0;
+      scale: 0.9;
+    }
+  }
   input {
     display: block;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     height: 56px;
-    padding: 0 20px;
+    padding: 0;
     border: 0;
     outline: 0;
     background: none;

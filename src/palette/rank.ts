@@ -2,6 +2,7 @@
 // in, data out (no Tauri calls), so it's unit-tested in rank.test.ts; the
 // palette performs each item's `action`.
 import type { ClosedTab, HistoryHit, Group, PaletteMode, Space, Tab } from "../lib/browser";
+import { engineFor, engineUrl, type Engine } from "../lib/engines";
 import { hostOf, parseInput, tabLabel } from "../lib/url";
 
 /** `top` holds the best matches, shown without a header. */
@@ -15,17 +16,20 @@ export type Action =
   | { type: "space"; id: number }
   /** A menu action id (see src-tauri/src/menu.rs). */
   | { type: "menu"; id: string }
-  | { type: "terminal"; command: string };
+  | { type: "terminal"; command: string }
+  /** Search with this engine: the query box gets its pill. */
+  | { type: "engine"; id: string };
 
 export type Item = {
   key: string;
-  kind: "url" | "search" | "tab" | "closed" | "history" | "command" | "space" | "run";
+  kind: "url" | "search" | "tab" | "closed" | "history" | "command" | "space" | "run" | "engine";
   label: string;
   detail?: string;
   shortcut?: string;
   url?: string;
   tab?: Tab;
   space?: Space;
+  engine?: Engine;
   section: Section;
   action: Action;
 };
@@ -96,6 +100,8 @@ export interface Context {
   /** Closed tabs, oldest first. */
   closed: ClosedTab[];
   groups: Group[];
+  /** The engine whose pill is in the query box: the query goes there. */
+  engine?: Engine | null;
 }
 
 /** How well `text` matches the lowercase query `q`: 0 (no match) to 100. */
@@ -128,6 +134,24 @@ export function buildItems(raw: string, ctx: Context): Item[] {
   const newTab = ctx.mode === "newTab";
   const activeTab = tabs.find((t) => t.id === activeId);
   const spaceName = (id: number) => spaces.find((s) => s.id === id)?.name ?? "";
+
+  // A search engine's pill: the query goes to it.
+  if (ctx.engine) {
+    const engine = ctx.engine;
+    const url = engineUrl(engine, q);
+    return [
+      {
+        key: `engine-${engine.id}`,
+        kind: "search",
+        label: q ? `Search ${engine.name} for “${q}”` : `Open ${engine.name}`,
+        detail: engine.name,
+        url,
+        engine,
+        section: "top",
+        action: { type: "open", url, newTab },
+      },
+    ];
+  }
 
   // "> command" runs in a new terminal.
   if (q.startsWith(">")) {
@@ -267,6 +291,20 @@ export function buildItems(raw: string, ctx: Context): Item[] {
   }
   if (commandHits[0]?.s >= 70) top.push(commandItem(commandHits.shift()!.x, "top"));
   if (spaceHits[0]?.s >= 80) top.push(spaceItem(spaceHits.shift()!.x, "top"));
+  // `you` ⇥ searches YouTube.
+  const engine = engineFor(q);
+  if (engine) {
+    top.push({
+      key: `engine-${engine.id}`,
+      kind: "engine",
+      label: `Search ${engine.name}`,
+      shortcut: "Tab",
+      url: engine.home,
+      engine,
+      section: "top",
+      action: { type: "engine", id: engine.id },
+    });
+  }
   if (open && parsed?.kind === "search") top.push(open);
 
   // Each page once: not again below the top, and a page offered as closed

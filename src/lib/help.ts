@@ -50,6 +50,10 @@ export const SHORTCUTS: ShortcutGroup[] = [
 
 export const HOW_TOS: HowTo[] = [
   {
+    title: "Search a site",
+    text: "Press ⌘T, type the start of a site's name and press Tab: you ⇥ YouTube, goo ⇥ Google, perp ⇥ Perplexity (also ChatGPT, Claude, GitHub, Wikipedia, Maps, Amazon, Reddit). What you type next is searched there. Backspace or Esc removes it.",
+  },
+  {
     title: "Run a command",
     text: "Press ⌘T and type > followed by the command: it runs in a new terminal.",
   },

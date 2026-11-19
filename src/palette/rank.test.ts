@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ClosedTab, HistoryHit, Space, Tab } from "../lib/browser";
+import { ENGINES } from "../lib/engines";
 import { SEARCH_URL } from "../lib/url";
 import { buildItems, CLOSED_SUGGESTIONS, COMMANDS, score, SECTION_LIMIT, type Context, type Item } from "./rank";
 
@@ -285,5 +286,33 @@ describe("split view commands", () => {
     expect(found(shell)).toContain("Split Right");
     expect(found(shell)).toContain("Split Down");
     expect(found(page)).not.toContain("Split Right");
+  });
+});
+
+describe("search engines", () => {
+  const youtube = ENGINES.find((e) => e.id === "youtube")!;
+
+  test("a word naming one offers it (Tab picks it), before the web search", () => {
+    const items = top(buildItems("you", ctx()));
+    expect(items.map((i) => i.kind)).toEqual(["engine", "search"]);
+    expect(items[0]).toMatchObject({ label: "Search YouTube", shortcut: "Tab", action: { type: "engine", id: "youtube" } });
+  });
+
+  test("with its pill, the query goes to it alone", () => {
+    const items = buildItems("lofi beats", ctx({ engine: youtube, tabs: [tab("Lofi", "https://lofi.com")] }));
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      label: "Search YouTube for “lofi beats”",
+      action: { type: "open", url: "https://www.youtube.com/results?search_query=lofi%20beats", newTab: true },
+    });
+    expect(buildItems("", ctx({ engine: youtube }))[0]).toMatchObject({
+      label: "Open YouTube",
+      action: { type: "open", url: "https://www.youtube.com/" },
+    });
+  });
+
+  test("not for phrases or URLs", () => {
+    expect(buildItems("you are", ctx()).some((i) => i.kind === "engine")).toBe(false);
+    expect(buildItems("youtube.com", ctx()).some((i) => i.kind === "engine")).toBe(false);
   });
 });

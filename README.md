@@ -41,7 +41,7 @@ them run under `doppler run --`.
 
 | Shortcut | Action |
 |---|---|
-| ⌘T | Command bar: open a URL, search Google, switch tabs or spaces, find pages from history or recently closed tabs, run commands (initials work: "nt" = New Terminal); `> cmd` runs `cmd` in a new terminal |
+| ⌘T | Command bar: open a URL, search Google, switch tabs or spaces, find pages from history or recently closed tabs, run commands (initials work: "nt" = New Terminal); `> cmd` runs `cmd` in a new terminal; the start of a site's name then Tab searches that site (`you` ⇥ YouTube, `goo` ⇥ Google, `perp` ⇥ Perplexity, `yt`, `gh`…; list in `src/lib/engines.ts`) |
 | ⌘L | Edit the current URL |
 | ⌥⌘T | New terminal tab |
 | ⌘W / ⇧⌘T | Close tab (unloads pinned tabs; closes the focused pane of a split terminal) / reopen closed tab |
