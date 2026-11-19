@@ -1558,6 +1558,11 @@ fn sidebar_view(app: &AppHandle) -> &'static str {
 
 // --- Spaces -----------------------------------------------------------------
 
+/// Every space's id.
+pub fn space_ids(app: &AppHandle) -> Vec<u32> {
+    with(app, |s| s.spaces.iter().map(|x| x.id).collect())
+}
+
 pub fn switch_space(app: &AppHandle, space: u32) -> tauri::Result<()> {
     if with(app, |s| s.space(space).is_none() || s.active_space == space) {
         return Ok(());

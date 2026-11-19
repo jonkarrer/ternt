@@ -170,6 +170,17 @@ export interface Prefs {
   terminalFontSize: number;
   /** Unload tabs off screen for 30 minutes, to save memory. */
   unloadTabs: boolean;
+  /** Air Traffic Control: links from other apps matching a rule open in its
+      space (first match wins; src-tauri/src/routing.rs). */
+  linkRules: LinkRule[];
+}
+
+export interface LinkRule {
+  /** `host`: that host and its subdomains (with a path: URLs under it).
+      `regex`: tried against the whole URL. */
+  kind: "host" | "regex";
+  pattern: string;
+  space: number;
 }
 
 export type PaletteMode = "newTab" | "edit" | "help";
@@ -242,6 +253,14 @@ export const browser = {
     await invoke("set_prefs", { prefs });
     return prefs;
   },
+  /** Where a link from another app would go: the matching rule and its space. */
+  routeLink: (url: string) => invoke<{ rule: number; space: number } | null>("route_link", { url }),
+  /** Why a rule's pattern is no good (a regex that won't compile). */
+  checkLinkRule: (kind: LinkRule["kind"], pattern: string) =>
+    invoke("check_link_rule", { kind, pattern }).then(
+      () => null,
+      (e) => String(e),
+    ),
   /** A site's app icon as a data URL (src-tauri/src/icons.rs). */
   siteIcon: (url: string, tab?: number) => invoke<string | null>("site_icon", { url, tab: tab ?? null }),
   defaultBrowser: () => invoke<{ isDefault: boolean; canAsk: boolean }>("default_browser"),

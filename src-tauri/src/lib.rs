@@ -15,6 +15,7 @@ mod panes;
 mod prefs;
 mod persist;
 mod pty;
+mod routing;
 mod session;
 mod settings;
 mod unload;
@@ -162,6 +163,8 @@ pub fn run() {
             settings::make_default_browser,
             prefs::get_prefs,
             prefs::set_prefs,
+            routing::route_link,
+            routing::check_link_rule,
             little::little_state,
             little::little_open_in_ternt,
             #[cfg(all(debug_assertions, target_os = "macos"))]

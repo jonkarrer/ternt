@@ -68,7 +68,7 @@
         <Profiles {browserState} />
       {/if}
     {:else if page === "links"}
-      <Links />
+      <Links spaces={browserState?.spaces ?? []} />
     {:else if page === "shortcuts"}
       <Shortcuts />
     {:else}

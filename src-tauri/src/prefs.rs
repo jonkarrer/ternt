@@ -53,6 +53,9 @@ pub struct Prefs {
     pub terminal_font_size: f64,
     /// Unload tabs that have been off screen a while (see `unload`).
     pub unload_tabs: bool,
+    /// Air Traffic Control: links from other apps that go to a given space
+    /// (see `routing`).
+    pub link_rules: Vec<crate::routing::LinkRule>,
 }
 
 impl Default for Prefs {
@@ -62,6 +65,7 @@ impl Default for Prefs {
             account: Account::default(),
             terminal_font_size: TERMINAL_FONT_SIZE,
             unload_tabs: true,
+            link_rules: Vec::new(),
         }
     }
 }
@@ -106,6 +110,7 @@ pub fn get_prefs(app: AppHandle) -> Prefs {
 #[tauri::command]
 pub fn set_prefs(app: AppHandle, mut prefs: Prefs) {
     prefs.account = prefs.account.tidy();
+    prefs.link_rules = prefs.link_rules.into_iter().filter_map(|r| r.tidy()).collect();
     prefs.terminal_font_size = if prefs.terminal_font_size.is_finite() {
         prefs
             .terminal_font_size

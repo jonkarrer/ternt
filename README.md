@@ -130,6 +130,12 @@ spaces: a profile is the identity sites see while you're in one (say, one Gmail 
 for side projects).
 A profile no space uses any more is deleted.
 
+**Air Traffic Control** (Settings → Links) sends links from other apps to a space: a rule matches
+by host (`github.com` takes its subdomains too; `github.com/acme` only the pages under it) or by a
+regex tried against the whole URL, and the first match opens the link as a tab in its space. Links
+no rule takes go to Little Ternt or a new tab, as chosen above it. A tester there shows where a
+pasted link would go.
+
 **Downloads** (download links, files a site sends to save) go to `~/Downloads`, numbered rather
 than overwriting, and the Dock's Downloads stack bounces when one finishes. A box at the bottom of
 the sidebar shows each one's progress (Cancel stops it); click a finished file to open it, or the
