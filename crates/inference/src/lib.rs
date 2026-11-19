@@ -1,11 +1,12 @@
 pub mod providers;
 
-use providers::baseten::ChatCompletion;
+use anyhow::{Context, bail};
+use providers::baseten::{ChatCompletion, ErrorResponse};
 use serde_json::json;
 
 /// Sends one user prompt to a Baseten Model API and returns the reply text.
-pub async fn chat(api_key: &str, model: &str, prompt: &str) -> reqwest::Result<String> {
-    let res: ChatCompletion = reqwest::Client::new()
+pub async fn chat(api_key: &str, model: &str, prompt: &str) -> anyhow::Result<String> {
+    let res = reqwest::Client::new()
         .post("https://inference.baseten.co/v1/chat/completions")
         .header("Authorization", format!("Api-Key {api_key}"))
         .json(&json!({
@@ -13,17 +14,23 @@ pub async fn chat(api_key: &str, model: &str, prompt: &str) -> reqwest::Result<S
             "messages": [{ "role": "user", "content": prompt }],
         }))
         .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+        .await
+        .context("sending request to Baseten")?;
 
-    Ok(res
+    let status = res.status();
+    if !status.is_success() {
+        let body = res.text().await.unwrap_or_default();
+        let message = serde_json::from_str::<ErrorResponse>(&body).map_or(body, |e| e.error);
+        bail!("Baseten returned {status}: {message}");
+    }
+
+    let completion: ChatCompletion = res.json().await.context("parsing Baseten response")?;
+    completion
         .choices
         .into_iter()
         .next()
         .and_then(|c| c.message.content)
-        .unwrap_or_default())
+        .context("Baseten returned no reply text")
 }
 #[cfg(test)]
 mod tests {
