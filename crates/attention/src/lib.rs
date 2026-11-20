@@ -6,10 +6,6 @@
 //! (patterns, structure, counts). No model calls, no I/O.
 
 pub mod detectors;
-pub mod route;
-
-pub use route::{RouteCue, RouteDetector, RouteSignal};
-
 use std::ops::Range;
 
 use context::{Block, Role};
@@ -63,8 +59,6 @@ pub trait Detector: Send + Sync {
 
 pub struct Attention {
     detectors: Vec<Box<dyn Detector>>,
-    /// Cue finders for messages not yet placed in a thread.
-    pub route_detectors: Vec<Box<dyn RouteDetector>>,
     /// Signals below this salience are dropped.
     pub threshold: f32,
 }
@@ -76,25 +70,11 @@ impl Default for Attention {
 }
 
 impl Attention {
-    /// With the given detectors and the default route detectors.
     pub fn new(detectors: Vec<Box<dyn Detector>>) -> Self {
         Self {
             detectors,
-            route_detectors: route::defaults(),
             threshold: 0.0,
         }
-    }
-
-    /// Route cues in a message before it's placed in a thread, most salient first.
-    pub fn notice(&self, text: &str) -> Vec<RouteSignal> {
-        let mut signals: Vec<RouteSignal> = self
-            .route_detectors
-            .iter()
-            .flat_map(|d| d.detect(text))
-            .filter(|s| s.salience >= self.threshold)
-            .collect();
-        signals.sort_by(|a, b| b.salience.total_cmp(&a.salience));
-        signals
     }
 
     /// Runs every detector over checkpoints `from..`. Signals on the same text with the same

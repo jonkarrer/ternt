@@ -1,12 +1,10 @@
-//! Route cues: what Attention notices in a message before it's placed in a thread. They only
-//! find cues; Experience decides the route. English only, ported from pi-durable-demo.
+//! Route cues: what the router notices in an input before it is placed in a thread. Cues are
+//! cheap pattern matches; the router decides. English only, ported from pi-durable-demo.
 //! Tune them against the labelled cases in the tests.
 
 use std::ops::Range;
 
 use regex::Regex;
-
-use crate::merge_spans;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouteCue {
@@ -16,6 +14,9 @@ pub enum RouteCue {
     ThreadReference,
     /// "yes, do that", "the second one": only makes sense in the last thread.
     Continuation,
+    /// "which hotel did we pick?", "like we discussed": looks back at something earlier, so a
+    /// message matching no thread is ambiguous rather than new.
+    PastReference,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,6 +103,7 @@ pub fn defaults() -> Vec<Box<dyn RouteDetector>> {
     vec![
         Box::new(new_topic()),
         Box::new(thread_reference()),
+        Box::new(past_reference()),
         Box::new(continuation()),
     ]
 }
@@ -201,6 +203,52 @@ pub fn thread_reference() -> CueDetector {
     }
 }
 
+/// Looks back at something earlier without naming a thread. Low salience: it never routes on
+/// its own, it only keeps a message that matches nothing from being called new.
+pub fn past_reference() -> CueDetector {
+    CueDetector {
+        name: "past-reference".into(),
+        cue: RouteCue::PastReference,
+        reason: "refers to something earlier".into(),
+        max_length: None,
+        patterns: patterns(&[
+            (r"(?i)\b(?:did|have|had) (?:we|you|i)\b", 0.4),
+            (
+                r"(?i)\bwe (?:picked|chose|decided|agreed|settled on|talked about|discussed|went with|looked at)\b",
+                0.5,
+            ),
+            (
+                r"(?i)\b(?:like|as|same as) (?:last time|before|we said|you said|i said|we discussed)\b",
+                0.5,
+            ),
+            (
+                r"(?i)\b(?:remind me|remember (?:what|which|when|where|how))\b",
+                0.5,
+            ),
+        ]),
+    }
+}
+
+/// Cues in a message, most salient first.
+pub fn notice(detectors: &[Box<dyn RouteDetector>], text: &str) -> Vec<RouteSignal> {
+    let mut signals: Vec<RouteSignal> = detectors.iter().flat_map(|d| d.detect(text)).collect();
+    signals.sort_by(|a, b| b.salience.total_cmp(&a.salience));
+    signals
+}
+
+/// Sorted, with overlapping ranges joined.
+fn merge_spans(mut spans: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    spans.sort_by_key(|s| s.start);
+    let mut out: Vec<Range<usize>> = Vec::new();
+    for span in spans {
+        match out.last_mut() {
+            Some(last) if span.start <= last.end => last.end = last.end.max(span.end),
+            _ => out.push(span),
+        }
+    }
+    out
+}
+
 /// Short replies that only make sense where the talk left off.
 pub fn continuation() -> CueDetector {
     CueDetector {
@@ -228,11 +276,9 @@ pub fn continuation() -> CueDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Attention;
 
     #[test]
     fn labelled_cues() {
-        let attention = Attention::default();
         let cases: &[(&str, Option<(RouteCue, f32)>)] = &[
             (
                 "New topic: help me plan a trip to Kyoto",
@@ -276,7 +322,9 @@ mod tests {
         ];
         let mut failures = Vec::new();
         for (text, expected) in cases {
-            let got = attention.notice(text).first().map(|s| (s.cue, s.salience));
+            let got = notice(&defaults(), text)
+                .first()
+                .map(|s| (s.cue, s.salience));
             if got != *expected {
                 failures.push(format!("{text:?}: expected {expected:?}, got {got:?}"));
             }
@@ -286,7 +334,6 @@ mod tests {
 
     #[test]
     fn thread_references_name_the_thread() {
-        let attention = Attention::default();
         let cases = [
             (
                 "Back to the Metabase thing — what did we decide?",
@@ -306,8 +353,7 @@ mod tests {
         ];
         let mut failures = Vec::new();
         for (text, name) in cases {
-            let got = attention
-                .notice(text)
+            let got = notice(&defaults(), text)
                 .into_iter()
                 .find(|s| s.cue == RouteCue::ThreadReference)
                 .map(|s| s.spanned());

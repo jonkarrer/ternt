@@ -10,7 +10,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
 use attention::{Attention, Intent, Signal};
@@ -21,8 +20,8 @@ use memory::{Body, Card, Episode, Item, Memory, Scope, Source, Write};
 use serde_json::{Value, json};
 use state::{Event, Recalled, Thread};
 
-pub mod threads;
-pub use threads::{By, Incoming, Phase, Route, ThreadView};
+pub mod settle;
+pub use settle::RESUME_HANDOFF;
 
 /// Recall brings at most this many memories per query.
 const RECALL_LIMIT: usize = 3;
@@ -94,10 +93,6 @@ pub struct Experience<A> {
     pub compact_after_messages: usize,
     /// Compaction keeps at least this many recent messages as they are.
     pub keep_recent_messages: usize,
-    /// Idle time after which a thread is cool and dreams.
-    pub dream_after: Duration,
-    /// Idle time after which a thread settles into its resume card.
-    pub settle_after: Duration,
 }
 
 impl<A: Api> Experience<A> {
@@ -117,8 +112,6 @@ impl<A: Api> Experience<A> {
             summarize_after_turns: 3,
             compact_after_messages: 40,
             keep_recent_messages: 10,
-            dream_after: Duration::from_secs(30 * 60),
-            settle_after: Duration::from_secs(2 * 3600),
         }
     }
 
