@@ -1,13 +1,11 @@
 //! The tasks table, in the same SQLite database as thread checkpoints and written in the same
 //! transactions.
 
-use std::collections::BTreeMap;
-
 use anyhow::Result;
 use state::Sqlite;
-use state::sqlite::rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
+use state::sqlite::rusqlite::{Connection, OptionalExtension, Params, Row, Transaction, params};
 
-use crate::task::{TaskId, TaskRecord, TaskState};
+use crate::task::{TaskId, TaskRecord};
 
 pub(crate) fn init(store: &Sqlite) -> Result<()> {
     store.transaction(|tx| {
@@ -73,22 +71,11 @@ const COLUMNS: &str = "id, thread, kind, version, input, owner, background, aban
     abort_requested, abort_reason, restarts, memos, state, created_at, ended_at";
 
 pub(crate) fn live(conn: &Connection) -> Result<Vec<TaskRecord>> {
-    let mut select = conn.prepare(&format!(
-        "SELECT {COLUMNS} FROM tasks WHERE status != 'terminal' ORDER BY id"
-    ))?;
-    let rows = select.query_map([], raw)?;
-    rows.map(|row| parse(row?)).collect()
+    select(conn, "status != 'terminal' ORDER BY id", [])
 }
 
 pub(crate) fn get(conn: &Connection, id: TaskId) -> Result<Option<TaskRecord>> {
-    let row = conn
-        .query_row(
-            &format!("SELECT {COLUMNS} FROM tasks WHERE id = ?1"),
-            [id],
-            raw,
-        )
-        .optional()?;
-    row.map(parse).transpose()
+    Ok(select(conn, "id = ?1", [id])?.pop())
 }
 
 pub(crate) fn next_id(conn: &Connection) -> Result<TaskId> {
@@ -99,80 +86,35 @@ pub(crate) fn next_id(conn: &Connection) -> Result<TaskId> {
     )
 }
 
-type Raw = (
-    TaskId,
-    String,
-    String,
-    u32,
-    String,
-    Option<TaskId>,
-    bool,
-    bool,
-    bool,
-    Option<String>,
-    u32,
-    String,
-    String,
-    i64,
-    Option<i64>,
-);
-
-fn raw(row: &Row) -> state::sqlite::rusqlite::Result<Raw> {
-    Ok((
-        row.get(0)?,
-        row.get(1)?,
-        row.get(2)?,
-        row.get(3)?,
-        row.get(4)?,
-        row.get(5)?,
-        row.get(6)?,
-        row.get(7)?,
-        row.get(8)?,
-        row.get(9)?,
-        row.get(10)?,
-        row.get(11)?,
-        row.get(12)?,
-        row.get(13)?,
-        row.get(14)?,
-    ))
+/// The tasks matching `filter`, an SQL `WHERE` clause.
+fn select(conn: &Connection, filter: &str, params: impl Params) -> Result<Vec<TaskRecord>> {
+    let mut select = conn.prepare_cached(&format!("SELECT {COLUMNS} FROM tasks WHERE {filter}"))?;
+    let mut rows = select.query(params)?;
+    let mut tasks = Vec::new();
+    while let Some(row) = rows.next()? {
+        tasks.push(parse(row)?);
+    }
+    Ok(tasks)
 }
 
-fn parse(raw: Raw) -> Result<TaskRecord> {
-    let (
-        id,
-        thread,
-        kind,
-        version,
-        input,
-        owner,
-        background,
-        abandon_on_restart,
-        abort_requested,
-        abort_reason,
-        restarts,
-        memos,
-        state,
-        created_at,
-        ended_at,
-    ) = raw;
-    let memos: BTreeMap<String, serde_json::Value> = serde_json::from_str(&memos)?;
-    let state: TaskState = serde_json::from_str(&state)?;
+fn parse(row: &Row) -> Result<TaskRecord> {
+    let text = |i: usize| -> Result<String> { Ok(row.get(i)?) };
     Ok(TaskRecord {
-        id,
-        thread,
-        kind,
-        version,
-        input: serde_json::from_str(&input)?,
-        owner,
-        background,
-        abandon_on_restart,
-        abort_requested,
-        abort_reason,
-        restarts,
-        memos,
-        state,
-        created_at: created_at as u64,
-        ended_at: ended_at.map(|t| t as u64),
+        id: row.get(0)?,
+        thread: row.get(1)?,
+        kind: row.get(2)?,
+        version: row.get(3)?,
+        input: serde_json::from_str(&text(4)?)?,
+        owner: row.get(5)?,
+        background: row.get(6)?,
+        abandon_on_restart: row.get(7)?,
+        abort_requested: row.get(8)?,
+        abort_reason: row.get(9)?,
+        restarts: row.get(10)?,
+        memos: serde_json::from_str(&text(11)?)?,
+        state: serde_json::from_str(&text(12)?)?,
+        created_at: row.get::<_, i64>(13)? as u64,
+        ended_at: row.get::<_, Option<i64>>(14)?.map(|t| t as u64),
     })
 }
 

@@ -5,7 +5,7 @@ use context::Message;
 use engine::{TaskId, TaskOptions, Tx};
 use serde::{Deserialize, Serialize};
 
-use crate::generation::NAME as GENERATION;
+use crate::generation::{NAME as GENERATION, close_calls};
 use crate::idle::NAME as IDLE;
 use crate::{Input, Settled, Status, Submission, WhenBusy};
 
@@ -27,7 +27,7 @@ pub(crate) fn submission_key(id: &str) -> String {
     format!("agent/submission/{id}")
 }
 
-fn inbox_key(thread: &str) -> String {
+pub(crate) fn inbox_key(thread: &str) -> String {
     format!("agent/inbox/{thread}")
 }
 
@@ -35,15 +35,15 @@ pub(crate) fn request_key(request_id: &str) -> String {
     format!("agent/request/{request_id}")
 }
 
-pub(crate) fn load(tx: &mut Tx, thread: &str) -> Result<Inbox> {
+fn load(tx: &mut Tx, thread: &str) -> Result<Inbox> {
     Ok(tx.doc(&inbox_key(thread))?.unwrap_or_default())
 }
 
-pub(crate) fn save(tx: &mut Tx, thread: &str, inbox: &Inbox) -> Result<()> {
+fn save(tx: &mut Tx, thread: &str, inbox: &Inbox) -> Result<()> {
     tx.put_doc(&inbox_key(thread), inbox)
 }
 
-fn submission(tx: &mut Tx, id: &str) -> Result<Submission> {
+pub(crate) fn submission(tx: &mut Tx, id: &str) -> Result<Submission> {
     tx.doc(&submission_key(id))?
         .with_context(|| format!("no submission {id}"))
 }
@@ -54,11 +54,17 @@ fn update(tx: &mut Tx, id: &str, change: impl FnOnce(&mut Submission)) -> Result
     tx.put_doc(&submission_key(id), &submission)
 }
 
+/// The submission the input's request ID already made, if any.
+pub(crate) fn existing(tx: &mut Tx, input: &Input) -> Result<Option<String>> {
+    match &input.request_id {
+        Some(request_id) => tx.doc(&request_key(request_id)),
+        None => Ok(None),
+    }
+}
+
 pub(crate) fn submit(tx: &mut Tx, thread: &str, input: Input) -> Result<String> {
-    if let Some(request_id) = &input.request_id
-        && let Some(existing) = tx.doc::<String>(&request_key(request_id))?
-    {
-        return Ok(existing);
+    if let Some(id) = existing(tx, &input)? {
+        return Ok(id);
     }
     let n: u64 = tx.doc("agent/next-submission")?.unwrap_or(1);
     tx.put_doc("agent/next-submission", &(n + 1))?;
@@ -81,33 +87,39 @@ pub(crate) fn submit(tx: &mut Tx, thread: &str, input: Input) -> Result<String> 
         },
     )?;
 
-    let mut inbox = reconcile(tx, thread)?;
+    let mut inbox = load(tx, thread)?;
     inbox.queue.push(id.clone());
-    if inbox.run.is_none() {
-        start_next(tx, thread, &mut inbox)?;
+    match inbox.run {
+        None => start_next(tx, thread, &mut inbox)?,
+        Some(_) => recover_in(tx, thread, &mut inbox, "the run ended without an answer")?,
     }
     save(tx, thread, &inbox)?;
     Ok(id)
 }
 
-/// A run that ended without settling its inputs (it faulted, say) leaves them unanswered and
-/// lets the queue move on.
-fn reconcile(tx: &mut Tx, thread: &str) -> Result<Inbox> {
+/// See `recover_in`.
+pub(crate) fn recover(tx: &mut Tx, thread: &str, reason: &str) -> Result<()> {
     let mut inbox = load(tx, thread)?;
-    if let Some(run) = inbox.run
-        && tx.task(run).is_none()
-    {
-        let reason = "the run ended without an answer".to_string();
-        settle_placed(tx, &mut inbox, Settled::Unanswered { reason })?;
-        inbox.run = None;
-        tx.thread(thread)?.end_turn()?;
-    }
-    Ok(inbox)
+    recover_in(tx, thread, &mut inbox, reason)?;
+    save(tx, thread, &inbox)
 }
 
-/// Starts a run for the oldest queued submission, if any.
-pub(crate) fn start_next(tx: &mut Tx, thread: &str, inbox: &mut Inbox) -> Result<()> {
+/// A run that ended without settling its inputs (it faulted, or was orphaned) never will:
+/// they're settled unanswered with `reason`, and the queue moves on. Nothing while it's live.
+fn recover_in(tx: &mut Tx, thread: &str, inbox: &mut Inbox, reason: &str) -> Result<()> {
+    match inbox.run {
+        Some(run) if tx.task(run).is_none() => {
+            finish(tx, thread, inbox, Settled::unanswered(reason), false)
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Starts a run for the oldest queued submission, or, with none queued, the idle countdown.
+fn start_next(tx: &mut Tx, thread: &str, inbox: &mut Inbox) -> Result<()> {
     if inbox.queue.is_empty() {
+        let since = serde_json::json!({ "since": tx.now() });
+        inbox.idle = Some(tx.create_task_named(IDLE, thread, since, TaskOptions::default())?);
         return Ok(());
     }
     if let Some(idle) = inbox.idle.take() {
@@ -131,9 +143,9 @@ pub(crate) fn start_next(tx: &mut Tx, thread: &str, inbox: &mut Inbox) -> Result
     Ok(())
 }
 
-/// Places queued steers into the running turn, after its tool round. Returns their texts.
-pub(crate) fn place_steers(tx: &mut Tx, thread: &str, inbox: &mut Inbox) -> Result<()> {
-    let run = inbox.run;
+/// Places queued steers into the running turn, after its tool round.
+pub(crate) fn place_steers(tx: &mut Tx, thread: &str) -> Result<()> {
+    let mut inbox = load(tx, thread)?;
     let mut kept = Vec::new();
     for id in std::mem::take(&mut inbox.queue) {
         let queued = submission(tx, &id)?;
@@ -144,41 +156,43 @@ pub(crate) fn place_steers(tx: &mut Tx, thread: &str, inbox: &mut Inbox) -> Resu
         tx.thread(thread)?.push(Message::user(queued.text))?;
         update(tx, &id, |s| {
             s.status = Status::Placed;
-            s.run = run;
+            s.run = inbox.run;
         })?;
         inbox.placed.push(id);
     }
     inbox.queue = kept;
-    Ok(())
-}
-
-/// Ends the run: closes the turn, settles its inputs, and starts the next queued one. With
-/// `withdraw`, the queue is settled unanswered too, and nothing starts.
-pub(crate) fn end_run(tx: &mut Tx, thread: &str, settled: Settled, withdraw: bool) -> Result<()> {
-    let mut inbox = load(tx, thread)?;
-    tx.thread(thread)?.end_turn()?;
-    settle_placed(tx, &mut inbox, settled.clone())?;
-    inbox.run = None;
-    if withdraw {
-        for id in std::mem::take(&mut inbox.queue) {
-            settle(tx, &id, settled.clone())?;
-        }
-    } else {
-        start_next(tx, thread, &mut inbox)?;
-    }
-    if inbox.run.is_none() {
-        let since = serde_json::json!({ "since": tx.now() });
-        let idle = tx.create_task_named(IDLE, thread, since, TaskOptions::default())?;
-        inbox.idle = Some(idle);
-    }
     save(tx, thread, &inbox)
 }
 
-fn settle_placed(tx: &mut Tx, inbox: &mut Inbox, settled: Settled) -> Result<()> {
-    for id in std::mem::take(&mut inbox.placed) {
+/// Ends the run: settles its inputs and starts the next queued one. With `withdraw`, the queue
+/// is settled the same way, and the thread goes idle.
+pub(crate) fn end_run(tx: &mut Tx, thread: &str, settled: Settled, withdraw: bool) -> Result<()> {
+    let mut inbox = load(tx, thread)?;
+    finish(tx, thread, &mut inbox, settled, withdraw)?;
+    save(tx, thread, &inbox)
+}
+
+/// Leaves the thread valid (no tool call without a result, no open turn), settles the run's
+/// inputs, and moves on.
+fn finish(
+    tx: &mut Tx,
+    thread: &str,
+    inbox: &mut Inbox,
+    settled: Settled,
+    withdraw: bool,
+) -> Result<()> {
+    let open = tx.thread(thread)?;
+    close_calls(open, "the run ended before this call returned")?;
+    open.end_turn()?;
+    inbox.run = None;
+    let mut ended = std::mem::take(&mut inbox.placed);
+    if withdraw {
+        ended.append(&mut inbox.queue);
+    }
+    for id in ended {
         settle(tx, &id, settled.clone())?;
     }
-    Ok(())
+    start_next(tx, thread, inbox)
 }
 
 fn settle(tx: &mut Tx, id: &str, settled: Settled) -> Result<()> {

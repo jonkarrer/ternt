@@ -30,7 +30,7 @@ impl Api for Anthropic {
         let mut body = json!({
             "model": req.model,
             "max_tokens": req.max_tokens.unwrap_or(16_000),
-            "messages": ctx.messages.iter().map(message).collect::<Vec<_>>(),
+            "messages": ctx.messages.iter().filter_map(message).collect::<Vec<_>>(),
         });
         match req.thinking {
             Some(true) => body["thinking"] = json!({ "type": "adaptive", "display": "summarized" }),
@@ -82,14 +82,22 @@ impl Api for Anthropic {
     }
 }
 
-/// Unsigned thinking came from another vendor; Anthropic would reject it, so it's dropped.
-fn message(message: &Message) -> Value {
+/// Anthropic rejects unsigned thinking (from another vendor), blank text blocks, and messages
+/// left with no content, so those are dropped.
+fn message(message: &Message) -> Option<Value> {
     let content: Vec<Value> = message
         .content
         .iter()
         .filter_map(|block| match block {
+            Block::Text { text } if text.trim().is_empty() => None,
             Block::Text { text } => Some(json!({ "type": "text", "text": text })),
             Block::ToolCall { id, name, input } => {
+                // Anthropic takes only an object. Arguments another vendor sent as invalid JSON
+                // are kept as a raw string; wrap them rather than lose them.
+                let input = match input {
+                    Value::Object(_) => input.clone(),
+                    other => json!({ "_raw": other }),
+                };
                 Some(json!({ "type": "tool_use", "id": id, "name": name, "input": input }))
             }
             Block::ToolResult {
@@ -114,7 +122,7 @@ fn message(message: &Message) -> Value {
             }
         })
         .collect();
-    json!({ "role": message.role, "content": content })
+    (!content.is_empty()).then(|| json!({ "role": message.role, "content": content }))
 }
 
 /// Full Messages API reply.
@@ -272,6 +280,59 @@ mod tests {
                 { "role": "user", "content": [
                     { "type": "tool_result", "tool_use_id": "c1", "content": "18C", "is_error": false },
                 ]},
+            ])
+        );
+    }
+
+    /// Tool arguments another vendor sent as invalid JSON are kept as a raw string; Anthropic
+    /// takes only an object, so they go wrapped.
+    #[test]
+    fn non_object_tool_input_is_wrapped() {
+        let mut ctx = Context::default();
+        ctx.push(Message {
+            role: Role::Assistant,
+            content: vec![Block::ToolCall {
+                id: "c1".into(),
+                name: "weather".into(),
+                input: Value::String("{\"city\": \"Par".into()),
+            }],
+        });
+        let body = Anthropic.body(&Request::new(MODEL), &ctx);
+        assert_eq!(
+            body["messages"][0]["content"][0]["input"],
+            json!({ "_raw": "{\"city\": \"Par" })
+        );
+    }
+
+    /// Anthropic rejects empty text blocks and messages with no content: a turn from another
+    /// vendor that held only unsigned thinking, or an empty text, is left out.
+    #[test]
+    fn skips_empty_blocks_and_messages() {
+        let mut ctx = Context::default();
+        ctx.push(Message::user("Hi"));
+        ctx.push(Message {
+            role: Role::Assistant,
+            content: vec![Block::Thinking {
+                text: "unsigned".into(),
+                signature: None,
+            }],
+        });
+        ctx.push(Message::user(""));
+        ctx.push(Message {
+            role: Role::User,
+            content: vec![
+                Block::Text { text: " ".into() },
+                Block::Text {
+                    text: "Still there?".into(),
+                },
+            ],
+        });
+        let body = Anthropic.body(&Request::new(MODEL), &ctx);
+        assert_eq!(
+            body["messages"],
+            json!([
+                { "role": "user", "content": [{ "type": "text", "text": "Hi" }] },
+                { "role": "user", "content": [{ "type": "text", "text": "Still there?" }] },
             ])
         );
     }

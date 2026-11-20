@@ -79,7 +79,7 @@ pub fn identity() -> PatternDetector {
     PatternDetector::new("identity", Intent::Retain, 0.6, "states a fact about the user or their work")
         .sources(&[Source::User])
         .pattern(r"(?i)\bmy name(?:'s| is)\b")
-        .pattern(r"\b[Cc]all me\s+[A-Z][a-z]+")
+        .pattern(r"\b[Cc]all me\s+\p{Lu}\p{Ll}+")
         .pattern(r"(?i)\bI(?:'m| am)\s+(?:a|an)\s+(?:[\w-]+\s+)?(?:engineer|developer|designer|manager|student|founder|researcher|scientist|lead|architect|consultant|teacher|writer|analyst|administrator)\b")
         .pattern(r"(?i)\bI (?:work|am working|'m working) (?:at|for)\b")
         .pattern(r"(?i)\b(?:my|our) (?:team|company|org|organi[sz]ation|stack|project|repo|codebase|startup|product|ci|infra|infrastructure|backend|frontend|database|db|api|app|service|cluster|servers?|monorepo|pipeline) (?:is|uses|runs|has|builds|works|lives|deploys)\b")
@@ -91,7 +91,7 @@ pub fn identity() -> PatternDetector {
         .pattern(r"(?i)\bI live in\b")
         .pattern(r"(?i)\bmy (?:pronouns|timezone|time zone) (?:are|is)\b")
         .pattern(r"(?i)\bI(?:'m| am) (?:on|using|running) (?:a\s+)?(?:Mac|macOS|Windows|Linux|Ubuntu|Debian|Fedora|Arch|NixOS|WSL)\b")
-        .pattern(r"\bI(?:'m| am) [A-Z][a-z]+\s*[,.!]")
+        .pattern(r"\bI(?:'m| am) \p{Lu}\p{Ll}+\s*[,.!]")
         .pattern(r"(?i)\bI (?:lead|run|manage|own|maintain)\s+(?:the|a|our)\s+[\w-]+(?:\s+[\w-]+)?\s+(?:team|project|service|repo|group)\b")
 }
 
@@ -99,7 +99,7 @@ pub fn identity() -> PatternDetector {
 pub fn correction() -> PatternDetector {
     PatternDetector::new("correction", Intent::Refine, 0.7, "corrects or updates something")
         .sources(&[Source::User])
-        .pattern(r"(?i)^\s*(?:no|nope|wrong|incorrect)\b\s*[,.!:-]")
+        .pattern(r"(?i)^\s*(?:no|nope|wrong|incorrect)\b\s*[,.!:\-—–]")
         .pattern(r"(?i)\bthat(?:'s| is| was) (?:not (?:right|correct|true|what I (?:said|asked|meant|wanted))|wrong|incorrect)\b")
         .pattern(r"(?i)\byou(?:'re| are) wrong\b")
         .pattern(r"(?i)\bI meant\b")
@@ -409,6 +409,22 @@ mod tests {
         ("The user said they always get logged out.", &[]),
         ("Can you do it like this instead: map then filter?", &[]),
         ("I love how clean this is", &[]),
+        // typographic apostrophes, non-ASCII names, dashes
+        (
+            "Don’t forget the API key lives in Doppler.",
+            &["explicit-memory"],
+        ),
+        ("I’m a backend engineer.", &["identity"]),
+        (
+            "I’d rather you ask before deleting files.",
+            &["standing-preference"],
+        ),
+        ("That’s wrong — it was released in 2021.", &["correction"]),
+        ("What’s my preferred editor?", &["reference-to-past"]),
+        ("I don’t remember that error.", &[]),
+        ("Call me Émile.", &["identity"]),
+        ("I’m Zoë.", &["identity"]),
+        ("No — the port is 8080.", &["correction"]),
         // several at once
         (
             "Remember that I prefer tabs.",

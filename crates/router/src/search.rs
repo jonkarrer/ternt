@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ThreadView;
+use crate::{ThreadView, card_doc};
 
 /// Too common to tell threads apart: stopwords, and words people use to come back to one.
 const STOP: &[&str] = &[
@@ -30,37 +30,34 @@ pub fn terms_of(text: &str) -> HashSet<String> {
         .collect()
 }
 
-/// Threads by how much of the query they cover, rare terms weighted higher (IDF over the
-/// threads). Scores 0–1, best first; ties keep the given order (most recent first).
-pub fn rank_threads<'a>(
-    query: &str,
-    threads: &[&'a ThreadView],
-    docs: &HashMap<String, String>,
-) -> Vec<(&'a str, f64)> {
+/// Threads by how much of the query their title and card cover, rare terms weighted higher
+/// (IDF over the threads; a term no thread has weighs most). Scores 0–1, best first; ties
+/// keep the given order (most recent first).
+pub fn rank_threads<'a>(query: &str, threads: &[&'a ThreadView]) -> Vec<(&'a str, f64)> {
     let query = terms_of(query);
     if query.is_empty() || threads.is_empty() {
         return Vec::new();
     }
-    let terms: Vec<(&str, HashSet<String>)> = threads
+    let docs: Vec<(&str, HashSet<String>)> = threads
         .iter()
-        .map(|t| (t.info.id.as_str(), terms_of(&docs[&t.info.id])))
+        .map(|t| (t.info.id.as_str(), terms_of(&card_doc(t))))
         .collect();
-    let n = terms.len() as f64;
+    let n = docs.len() as f64;
     let idf: HashMap<&String, f64> = query
         .iter()
         .map(|t| {
-            let df = terms.iter().filter(|(_, set)| set.contains(t)).count() as f64;
-            (t, (1.0 + n / if df == 0.0 { 0.5 } else { df }).ln())
+            let df = docs.iter().filter(|(_, set)| set.contains(t)).count() as f64;
+            (t, (1.0 + n / df.max(0.5)).ln())
         })
         .collect();
     let total: f64 = idf.values().sum();
-    let mut ranked: Vec<(&str, f64)> = terms
+    let mut ranked: Vec<(&str, f64)> = docs
         .iter()
         .map(|(id, set)| {
-            let covered: f64 = query
+            let covered: f64 = idf
                 .iter()
-                .filter(|t| set.contains(*t))
-                .map(|t| idf[t])
+                .filter(|(t, _)| set.contains(**t))
+                .map(|(_, w)| w)
                 .sum();
             (*id, covered / total)
         })

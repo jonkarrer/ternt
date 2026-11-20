@@ -8,8 +8,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::watch;
 
-use crate::task::{Next, Outcome, Task, TaskId, TaskRecord};
-use crate::{Shared, Step, Tx};
+use crate::task::{Next, Outcome, Task, TaskId, TaskRecord, TaskState};
+use crate::{Shared, Tx};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
@@ -119,14 +119,10 @@ impl<T: Task> Runtime<T> {
         &self,
         change: impl FnOnce(&mut Tx) -> Result<Option<Next<T::State, T::Output>>>,
     ) -> Result<()> {
-        let invocation = &self.invocation;
         let id = self.task_id();
-        invocation.shared.commit(|tx| {
-            tx.check_invocation(id, invocation.generation, invocation.mode)?;
-            match change(tx)? {
-                Some(next) => tx.advance(id, step(next)?),
-                None => Ok(()),
-            }
+        self.commit_held(|tx| match change(tx)? {
+            Some(next) => apply(tx, id, next),
+            None => Ok(()),
         })
     }
 
@@ -140,49 +136,62 @@ impl<T: Task> Runtime<T> {
     /// first writer wins, also across crashes.
     pub fn memo<V: Serialize + DeserializeOwned>(&self, name: &str, candidate: V) -> Result<V> {
         let candidate = serde_json::to_value(candidate)?;
-        let mut stored = None;
         let id = self.task_id();
-        let invocation = &self.invocation;
-        invocation.shared.commit(|tx| {
-            tx.check_invocation(id, invocation.generation, invocation.mode)?;
+        let stored = self.commit_held(|tx| {
             tx.update(id, |task| {
-                let value = task.memos.entry(name.to_string()).or_insert(candidate);
-                stored = Some(value.clone());
+                task.memos
+                    .entry(name.to_string())
+                    .or_insert(candidate)
+                    .clone()
             })
         })?;
-        Ok(serde_json::from_value(stored.expect("set in commit"))?)
+        Ok(serde_json::from_value(stored)?)
     }
 
     /// Outcomes of ended tasks, in order. Fails for one still live.
     pub fn outcomes(&self, ids: &[TaskId]) -> Result<Vec<Outcome>> {
         ids.iter()
             .map(|id| match self.invocation.shared.task(*id)? {
-                Some(task) if task.state.is_terminal() => {
-                    Ok(task.state.outcome().cloned().expect("terminal"))
-                }
-                Some(_) => bail!("task {id} has not ended"),
+                Some(task) => match task.state.ended() {
+                    Some(outcome) => Ok(outcome.clone()),
+                    None => bail!("task {id} has not ended"),
+                },
                 None => bail!("no task {id}"),
             })
             .collect()
     }
+
+    /// Commits, if this invocation still holds the task.
+    fn commit_held<R>(&self, change: impl FnOnce(&mut Tx) -> Result<R>) -> Result<R> {
+        let invocation = &self.invocation;
+        invocation.shared.commit(|tx| {
+            tx.check_invocation(self.task_id(), invocation.generation, invocation.mode)?;
+            change(tx)
+        })
+    }
 }
 
-fn step<S: Serialize, R: Serialize>(next: Next<S, R>) -> Result<Step> {
-    Ok(match next {
-        Next::Continue(state) => Step::Continue(serde_json::to_value(state)?),
-        Next::Wait { state, on, policy } => Step::Wait {
+/// Applies a phase's `next` to the task.
+fn apply<S: Serialize, R: Serialize>(tx: &mut Tx, id: TaskId, next: Next<S, R>) -> Result<()> {
+    let state = match next {
+        Next::Continue(state) => TaskState::Running {
+            checkpoint: serde_json::to_value(state)?,
+        },
+        Next::Wait { state, on, policy } => TaskState::Waiting {
             checkpoint: serde_json::to_value(state)?,
             on,
             policy,
         },
-        Next::Sleep { state, until } => Step::Sleep {
+        Next::Sleep { state, until } => TaskState::Sleeping {
             checkpoint: serde_json::to_value(state)?,
             until,
         },
-        Next::Complete(result) => Step::End(Outcome::Completed {
-            result: serde_json::to_value(result)?,
-        }),
-        Next::Fail(error) => Step::End(Outcome::Failed { error }),
-        Next::Aborted(reason) => Step::End(Outcome::Aborted { reason }),
-    })
+        Next::Complete(result) => {
+            let result = serde_json::to_value(result)?;
+            return tx.end(id, Outcome::Completed { result });
+        }
+        Next::Fail(error) => return tx.end(id, Outcome::Failed { error }),
+        Next::Aborted(reason) => return tx.end(id, Outcome::Aborted { reason }),
+    };
+    tx.advance(id, state)
 }

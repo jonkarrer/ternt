@@ -23,8 +23,9 @@ pub mod task;
 pub use runtime::Runtime;
 pub use task::{Next, Outcome, Policy, Registry, Task, TaskId, TaskOptions, TaskRecord, TaskState};
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::panic::{self, AssertUnwindSafe};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, bail, ensure};
@@ -93,26 +94,16 @@ struct Running {
     phase: Option<AbortHandle>,
 }
 
-/// A task's next state, with its types erased.
-pub(crate) enum Step {
-    Continue(Value),
-    Wait {
-        checkpoint: Value,
-        on: Vec<TaskId>,
-        policy: Policy,
-    },
-    Sleep {
-        checkpoint: Value,
-        until: u64,
-    },
-    End(Outcome),
-}
-
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+/// Whether `task` is live work that keeps `owner` from finishing.
+fn holds_up(task: &TaskRecord, owner: TaskId) -> bool {
+    task.owner == Some(owner) && !task.background && !task.state.is_terminal()
 }
 
 impl Engine {
@@ -151,7 +142,7 @@ impl Engine {
 
     /// Starts running tasks. Needs a tokio runtime.
     pub fn resume(&self) {
-        let mut inner = self.shared.inner.lock().unwrap();
+        let mut inner = self.shared.lock();
         if inner.scheduler.is_none() && !inner.closed {
             let handle = tokio::spawn(schedule(self.shared.clone()));
             inner.scheduler = Some(handle.abort_handle());
@@ -189,31 +180,16 @@ impl Engine {
 
     /// Every task that hasn't ended.
     pub fn live_tasks(&self) -> Vec<TaskRecord> {
-        let inner = self.shared.inner.lock().unwrap();
-        inner.tasks.values().cloned().collect()
+        self.shared.lock().tasks.values().cloned().collect()
     }
 
     /// Resolves with the task's outcome once it has ended.
     pub async fn wait(&self, id: TaskId) -> Result<Outcome> {
-        let mut version = self.shared.version.subscribe();
-        loop {
-            version.borrow_and_update();
-            match self.task(id)? {
-                Some(task) if task.state.is_terminal() => {
-                    return Ok(task.state.outcome().cloned().expect("terminal"));
-                }
-                Some(_) => {}
-                None => bail!("no task {id}"),
-            }
-            {
-                let inner = self.shared.inner.lock().unwrap();
-                if let Some(error) = &inner.failed {
-                    bail!("engine failed: {error}");
-                }
-                ensure!(!inner.closed, "engine closed");
-            }
-            version.changed().await?;
-        }
+        self.watch(|engine| match engine.task(id)? {
+            Some(task) => Ok(task.state.ended().cloned()),
+            None => bail!("no task {id}"),
+        })
+        .await
     }
 
     /// Reads a thread as last committed.
@@ -223,7 +199,7 @@ impl Engine {
 
     /// A document as last committed.
     pub fn doc<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
-        let value = self.shared.doc(key)?;
+        let value = self.shared.lock().doc(&self.shared.store, key)?;
         Ok(value.map(serde_json::from_value).transpose()?)
     }
 
@@ -235,43 +211,34 @@ impl Engine {
             if let Some(value) = check(self)? {
                 return Ok(value);
             }
-            {
-                let inner = self.shared.inner.lock().unwrap();
-                if let Some(error) = &inner.failed {
-                    bail!("engine failed: {error}");
-                }
-                ensure!(!inner.closed, "engine closed");
-            }
+            self.shared.lock().check_open()?;
             version.changed().await?;
         }
     }
 
-    /// Stops cleanly: running phases are stopped and their tasks stored as pending, so a later
-    /// open runs them again without counting a restart.
+    /// Stops cleanly: running phases are stopped and running tasks stored as pending, so a later
+    /// open runs them again without counting a restart. That includes tasks between
+    /// invocations, such as one whose abort handler waits on the work it owns.
     pub fn close(&self) -> Result<()> {
-        let running = self.shared.stop();
-        let tasks: Vec<TaskRecord> = {
-            let inner = self.shared.inner.lock().unwrap();
-            running
-                .iter()
-                .filter_map(|id| inner.tasks.get(id))
-                .filter_map(|task| match &task.state {
-                    TaskState::Running { checkpoint } => Some(TaskRecord {
-                        state: TaskState::Pending {
-                            checkpoint: checkpoint.clone(),
-                        },
-                        ..task.clone()
-                    }),
-                    _ => None,
-                })
-                .collect()
-        };
-        self.shared.store.transaction(|tx| {
-            for task in &tasks {
-                store::save(tx, task)?;
-            }
-            Ok(())
-        })
+        self.shared.stop();
+        let pending: Vec<TaskRecord> = self
+            .shared
+            .lock()
+            .tasks
+            .values()
+            .filter_map(|task| match &task.state {
+                TaskState::Running { checkpoint } => Some(TaskRecord {
+                    state: TaskState::Pending {
+                        checkpoint: checkpoint.clone(),
+                    },
+                    ..task.clone()
+                }),
+                _ => None,
+            })
+            .collect();
+        self.shared
+            .store
+            .transaction(|tx| pending.iter().try_for_each(|task| store::save(tx, task)))
     }
 
     /// Stops as a crash would: nothing more is written. For tests of recovery.
@@ -281,14 +248,54 @@ impl Engine {
     }
 }
 
-impl Shared {
-    pub(crate) fn commit<R>(&self, change: impl FnOnce(&mut Tx) -> Result<R>) -> Result<R> {
-        let mut guard = self.inner.lock().unwrap();
-        let inner = &mut *guard;
-        ensure!(!inner.closed, "engine closed");
-        if let Some(error) = &inner.failed {
+impl Inner {
+    /// Fails once the engine has stopped.
+    fn check_open(&self) -> Result<()> {
+        if let Some(error) = &self.failed {
             bail!("engine failed: {error}");
         }
+        ensure!(!self.closed, "engine closed");
+        Ok(())
+    }
+
+    /// The invocation of `id` numbered `generation`, if it still holds the task.
+    fn invocation(&mut self, id: TaskId, generation: u64) -> Option<&mut Running> {
+        self.running
+            .get_mut(&id)
+            .filter(|running| running.generation == generation)
+    }
+
+    /// A thread as last committed, loaded (or started empty) on first use.
+    fn thread(&mut self, store: &Sqlite, id: &str) -> Result<&mut Thread> {
+        if !self.threads.contains_key(id) {
+            let thread = Thread::load(id, store)?;
+            self.threads.insert(id.to_string(), thread);
+        }
+        Ok(self.threads.get_mut(id).expect("loaded"))
+    }
+
+    /// A document as last committed, read on first use.
+    fn doc(&mut self, store: &Sqlite, key: &str) -> Result<Option<Value>> {
+        if let Some(value) = self.docs.get(key) {
+            return Ok(value.clone());
+        }
+        let value = store.read(|conn| store::get_doc(conn, key))?;
+        self.docs.insert(key.to_string(), value.clone());
+        Ok(value)
+    }
+}
+
+impl Shared {
+    /// Ignores poisoning: a commit catches panics in its `change` and rolls back, so only a
+    /// read callback, which changes nothing, can panic while this is held.
+    fn lock(&self) -> MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn commit<R>(&self, change: impl FnOnce(&mut Tx) -> Result<R>) -> Result<R> {
+        let mut guard = self.lock();
+        let inner = &mut *guard;
+        inner.check_open()?;
         let mut tx = Tx {
             shared: self,
             inner,
@@ -299,7 +306,9 @@ impl Shared {
             aborted: HashSet::new(),
             now: now_ms(),
         };
-        let result = change(&mut tx);
+        // A panic in `change` rolls back like an error, then goes on to the caller (a phase,
+        // which is faulted for it).
+        let result = panic::catch_unwind(AssertUnwindSafe(|| change(&mut tx)));
         let Tx {
             savepoints,
             tasks,
@@ -309,10 +318,15 @@ impl Shared {
             ..
         } = tx;
         let value = match result {
-            Ok(value) => value,
-            Err(error) => {
+            Ok(Ok(value)) => value,
+            Ok(Err(error)) => {
                 rollback(inner, savepoints);
                 return Err(error);
+            }
+            Err(panic) => {
+                rollback(inner, savepoints);
+                drop(guard);
+                panic::resume_unwind(panic);
             }
         };
 
@@ -340,6 +354,9 @@ impl Shared {
         for id in savepoints.keys() {
             inner.threads.get_mut(id).expect("touched").mark_saved();
         }
+        for id in advanced {
+            *inner.progress.entry(id).or_default() += 1;
+        }
         for (id, task) in tasks {
             if task.state.is_terminal() {
                 inner.tasks.remove(&id);
@@ -349,9 +366,6 @@ impl Shared {
             }
         }
         inner.docs.extend(docs);
-        for id in advanced {
-            *inner.progress.entry(id).or_default() += 1;
-        }
         for id in aborted {
             if let Some(running) = inner.running.get(&id).filter(|r| r.mode == Mode::Run) {
                 let _ = running.cancel.send(true);
@@ -363,38 +377,23 @@ impl Shared {
     }
 
     pub(crate) fn task(&self, id: TaskId) -> Result<Option<TaskRecord>> {
-        if let Some(task) = self.inner.lock().unwrap().tasks.get(&id) {
-            return Ok(Some(task.clone()));
+        match self.live(id) {
+            Some(task) => Ok(Some(task)),
+            None => self.store.read(|conn| store::get(conn, id)),
         }
-        self.store.read(|conn| store::get(conn, id))
     }
 
     pub(crate) fn thread<R>(&self, id: &str, read: impl FnOnce(&Thread) -> R) -> Result<R> {
-        let mut inner = self.inner.lock().unwrap();
-        if !inner.threads.contains_key(id) {
-            let thread = Thread::load(id, self.store.as_ref())?;
-            inner.threads.insert(id.to_string(), thread);
-        }
-        Ok(read(&inner.threads[id]))
-    }
-
-    fn doc(&self, key: &str) -> Result<Option<Value>> {
-        let mut inner = self.inner.lock().unwrap();
-        if let Some(value) = inner.docs.get(key) {
-            return Ok(value.clone());
-        }
-        let value = self.store.read(|conn| store::get_doc(conn, key))?;
-        inner.docs.insert(key.to_string(), value.clone());
-        Ok(value)
+        let mut inner = self.lock();
+        Ok(read(inner.thread(&self.store, id)?))
     }
 
     fn live(&self, id: TaskId) -> Option<TaskRecord> {
-        self.inner.lock().unwrap().tasks.get(&id).cloned()
+        self.lock().tasks.get(&id).cloned()
     }
 
     fn progress(&self, id: TaskId) -> u64 {
-        let inner = self.inner.lock().unwrap();
-        inner.progress.get(&id).copied().unwrap_or(0)
+        self.lock().progress.get(&id).copied().unwrap_or(0)
     }
 
     /// What a crash or an earlier process left: running tasks were cut off.
@@ -403,11 +402,11 @@ impl Shared {
         self.commit(|tx| {
             let ids: Vec<TaskId> = tx.inner.tasks.keys().copied().collect();
             for &id in &ids {
-                let task = tx.task(id).expect("live").clone();
-                let TaskState::Running { checkpoint } = task.state else {
+                let task = tx.task(id).expect("live");
+                let TaskState::Running { checkpoint } = &task.state else {
                     continue;
                 };
-                let restarts = task.restarts + 1;
+                let (checkpoint, restarts) = (checkpoint.clone(), task.restarts + 1);
                 tx.update(id, |task| {
                     task.state = TaskState::Pending { checkpoint };
                     task.restarts = restarts;
@@ -429,15 +428,13 @@ impl Shared {
         })
     }
 
-    /// Stops the scheduler and every invocation, and refuses further commits. Returns the tasks
-    /// that were running.
-    fn stop(&self) -> Vec<TaskId> {
-        let mut inner = self.inner.lock().unwrap();
+    /// Stops the scheduler and every invocation, and refuses further commits.
+    fn stop(&self) {
+        let mut inner = self.lock();
         inner.closed = true;
         if let Some(scheduler) = inner.scheduler.take() {
             scheduler.abort();
         }
-        let running: Vec<TaskId> = inner.running.keys().copied().collect();
         for (_, running) in inner.running.drain() {
             for handle in [running.supervisor, running.phase].into_iter().flatten() {
                 handle.abort();
@@ -445,10 +442,10 @@ impl Shared {
         }
         drop(inner);
         self.version.send_modify(|v| *v += 1);
-        running
     }
 
-    /// Starts what can run now; returns when the next sleeper is due.
+    /// Settles what needs no code (owners whose work has ended, orphans, fail-fast aborts),
+    /// starts what can run now, and returns when the next sleeper is due.
     fn plan(self: &Arc<Self>) -> Result<Option<u64>> {
         let now = now_ms();
         let mut starts = Vec::new();
@@ -457,17 +454,19 @@ impl Shared {
         let mut fail_fast = Vec::new();
         let mut earliest: Option<u64> = None;
         {
-            let inner = self.inner.lock().unwrap();
-            ensure!(!inner.closed && inner.failed.is_none(), "engine stopped");
-            let owns_live = |id: TaskId| {
-                inner
-                    .tasks
-                    .values()
-                    .any(|t| t.owner == Some(id) && !t.background)
-            };
+            let inner = self.lock();
+            inner.check_open()?;
+            let owns_live = |id| inner.tasks.values().any(|t| holds_up(t, id));
             for task in inner.tasks.values() {
                 let id = task.id;
                 if inner.running.contains_key(&id) {
+                    continue;
+                }
+                // Its outcome is decided and it runs no more code, so it needs no definition.
+                if let TaskState::Completing { outcome } = &task.state {
+                    if !owns_live(id) {
+                        finals.push((id, outcome.clone()));
+                    }
                     continue;
                 }
                 match self.registry.get(&task.kind) {
@@ -479,88 +478,68 @@ impl Shared {
                     }
                     Some(_) => {}
                 }
+                if task.abort_requested {
+                    if !owns_live(id) {
+                        starts.push((id, Mode::Abort));
+                    }
+                    continue;
+                }
                 match &task.state {
-                    TaskState::Terminal { .. } => {}
-                    TaskState::Completing { .. } => {
-                        if !owns_live(id) {
-                            finals.push(id);
-                        }
-                    }
-                    _ if task.abort_requested => {
-                        if !owns_live(id) {
-                            starts.push((id, Mode::Abort));
-                        }
-                    }
                     TaskState::Pending { .. } | TaskState::Running { .. } => {
                         starts.push((id, Mode::Run));
                     }
                     TaskState::Waiting { on, policy, .. } => {
-                        let live: Vec<TaskId> = on
+                        let (live, ended): (Vec<TaskId>, Vec<TaskId>) = on
                             .iter()
                             .copied()
-                            .filter(|o| inner.tasks.contains_key(o))
-                            .collect();
+                            .partition(|o| inner.tasks.contains_key(o));
                         if live.is_empty() {
                             starts.push((id, Mode::Run));
-                        } else if *policy == Policy::FailFast {
+                        } else if *policy == Policy::FailFast && !ended.is_empty() {
                             let unmarked: Vec<TaskId> = live
-                                .iter()
-                                .copied()
+                                .into_iter()
                                 .filter(|o| !inner.tasks[o].abort_requested)
                                 .collect();
-                            let ended: Vec<TaskId> =
-                                on.iter().copied().filter(|o| !live.contains(o)).collect();
-                            if !unmarked.is_empty() && !ended.is_empty() {
+                            if !unmarked.is_empty() {
                                 fail_fast.push((ended, unmarked));
                             }
                         }
                     }
-                    TaskState::Sleeping { until, .. } => {
-                        if *until <= now {
-                            starts.push((id, Mode::Run));
-                        } else {
-                            earliest = Some(earliest.map_or(*until, |e| e.min(*until)));
-                        }
+                    TaskState::Sleeping { until, .. } if *until <= now => {
+                        starts.push((id, Mode::Run));
                     }
+                    TaskState::Sleeping { until, .. } => {
+                        earliest = Some(earliest.map_or(*until, |e| e.min(*until)));
+                    }
+                    TaskState::Completing { .. } | TaskState::Terminal { .. } => {}
                 }
             }
         }
 
-        for (ended, unmarked) in fail_fast {
-            let failed = ended.iter().any(|id| {
-                self.task(*id)
-                    .ok()
-                    .flatten()
-                    .and_then(|t| t.state.outcome().cloned())
-                    .is_some_and(|o| !o.is_completed())
-            });
-            if failed {
-                self.commit(|tx| {
-                    for id in &unmarked {
-                        tx.mark_abort(*id, Some("a task waited on with it failed".into()))?;
-                    }
-                    Ok(())
-                })?;
-            }
-        }
-        for id in orphans {
+        // Ended tasks are read from the store, so outside the lock.
+        let failed = |id: &TaskId| {
+            self.task(*id)
+                .ok()
+                .flatten()
+                .is_some_and(|t| t.state.ended().is_some_and(|o| !o.is_completed()))
+        };
+        let aborts: Vec<TaskId> = fail_fast
+            .into_iter()
+            .filter(|(ended, _)| ended.iter().any(&failed))
+            .flat_map(|(_, unmarked)| unmarked)
+            .collect();
+        if !(finals.is_empty() && orphans.is_empty() && aborts.is_empty()) {
             self.commit(|tx| {
-                let reason = "task_too_old: stored by another version".to_string();
-                tx.end(id, Outcome::Orphaned { reason })
-            })?;
-        }
-        for id in finals {
-            self.commit(|tx| {
-                let Some(TaskState::Completing { outcome }) = tx.task(id).map(|t| t.state.clone())
-                else {
-                    return Ok(());
-                };
-                let now = tx.now;
-                tx.update(id, |task| {
-                    task.state = TaskState::Terminal { outcome };
-                    task.ended_at = Some(now);
-                })?;
-                tx.advanced.insert(id);
+                for (id, outcome) in finals {
+                    tx.end(id, outcome)?;
+                }
+                for id in orphans {
+                    let reason = "task_too_old: stored by another version".to_string();
+                    tx.end(id, Outcome::Orphaned { reason })?;
+                }
+                for id in aborts {
+                    tx.mark_abort(id, Some("a task waited on with it failed".into()))?;
+                }
                 Ok(())
             })?;
         }
@@ -574,37 +553,36 @@ impl Shared {
     fn start(self: &Arc<Self>, id: TaskId, mode: Mode) -> Result<()> {
         let (cancel, cancelled) = watch::channel(false);
         let reserved = self.commit(|tx| {
-            let Some(task) = tx.task(id).cloned() else {
+            if tx.inner.running.contains_key(&id) {
+                return Ok(None);
+            }
+            let Some(task) = tx.task(id) else {
                 return Ok(None);
             };
             let Some(checkpoint) = task.state.checkpoint().cloned() else {
                 return Ok(None);
             };
-            if tx.inner.running.contains_key(&id) {
-                return Ok(None);
-            }
-            if !matches!(task.state, TaskState::Running { .. }) {
+            let was_running = matches!(task.state, TaskState::Running { .. });
+            let kind = self.registry.get(&task.kind).context("unregistered")?;
+            if !was_running {
                 tx.update(id, |task| task.state = TaskState::Running { checkpoint })?;
             }
-            let kind = self.registry.get(&task.kind).context("unregistered")?;
             tx.inner.generation += 1;
             let generation = tx.inner.generation;
-            tx.inner.running.insert(
-                id,
-                Running {
-                    generation,
-                    mode,
-                    cancel,
-                    supervisor: None,
-                    phase: None,
-                },
-            );
+            let running = Running {
+                generation,
+                mode,
+                cancel,
+                supervisor: None,
+                phase: None,
+            };
+            tx.inner.running.insert(id, running);
             Ok(Some((generation, kind)))
         })?;
         let Some((generation, kind)) = reserved else {
             return Ok(());
         };
-        let handle = tokio::spawn(supervise(
+        let supervisor = tokio::spawn(supervise(
             self.clone(),
             id,
             mode,
@@ -612,31 +590,23 @@ impl Shared {
             kind,
             cancelled,
         ));
-        let mut inner = self.inner.lock().unwrap();
-        match inner.running.get_mut(&id) {
-            Some(running) if running.generation == generation => {
-                running.supervisor = Some(handle.abort_handle());
-            }
-            _ => handle.abort(),
+        match self.lock().invocation(id, generation) {
+            Some(running) => running.supervisor = Some(supervisor.abort_handle()),
+            None => supervisor.abort(),
         }
         Ok(())
     }
 
     fn set_phase(&self, id: TaskId, generation: u64, phase: AbortHandle) {
-        let mut inner = self.inner.lock().unwrap();
-        match inner.running.get_mut(&id) {
-            Some(running) if running.generation == generation => running.phase = Some(phase),
-            _ => phase.abort(),
+        match self.lock().invocation(id, generation) {
+            Some(running) => running.phase = Some(phase),
+            None => phase.abort(),
         }
     }
 
     fn release(&self, id: TaskId, generation: u64) {
-        let mut inner = self.inner.lock().unwrap();
-        if inner
-            .running
-            .get(&id)
-            .is_some_and(|r| r.generation == generation)
-        {
+        let mut inner = self.lock();
+        if inner.invocation(id, generation).is_some() {
             inner.running.remove(&id);
         }
         drop(inner);
@@ -714,9 +684,9 @@ async fn supervise(
         }
         let stuck =
             matches!(after.state, TaskState::Running { .. }) && shared.progress(id) == before;
-        if error.is_some() || stuck {
-            let error =
-                error.unwrap_or_else(|| "phase returned without durable progress".to_string());
+        let error =
+            error.or_else(|| stuck.then(|| "phase returned without durable progress".into()));
+        if let Some(error) = error {
             if shared
                 .commit(|tx| tx.end(id, Outcome::Faulted { error }))
                 .is_err()
@@ -764,29 +734,18 @@ impl Tx<'_> {
     /// A thread to change in this commit, loaded (or started empty) on first use. Its changes
     /// are stored with the commit, or rolled back if the commit fails.
     pub fn thread(&mut self, id: &str) -> Result<&mut Thread> {
-        if !self.inner.threads.contains_key(id) {
-            let thread = Thread::load(id, self.shared.store.as_ref())?;
-            self.inner.threads.insert(id.to_string(), thread);
-        }
+        let thread = self.inner.thread(&self.shared.store, id)?;
         if !self.savepoints.contains_key(id) {
-            let savepoint = self.inner.threads[id].savepoint();
-            self.savepoints.insert(id.to_string(), savepoint);
+            self.savepoints.insert(id.to_string(), thread.savepoint());
         }
-        Ok(self.inner.threads.get_mut(id).expect("loaded"))
+        Ok(thread)
     }
 
     /// A document: small JSON state stored in the same commits as threads and tasks.
     pub fn doc<T: DeserializeOwned>(&mut self, key: &str) -> Result<Option<T>> {
         let value = match self.docs.get(key) {
             Some(staged) => staged.clone(),
-            None => match self.inner.docs.get(key) {
-                Some(cached) => cached.clone(),
-                None => {
-                    let value = self.shared.store.read(|conn| store::get_doc(conn, key))?;
-                    self.inner.docs.insert(key.to_string(), value.clone());
-                    value
-                }
-            },
+            None => self.inner.doc(&self.shared.store, key)?,
         };
         Ok(value.map(serde_json::from_value).transpose()?)
     }
@@ -863,11 +822,11 @@ impl Tx<'_> {
     }
 
     /// Changes a live task in this commit.
-    pub(crate) fn update(
+    pub(crate) fn update<R>(
         &mut self,
         id: TaskId,
-        change: impl FnOnce(&mut TaskRecord),
-    ) -> Result<()> {
+        change: impl FnOnce(&mut TaskRecord) -> R,
+    ) -> Result<R> {
         if !self.tasks.contains_key(&id) {
             let task = self
                 .inner
@@ -877,8 +836,7 @@ impl Tx<'_> {
                 .with_context(|| format!("task {id} has ended"))?;
             self.tasks.insert(id, task);
         }
-        change(self.tasks.get_mut(&id).expect("staged"));
-        Ok(())
+        Ok(change(self.tasks.get_mut(&id).expect("staged")))
     }
 
     /// Fails unless this invocation still holds the task, running, and (for a run) unaborted.
@@ -904,21 +862,8 @@ impl Tx<'_> {
         Ok(())
     }
 
-    pub(crate) fn advance(&mut self, id: TaskId, step: Step) -> Result<()> {
-        let state = match step {
-            Step::Continue(checkpoint) => TaskState::Running { checkpoint },
-            Step::Wait {
-                checkpoint,
-                on,
-                policy,
-            } => TaskState::Waiting {
-                checkpoint,
-                on,
-                policy,
-            },
-            Step::Sleep { checkpoint, until } => TaskState::Sleeping { checkpoint, until },
-            Step::End(outcome) => return self.end(id, outcome),
-        };
+    /// Commits a task's new state, which counts as durable progress.
+    pub(crate) fn advance(&mut self, id: TaskId, state: TaskState) -> Result<()> {
         self.update(id, |task| {
             task.state = state;
             task.restarts = 0;
@@ -936,18 +881,12 @@ impl Tx<'_> {
                 self.mark_abort(child, Some("owner ended".into()))?;
             }
         }
+        if !owned.is_empty() {
+            return self.advance(id, TaskState::Completing { outcome });
+        }
         let now = self.now;
-        self.update(id, |task| {
-            task.restarts = 0;
-            if owned.is_empty() {
-                task.state = TaskState::Terminal { outcome };
-                task.ended_at = Some(now);
-            } else {
-                task.state = TaskState::Completing { outcome };
-            }
-        })?;
-        self.advanced.insert(id);
-        Ok(())
+        self.update(id, |task| task.ended_at = Some(now))?;
+        self.advance(id, TaskState::Terminal { outcome })
     }
 
     /// Aborts a task, and the work it owns, with this commit. Nothing for one that has ended.
@@ -960,14 +899,17 @@ impl Tx<'_> {
         let Some(task) = self.task(id) else {
             return Ok(());
         };
-        if task.abort_requested || task.state.checkpoint().is_none() {
+        if task.abort_requested {
             return Ok(());
         }
-        self.update(id, |task| {
-            task.abort_requested = true;
-            task.abort_reason = reason.clone();
-        })?;
-        self.aborted.insert(id);
+        // A completing task keeps its decided outcome; only the work it owns is aborted.
+        if task.state.checkpoint().is_some() {
+            self.update(id, |task| {
+                task.abort_requested = true;
+                task.abort_reason = reason.clone();
+            })?;
+            self.aborted.insert(id);
+        }
         for child in self.owned_live(id) {
             self.mark_abort(child, reason.clone())?;
         }
@@ -976,20 +918,15 @@ impl Tx<'_> {
 
     /// Live tasks `id` owns that keep it busy (not background).
     fn owned_live(&self, id: TaskId) -> Vec<TaskId> {
-        let mut ids: Vec<TaskId> = self
+        let ids: BTreeSet<TaskId> = self
             .inner
             .tasks
             .keys()
             .chain(self.tasks.keys())
             .copied()
             .collect();
-        ids.sort_unstable();
-        ids.dedup();
         ids.into_iter()
-            .filter(|&child| {
-                self.task(child)
-                    .is_some_and(|t| t.owner == Some(id) && !t.background && !t.state.is_terminal())
-            })
+            .filter(|&child| self.task(child).is_some_and(|t| holds_up(t, id)))
             .collect()
     }
 }

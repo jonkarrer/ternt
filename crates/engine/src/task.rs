@@ -118,6 +118,14 @@ impl TaskState {
         matches!(self, TaskState::Terminal { .. })
     }
 
+    /// The outcome of a task that has ended.
+    pub(crate) fn ended(&self) -> Option<&Outcome> {
+        match self {
+            TaskState::Terminal { outcome } => Some(outcome),
+            _ => None,
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             TaskState::Pending { .. } => "pending",

@@ -13,6 +13,9 @@
 //!   durable backoff, not silently resent. Out of attempts, the run's inputs are unanswered.
 //! - A tool call's intent is committed before it runs. Cut off, only a `Replay::Safe` tool runs
 //!   again; others give the model an "interrupted" error result.
+//! - A run that ends without settling its inputs (it faulted, or was orphaned) is noticed by
+//!   the next submission or `wait` on the thread: its inputs are unanswered, its open tool
+//!   calls get error results, and the queue moves on.
 
 mod generation;
 mod idle;
@@ -30,7 +33,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use context::Context;
-use engine::{Engine, Registry, Runtime, Task, TaskId, Tx};
+use engine::{Engine, Next, Registry, Runtime, Task, TaskId, Tx};
 use inference::providers::Api;
 use inference::{Provider, Request, Response};
 use serde::{Deserialize, Serialize};
@@ -168,46 +171,35 @@ pub fn register<M: Model>(
         .register(Idle::new(mind, settings));
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum Work {
-    Consider,
-    Dream,
-    Settle,
-}
+/// One of a mind's jobs: `Mind::consider`, `Mind::dream` or `Mind::settle`.
+pub(crate) type Work = for<'a> fn(&'a dyn Mind, &'a mut Thread) -> MindFuture<'a>;
 
-/// Runs a mind's work on a copy of the task's thread. Returns the events it recorded and the
-/// length the thread had, for `apply`.
-pub(crate) async fn on_copy<T: Task>(
+/// Runs a mind's work on a copy of the task's thread, then commits `next` with what it
+/// recorded there. If the work failed, or the thread changed meanwhile (the events would land
+/// in the wrong place), the work is lost: skipped, not fatal.
+pub(crate) async fn think<T: Task>(
     rt: &Runtime<T>,
     mind: &dyn Mind,
     work: Work,
-) -> Result<(usize, Vec<Event>)> {
+    next: Next<T::State, T::Output>,
+) -> Result<()> {
     let mut copy = rt.thread(|t| t.snapshot())?;
     let base = copy.checkpoints().len();
-    let future = match work {
-        Work::Consider => mind.consider(&mut copy),
-        Work::Dream => mind.dream(&mut copy),
-        Work::Settle => mind.settle(&mut copy),
-    };
-    tokio::select! {
-        result = future => result?,
+    let done = tokio::select! {
+        result = work(mind, &mut copy) => result.is_ok(),
         _ = rt.cancelled() => anyhow::bail!("cancelled"),
-    }
-    let events = copy.checkpoints()[base..]
+    };
+    let events: Vec<Event> = copy.checkpoints()[base..]
         .iter()
         .map(|c| c.event.clone())
         .collect();
-    Ok((base, events))
-}
-
-/// Applies events recorded on a copy, unless the thread changed since it was copied (then
-/// they'd land in the wrong place, and the work is simply lost).
-pub(crate) fn apply(tx: &mut Tx, thread: &str, base: usize, events: Vec<Event>) -> Result<()> {
-    let thread = tx.thread(thread)?;
-    if thread.checkpoints().len() == base {
-        thread.append(events)?;
-    }
-    Ok(())
+    rt.commit(|tx| {
+        let thread = tx.thread(rt.thread_id())?;
+        if done && thread.checkpoints().len() == base {
+            thread.append(events)?;
+        }
+        Ok(Some(next))
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -277,6 +269,14 @@ pub enum Settled {
     Unanswered { reason: String },
 }
 
+impl Settled {
+    pub(crate) fn unanswered(reason: impl Into<String>) -> Self {
+        Self::Unanswered {
+            reason: reason.into(),
+        }
+    }
+}
+
 /// Submits inputs and waits for them.
 #[derive(Clone)]
 pub struct Agent {
@@ -314,25 +314,7 @@ impl Agent {
             last: self.engine.doc(LAST_THREAD)?,
         };
         let route = router.route(store, &routing, &threads).await?;
-        self.engine.commit(|tx| {
-            let thread = match &route.target {
-                router::Target::Continue(id) => id.clone(),
-                router::Target::New => {
-                    let n: u64 = tx.doc("agent/next-thread")?.unwrap_or(1);
-                    tx.put_doc("agent/next-thread", &(n + 1))?;
-                    format!("thread-{n}")
-                }
-            };
-            tx.thread(&thread)?
-                .routed(route.by.as_str(), &route.reason)?;
-            let submission = inbox::submit(tx, &thread, input)?;
-            tx.put_doc(LAST_THREAD, &thread)?;
-            Ok(Sent {
-                thread,
-                submission,
-                route: Some(route.clone()),
-            })
-        })
+        self.engine.commit(|tx| admit(tx, route, input))
     }
 
     /// Admits an input durably and returns its submission ID.
@@ -351,28 +333,61 @@ impl Agent {
                 let Some(submission) = engine.doc::<Submission>(&inbox::submission_key(id))? else {
                     anyhow::bail!("no submission {id}");
                 };
-                Ok(match submission.status {
-                    Status::Done => Some(Settled::Done {
-                        answer: submission.answer.unwrap_or_default(),
-                    }),
-                    Status::Unanswered => Some(Settled::Unanswered {
-                        reason: submission.reason.unwrap_or_default(),
-                    }),
-                    Status::Queued => None,
-                    // A run that ended without settling it (faulted, say) never will.
-                    Status::Placed => match submission.run {
-                        Some(run) => engine
-                            .task(run)?
-                            .filter(|t| t.state.is_terminal())
-                            .map(|t| Settled::Unanswered {
-                                reason: format!("run ended: {:?}", t.state.outcome()),
-                            }),
-                        None => None,
-                    },
-                })
+                match submission.status {
+                    Status::Done => {
+                        let answer = submission.answer.unwrap_or_default();
+                        return Ok(Some(Settled::Done { answer }));
+                    }
+                    Status::Unanswered => {
+                        let reason = submission.reason.unwrap_or_default();
+                        return Ok(Some(Settled::Unanswered { reason }));
+                    }
+                    Status::Queued | Status::Placed => {}
+                }
+                // A run that ended without settling its inputs (it faulted, say) never will:
+                // nothing else notices until the next submission, so recover from it here.
+                let thread = &submission.thread;
+                let inbox: inbox::Inbox =
+                    engine.doc(&inbox::inbox_key(thread))?.unwrap_or_default();
+                if let Some(run) = inbox.run
+                    && let Some(ended) = engine.task(run)?.filter(|t| t.state.is_terminal())
+                {
+                    let reason = format!("run ended: {:?}", ended.state.outcome());
+                    engine.commit(|tx| inbox::recover(tx, thread, &reason))?;
+                }
+                Ok(None)
             })
             .await
     }
+}
+
+/// Submits a routed input to its thread (an existing one, or a new one) and notes the route
+/// there. A request ID submitted since `send` checked (by another `send`) changes nothing.
+fn admit(tx: &mut Tx, route: router::Route, input: Input) -> Result<Sent> {
+    if let Some(submission) = inbox::existing(tx, &input)? {
+        return Ok(Sent {
+            thread: inbox::submission(tx, &submission)?.thread,
+            submission,
+            route: None,
+        });
+    }
+    let thread = match &route.target {
+        router::Target::Continue(id) => id.clone(),
+        router::Target::New => {
+            let n: u64 = tx.doc("agent/next-thread")?.unwrap_or(1);
+            tx.put_doc("agent/next-thread", &(n + 1))?;
+            format!("thread-{n}")
+        }
+    };
+    tx.thread(&thread)?
+        .routed(route.by.as_str(), &route.reason)?;
+    let submission = inbox::submit(tx, &thread, input)?;
+    tx.put_doc(LAST_THREAD, &thread)?;
+    Ok(Sent {
+        thread,
+        submission,
+        route: Some(route),
+    })
 }
 
 #[cfg(test)]

@@ -4,11 +4,12 @@ use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use context::{Block, Message, Role};
-use engine::{Next, Policy, Runtime, Task, TaskId, TaskOptions, Tx};
+use engine::{Next, Outcome, Policy, Runtime, Task, TaskId, TaskOptions};
 use serde::{Deserialize, Serialize};
+use state::Thread;
 
 use crate::tool::{ToolCall, ToolCallInput, ToolOutput};
-use crate::{Mind, Model, Settings, Settled, Work, apply, inbox, on_copy};
+use crate::{Mind, Model, Settings, Settled, inbox, think};
 
 pub(crate) const NAME: &str = "agent.generation";
 
@@ -58,28 +59,20 @@ impl<M: Model> Task for Generation<M> {
     }
 
     async fn run(&self, rt: Runtime<Self>) -> Result<()> {
-        let thread = rt.thread_id().to_string();
+        let thread = rt.thread_id();
         match rt.state() {
             &State::Prepare { round } => rt.commit(|tx| {
-                let mut inbox = inbox::load(tx, &thread)?;
-                inbox::place_steers(tx, &thread, &mut inbox)?;
-                inbox::save(tx, &thread, &inbox)?;
-                tx.thread(&thread)?.start_step()?;
+                inbox::place_steers(tx, thread)?;
+                tx.thread(thread)?.start_step()?;
                 Ok(Some(Next::Continue(match self.mind {
                     Some(_) => State::Consider { round },
                     None => State::Request { round, attempt: 1 },
                 })))
             }),
             &State::Consider { round } => {
-                let mind = self.mind.as_ref().expect("Consider only with a mind");
-                // A failed consider is skipped, not fatal: the request goes ahead without it.
-                let work = on_copy(&rt, mind.as_ref(), Work::Consider).await;
-                rt.commit(|tx| {
-                    if let Ok((base, events)) = work {
-                        apply(tx, &thread, base, events)?;
-                    }
-                    Ok(Some(Next::Continue(State::Request { round, attempt: 1 })))
-                })
+                let mind = self.mind.as_deref().expect("Consider only with a mind");
+                let next = Next::Continue(State::Request { round, attempt: 1 });
+                think(&rt, mind, Mind::consider, next).await
             }
             &State::Request { round, attempt } => self.request(&rt, round, attempt).await,
             State::Tools {
@@ -87,58 +80,37 @@ impl<M: Model> Task for Generation<M> {
                 tasks,
                 calls,
             } => {
-                let outcomes = rt.outcomes(tasks)?;
-                let results = calls
-                    .iter()
-                    .zip(&outcomes)
-                    .map(|(call, outcome)| {
-                        let output = outcome
-                            .result::<ToolOutput>()
-                            .unwrap_or_else(|_| ToolOutput::error(describe(outcome)));
-                        result_block(call, output)
-                    })
-                    .collect();
+                let results = results(&rt, tasks, calls)?;
                 let next = round + 1;
                 rt.commit(|tx| {
-                    tx.thread(&thread)?.push(Message {
-                        role: Role::User,
-                        content: results,
-                    })?;
+                    tx.thread(thread)?.push(results)?;
                     Ok(Some(Next::Continue(State::Prepare { round: next })))
                 })
             }
             State::Finish { answer } => rt.commit(|tx| {
-                let answer = answer.clone();
-                inbox::end_run(
-                    tx,
-                    &thread,
-                    Settled::Done {
-                        answer: answer.clone(),
-                    },
-                    false,
-                )?;
-                Ok(Some(Next::Complete(answer)))
+                let settled = Settled::Done {
+                    answer: answer.clone(),
+                };
+                inbox::end_run(tx, thread, settled, false)?;
+                Ok(Some(Next::Complete(answer.clone())))
             }),
         }
     }
 
-    /// Settles the run's inputs and withdraws the queue. Tool calls left without results get
-    /// "aborted" ones, so the thread stays valid for the next request.
+    /// Settles the run's inputs and withdraws the queue. The round's tool calls have all ended
+    /// by now (owned work is aborted first): each gets its result, so the thread stays valid
+    /// and the model isn't told a call that went through was aborted.
     async fn abort(&self, rt: Runtime<Self>) -> Result<()> {
-        let thread = rt.thread_id().to_string();
+        let thread = rt.thread_id();
+        let results = match rt.state() {
+            State::Tools { tasks, calls, .. } => Some(results(&rt, tasks, calls)?),
+            _ => None,
+        };
         rt.commit(|tx| {
-            if let State::Tools { calls, .. } = rt.state() {
-                let results = calls
-                    .iter()
-                    .map(|call| result_block(call, ToolOutput::error("aborted".into())))
-                    .collect();
-                tx.thread(&thread)?.push(Message {
-                    role: Role::User,
-                    content: results,
-                })?;
+            if let Some(results) = results {
+                tx.thread(thread)?.push(results)?;
             }
-            let reason = "aborted".to_string();
-            inbox::end_run(tx, &thread, Settled::Unanswered { reason }, true)?;
+            inbox::end_run(tx, thread, Settled::unanswered("aborted"), true)?;
             Ok(Some(Next::Aborted(None)))
         })
     }
@@ -160,32 +132,36 @@ impl<M: Model> Generation<M> {
             Err(error) => return self.retry(rt, round, attempt, format!("{error:#}")),
         };
 
-        let thread = rt.thread_id().to_string();
+        let thread = rt.thread_id();
         let max_rounds = self.settings.max_rounds;
+        let calls: Vec<ToolCallInput> = message
+            .tool_calls()
+            .map(|(id, name, input)| ToolCallInput {
+                call_id: id.to_string(),
+                name: name.to_string(),
+                arguments: input.clone(),
+            })
+            .collect();
         rt.commit(|tx| {
-            let calls: Vec<ToolCallInput> = message
-                .tool_calls()
-                .map(|(id, name, input)| ToolCallInput {
-                    call_id: id.to_string(),
-                    name: name.to_string(),
-                    arguments: input.clone(),
-                })
-                .collect();
             let answer = message.text();
-            tx.thread(&thread)?.push(message)?;
+            tx.thread(thread)?.push(message)?;
             if calls.is_empty() {
                 return Ok(Some(Next::Continue(State::Finish { answer })));
             }
-            if round >= max_rounds {
-                return turn_limit(tx, &thread, &calls).map(Some);
+            // Out of tool rounds: the calls get error results and the run ends.
+            if round > max_rounds {
+                close_calls(tx.thread(thread)?, "not run: turn limit")?;
+                inbox::end_run(tx, thread, Settled::unanswered("turn_limit"), false)?;
+                return Ok(Some(Next::Fail("turn limit".into())));
             }
-            let mut tasks = Vec::new();
-            let mut ids = Vec::new();
-            for call in calls {
-                ids.push(call.call_id.clone());
-                let options = TaskOptions::owned_by(rt.task_id());
-                tasks.push(tx.create_task::<ToolCall>(&thread, call, options)?);
-            }
+            let ids = calls.iter().map(|c| c.call_id.clone()).collect();
+            let tasks = calls
+                .into_iter()
+                .map(|call| {
+                    let options = TaskOptions::owned_by(rt.task_id());
+                    tx.create_task::<ToolCall>(thread, call, options)
+                })
+                .collect::<Result<Vec<_>>>()?;
             Ok(Some(Next::Wait {
                 state: State::Tools {
                     round,
@@ -208,33 +184,55 @@ impl<M: Model> Generation<M> {
             };
             return rt.sleep_until(rt.now() + backoff, next);
         }
-        let thread = rt.thread_id().to_string();
+        let thread = rt.thread_id();
         rt.commit(|tx| {
             let reason = format!("model_error: {error}");
-            inbox::end_run(tx, &thread, Settled::Unanswered { reason }, false)?;
+            inbox::end_run(tx, thread, Settled::unanswered(reason), false)?;
             Ok(Some(Next::Fail(error)))
         })
     }
 }
 
-/// Out of rounds: the calls get error results (so the thread stays valid) and the run ends.
-fn turn_limit(tx: &mut Tx, thread: &str, calls: &[ToolCallInput]) -> Result<Next<State, String>> {
-    let results = calls
+/// The round's tool results, as one message in call order, from the ended call tasks.
+fn results<M: Model>(
+    rt: &Runtime<Generation<M>>,
+    tasks: &[TaskId],
+    calls: &[String],
+) -> Result<Message> {
+    let outcomes = rt.outcomes(tasks)?;
+    let content = calls
         .iter()
-        .map(|call| {
-            result_block(
-                &call.call_id,
-                ToolOutput::error("not run: turn limit".into()),
-            )
+        .zip(&outcomes)
+        .map(|(call, outcome)| {
+            let output = outcome
+                .result::<ToolOutput>()
+                .unwrap_or_else(|_| ToolOutput::error(describe(outcome)));
+            result_block(call, output)
         })
         .collect();
-    tx.thread(thread)?.push(Message {
+    Ok(Message {
         role: Role::User,
-        content: results,
-    })?;
-    let reason = "turn_limit".to_string();
-    inbox::end_run(tx, thread, Settled::Unanswered { reason }, false)?;
-    Ok(Next::Fail("turn limit".into()))
+        content,
+    })
+}
+
+/// Gives the last message's tool calls `error` results, if it's a reply still waiting for
+/// them: every call needs a result before the next request.
+pub(crate) fn close_calls(thread: &mut Thread, error: &str) -> Result<()> {
+    let content: Vec<Block> = match thread.context().messages.last() {
+        Some(last) if last.role == Role::Assistant => last
+            .tool_calls()
+            .map(|(id, ..)| result_block(id, ToolOutput::error(error.into())))
+            .collect(),
+        _ => return Ok(()),
+    };
+    if content.is_empty() {
+        return Ok(());
+    }
+    thread.push(Message {
+        role: Role::User,
+        content,
+    })
 }
 
 fn result_block(call_id: &str, output: ToolOutput) -> Block {
@@ -245,11 +243,11 @@ fn result_block(call_id: &str, output: ToolOutput) -> Block {
     }
 }
 
-fn describe(outcome: &engine::Outcome) -> String {
+fn describe(outcome: &Outcome) -> String {
     match outcome {
-        engine::Outcome::Completed { .. } => "the tool returned an unreadable result".into(),
-        engine::Outcome::Failed { error } | engine::Outcome::Faulted { error } => error.clone(),
-        engine::Outcome::Aborted { .. } => "aborted".into(),
-        engine::Outcome::Orphaned { reason } => reason.clone(),
+        Outcome::Completed { .. } => "the tool returned an unreadable result".into(),
+        Outcome::Failed { error } | Outcome::Faulted { error } => error.clone(),
+        Outcome::Aborted { .. } => "aborted".into(),
+        Outcome::Orphaned { reason } => reason.clone(),
     }
 }

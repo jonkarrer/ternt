@@ -97,7 +97,7 @@ impl Index for Fts {
             "SELECT id, -bm25(memory_fts) AS score FROM memory_fts
              WHERE memory_fts MATCH ? AND scope IN ({})
              ORDER BY score DESC LIMIT {limit}",
-            vec!["?"; scopes.len()].join(",")
+            crate::placeholders(scopes.len())
         ))?;
         let args = std::iter::once(terms).chain(scopes.iter().map(|s| s.as_str().to_string()));
         let hits =

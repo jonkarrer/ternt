@@ -17,7 +17,10 @@ fn registry() -> Registry {
         .register(Child)
         .register(Parent)
         .register(Nap)
-        .register(Memo);
+        .register(Memo)
+        .register(Stubborn)
+        .register(Holder)
+        .register(Panics);
     registry
 }
 
@@ -38,13 +41,23 @@ async fn wait(engine: &Engine, id: TaskId) -> Outcome {
         .unwrap()
 }
 
-/// Waits until `check` holds for the task as committed.
-async fn until(engine: &Engine, id: TaskId, check: impl Fn(&TaskRecord) -> bool) {
+/// Polls until `check` holds.
+async fn eventually(check: impl Fn() -> bool) {
     let started = Instant::now();
-    while !engine.task(id).unwrap().is_some_and(|t| check(&t)) {
-        assert!(started.elapsed() < T, "timed out waiting on task {id}");
+    while !check() {
+        assert!(started.elapsed() < T, "timed out");
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
+}
+
+/// Waits until `check` holds for the task as committed.
+async fn until(engine: &Engine, id: TaskId, check: impl Fn(&TaskRecord) -> bool) {
+    eventually(|| engine.task(id).unwrap().is_some_and(|t| check(&t))).await;
+}
+
+/// Waits until `check` holds for the engine's in-memory state.
+async fn until_inner(engine: &Engine, check: impl Fn(&Inner) -> bool) {
+    eventually(|| check(&engine.shared.inner.lock().unwrap())).await;
 }
 
 fn messages(engine: &Engine, thread: &str) -> Vec<String> {
@@ -639,4 +652,226 @@ async fn docs_commit_with_everything_else() {
         })
         .unwrap();
     assert_eq!(reopened.doc::<u32>("count").unwrap(), None);
+}
+
+/// Hangs until aborted; its abort handler never returns.
+struct Stubborn;
+
+impl Task for Stubborn {
+    type Input = ();
+    type State = ();
+    type Output = ();
+    const NAME: &'static str = "test.stubborn";
+
+    fn initial(&self, _: &()) {}
+
+    async fn run(&self, rt: Runtime<Self>) -> Result<()> {
+        rt.cancelled().await;
+        Err(anyhow!("cancelled"))
+    }
+
+    async fn abort(&self, _: Runtime<Self>) -> Result<()> {
+        std::future::pending().await
+    }
+}
+
+/// Spawns a `Stubborn` it owns, then hangs until aborted.
+struct Holder;
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "phase")]
+enum HolderState {
+    Spawn,
+    Hold,
+}
+
+impl Task for Holder {
+    type Input = ();
+    type State = HolderState;
+    type Output = ();
+    const NAME: &'static str = "test.holder";
+
+    fn initial(&self, _: &()) -> HolderState {
+        HolderState::Spawn
+    }
+
+    async fn run(&self, rt: Runtime<Self>) -> Result<()> {
+        match rt.state() {
+            HolderState::Spawn => rt.commit(|tx| {
+                let options = TaskOptions::owned_by(rt.task_id());
+                tx.create_task::<Stubborn>(rt.thread_id(), (), options)?;
+                Ok(Some(Next::Continue(HolderState::Hold)))
+            }),
+            HolderState::Hold => {
+                rt.cancelled().await;
+                Err(anyhow!("cancelled"))
+            }
+        }
+    }
+}
+
+/// Writes to the thread inside a commit, then panics there.
+struct Panics;
+
+impl Task for Panics {
+    type Input = ();
+    type State = ();
+    type Output = ();
+    const NAME: &'static str = "test.panics";
+
+    fn initial(&self, _: &()) {}
+
+    async fn run(&self, rt: Runtime<Self>) -> Result<()> {
+        rt.commit(|tx| {
+            tx.thread(rt.thread_id())?.push(Message::user("never"))?;
+            panic!("in commit")
+        })
+    }
+}
+
+/// `Parent` at a newer version.
+struct ParentV2;
+
+impl Task for ParentV2 {
+    type Input = ParentInput;
+    type State = ParentState;
+    type Output = i64;
+    const NAME: &'static str = "test.parent";
+    const VERSION: u32 = 2;
+
+    fn initial(&self, _: &ParentInput) -> ParentState {
+        ParentState::Spawn
+    }
+
+    async fn run(&self, _: Runtime<Self>) -> Result<()> {
+        Err(anyhow!("never runs"))
+    }
+}
+
+#[tokio::test]
+async fn a_completing_task_needs_no_definition() {
+    for with_v2 in [false, true] {
+        let store = store();
+        let engine = engine(&store);
+        let input = ParentInput {
+            children: vec![-1],
+            policy: Policy::AllSettled,
+            finish_early: true,
+        };
+        let id = engine
+            .create_task::<Parent>("t1", input, TaskOptions::default())
+            .unwrap();
+        until(&engine, id, |t| {
+            matches!(t.state, TaskState::Completing { .. })
+        })
+        .await;
+        engine.close().unwrap();
+
+        // Its outcome is decided, so neither a missing nor a newer definition changes it.
+        let mut registry = Registry::new();
+        registry.register(Child);
+        if with_v2 {
+            registry.register(ParentV2);
+        }
+        let engine = Engine::open(store.clone(), registry, Settings::default()).unwrap();
+        engine.resume();
+        let child = engine
+            .live_tasks()
+            .into_iter()
+            .find(|t| t.owner == Some(id))
+            .unwrap();
+        until(&engine, child.id, |t| {
+            matches!(t.state, TaskState::Running { .. })
+        })
+        .await;
+        assert!(!engine.task(child.id).unwrap().unwrap().abort_requested);
+        engine.abort_task(child.id).unwrap();
+        assert_eq!(
+            wait(&engine, id).await,
+            Outcome::Completed {
+                result: serde_json::json!(0)
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn aborting_a_completing_task_aborts_what_it_owns() {
+    let engine = engine(&store());
+    let input = ParentInput {
+        children: vec![-1],
+        policy: Policy::AllSettled,
+        finish_early: true,
+    };
+    let id = engine
+        .create_task::<Parent>("t1", input, TaskOptions::default())
+        .unwrap();
+    until(&engine, id, |t| {
+        matches!(t.state, TaskState::Completing { .. })
+    })
+    .await;
+    engine.abort_task(id).unwrap();
+    // The outcome was decided; the owned work is undone.
+    assert_eq!(
+        wait(&engine, id).await,
+        Outcome::Completed {
+            result: serde_json::json!(0)
+        }
+    );
+    assert_eq!(messages(&engine, "t1"), ["aborted -1"]);
+}
+
+#[tokio::test]
+async fn a_panic_in_a_commit_is_faulted_and_rolled_back() {
+    let engine = engine(&store());
+    let id = engine
+        .create_task::<Panics>("t1", (), TaskOptions::default())
+        .unwrap();
+    assert_eq!(
+        wait(&engine, id).await,
+        Outcome::Faulted {
+            error: "panicked: in commit".into()
+        }
+    );
+    assert!(messages(&engine, "t1").is_empty());
+    // The engine still works.
+    let id = engine
+        .create_task::<Steps>("t1", "after".into(), TaskOptions::default())
+        .unwrap();
+    assert!(wait(&engine, id).await.is_completed());
+}
+
+#[tokio::test]
+async fn ended_tasks_leave_no_bookkeeping() {
+    let engine = engine(&store());
+    let id = engine
+        .create_task::<Steps>("t1", "hello".into(), TaskOptions::default())
+        .unwrap();
+    wait(&engine, id).await;
+    until_inner(&engine, |inner| inner.running.is_empty()).await;
+    let inner = engine.shared.inner.lock().unwrap();
+    assert!(inner.progress.is_empty(), "{:?}", inner.progress);
+}
+
+#[tokio::test]
+async fn a_close_counts_no_restart_for_an_owner_waiting_to_abort() {
+    let store = store();
+    let engine = engine(&store);
+    let id = engine
+        .create_task::<Holder>("t1", (), TaskOptions::default())
+        .unwrap();
+    until(&engine, id, |t| {
+        t.state.checkpoint() == Some(&serde_json::json!({ "phase": "Hold" }))
+            && matches!(t.state, TaskState::Running { .. })
+    })
+    .await;
+    engine.abort_task(id).unwrap();
+    // Its phase stops; its abort handler then waits on the child's, which never ends.
+    until_inner(&engine, |inner| !inner.running.contains_key(&id)).await;
+    engine.close().unwrap();
+
+    let reopened = Engine::open(store.clone(), registry(), Settings::default()).unwrap();
+    let task = reopened.task(id).unwrap().unwrap();
+    assert!(task.abort_requested);
+    assert_eq!(task.restarts, 0);
 }

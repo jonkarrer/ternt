@@ -8,7 +8,7 @@ use anyhow::Result;
 use engine::{Next, Runtime, Task};
 use serde::{Deserialize, Serialize};
 
-use crate::{Mind, Settings, Work, apply, on_copy};
+use crate::{Mind, Settings, Work, think};
 
 pub(crate) const NAME: &str = "agent.idle";
 
@@ -29,7 +29,7 @@ pub struct IdleInput {
     pub since: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum State {
     Dream,
@@ -47,36 +47,25 @@ impl Task for Idle {
     }
 
     async fn run(&self, rt: Runtime<Self>) -> Result<()> {
-        let Some(mind) = &self.mind else {
+        let Some(mind) = self.mind.as_deref() else {
             return rt.commit(|_| Ok(Some(Next::Complete(()))));
         };
-        let since = rt.input().since;
-        let (at, next) = match rt.state() {
-            State::Dream => (since + self.settings.dream_after_ms, Some(State::Settle)),
-            State::Settle => (since + self.settings.settle_after_ms, None),
+        let (after, work, next): (_, Work, _) = match rt.state() {
+            State::Dream => (
+                self.settings.dream_after_ms,
+                Mind::dream,
+                Next::Continue(State::Settle),
+            ),
+            State::Settle => (
+                self.settings.settle_after_ms,
+                Mind::settle,
+                Next::Complete(()),
+            ),
         };
+        let at = rt.input().since + after;
         if rt.now() < at {
-            let state = match rt.state() {
-                State::Dream => State::Dream,
-                State::Settle => State::Settle,
-            };
-            return rt.sleep_until(at, state);
+            return rt.sleep_until(at, *rt.state());
         }
-        let work = match rt.state() {
-            State::Dream => Work::Dream,
-            State::Settle => Work::Settle,
-        };
-        let work = on_copy(&rt, mind.as_ref(), work).await;
-        let thread = rt.thread_id().to_string();
-        rt.commit(|tx| {
-            // A failed dream or settle is skipped, not fatal: the thread just stays as it is.
-            if let Ok((base, events)) = work {
-                apply(tx, &thread, base, events)?;
-            }
-            Ok(Some(match next {
-                Some(state) => Next::Continue(state),
-                None => Next::Complete(()),
-            }))
-        })
+        think(&rt, mind, work, next).await
     }
 }

@@ -138,7 +138,8 @@ pub fn texts(checkpoint: &Checkpoint) -> Vec<(Source, String)> {
 
 /// A regex, plus what must not come right before or after a match: Rust's `regex` has no
 /// lookaround, so `not_after` is tested against the text before the match (anchor it with `$`)
-/// and `not_before` against the text after it (anchor it with `^`).
+/// and `not_before` against the text after it (anchor it with `^`). A `'` in any of them also
+/// matches the typographic `’` that phones and editors type.
 pub struct Pattern {
     regex: Regex,
     not_after: Option<Regex>,
@@ -149,19 +150,19 @@ impl Pattern {
     /// Panics on an invalid regex: patterns are written in code.
     pub fn new(regex: &str) -> Self {
         Self {
-            regex: Regex::new(regex).expect("valid pattern"),
+            regex: compile(regex),
             not_after: None,
             not_before: None,
         }
     }
 
     pub fn not_after(mut self, regex: &str) -> Self {
-        self.not_after = Some(Regex::new(regex).expect("valid pattern"));
+        self.not_after = Some(compile(regex));
         self
     }
 
     pub fn not_before(mut self, regex: &str) -> Self {
-        self.not_before = Some(Regex::new(regex).expect("valid pattern"));
+        self.not_before = Some(compile(regex));
         self
     }
 
@@ -179,6 +180,16 @@ impl Pattern {
             (!blocked).then_some(m.range())
         })
     }
+}
+
+impl From<&str> for Pattern {
+    fn from(regex: &str) -> Self {
+        Pattern::new(regex)
+    }
+}
+
+fn compile(regex: &str) -> Regex {
+    Regex::new(&regex.replace('\'', "['’]")).expect("valid pattern")
 }
 
 /// The most common detector: any pattern matching a message's text fires.
@@ -212,12 +223,6 @@ impl PatternDetector {
     pub fn pattern(mut self, pattern: impl Into<Pattern>) -> Self {
         self.patterns.push(pattern.into());
         self
-    }
-}
-
-impl From<&str> for Pattern {
-    fn from(regex: &str) -> Self {
-        Pattern::new(regex)
     }
 }
 

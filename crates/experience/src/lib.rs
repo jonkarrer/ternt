@@ -18,7 +18,7 @@ use inference::providers::Api;
 use inference::{Provider, Request};
 use memory::{Body, Card, Episode, Item, Memory, Scope, Source, Write};
 use serde_json::{Value, json};
-use state::{Event, Recalled, Thread};
+use state::{Checkpoint, Event, Recalled, Thread};
 
 pub mod settle;
 pub use settle::RESUME_HANDOFF;
@@ -39,6 +39,17 @@ pub struct Scopes {
     pub read: Vec<Scope>,
     /// Where new memories go; also searched.
     pub write: Scope,
+}
+
+impl Scopes {
+    /// Every scope a search looks in.
+    fn searched(&self) -> Vec<Scope> {
+        let mut scopes = self.read.clone();
+        if !scopes.contains(&self.write) {
+            scopes.push(self.write.clone());
+        }
+        scopes
+    }
 }
 
 /// What Experience decided about a signal.
@@ -129,20 +140,17 @@ impl<A: Api> Experience<A> {
             return Ok(Outcome::default());
         }
 
+        let (recalls, judged): (Vec<&Signal>, Vec<&Signal>) =
+            signals.iter().partition(|s| s.intent == Intent::Recall);
         let mut planned = Vec::new();
-        let mut queries: Vec<&str> = Vec::new();
-        for signal in signals.iter().filter(|s| s.intent == Intent::Recall) {
-            if !queries.contains(&signal.text.as_str()) {
-                queries.push(&signal.text);
-                planned.push(Decision::Recall {
-                    query: signal.text.clone(),
-                });
+        for signal in recalls {
+            let recall = Decision::Recall {
+                query: signal.text.clone(),
+            };
+            if !planned.contains(&recall) {
+                planned.push(recall);
             }
         }
-        let judged: Vec<&Signal> = signals
-            .iter()
-            .filter(|s| s.intent != Intent::Recall)
-            .collect();
         if !judged.is_empty() {
             match self.decide(&judged, &thread.id).await {
                 Ok(decisions) => planned.extend(decisions),
@@ -155,16 +163,13 @@ impl<A: Api> Experience<A> {
         let mut outcome = Outcome::default();
         let mut in_context = recalled_in_context(thread);
         for decision in planned {
-            match self.execute(&decision, &mut in_context) {
-                Ok((recalled, written)) => {
-                    outcome.recalled.extend(recalled);
-                    outcome.written.extend(written);
-                    outcome.decisions.push(decision);
-                }
-                Err(error) => outcome.decisions.push(Decision::Ignore {
+            let decision = match self.execute(&decision, &mut in_context, &mut outcome) {
+                Ok(()) => decision,
+                Err(error) => Decision::Ignore {
                     reason: format!("{decision:?} failed: {error:#}"),
-                }),
-            }
+                },
+            };
+            outcome.decisions.push(decision);
         }
         let recalled = outcome
             .recalled
@@ -195,31 +200,10 @@ impl<A: Api> Experience<A> {
     /// Rewrites the thread's card when turns finished since the last one.
     async fn card(&self, thread: &Thread) -> Result<Option<Card>> {
         let previous = self.memory.card(&thread.id)?;
-        let start = previous.as_ref().map_or(0, |c| c.to + 1);
-        let checkpoints = thread.checkpoints();
-        let Some(end) = checkpoints
-            .iter()
-            .skip(start)
-            .rev()
-            .find(|c| c.event == Event::TurnEnded)
-            .map(|c| c.id)
+        let previous = previous.as_ref().map(|c| (c.text.as_str(), c.to));
+        let Some((end, input)) = card_input(thread, previous, "Current card", CARD_INPUT_CHARS)
         else {
             return Ok(None);
-        };
-        let messages = checkpoints[start..=end]
-            .iter()
-            .filter_map(|c| match &c.event {
-                Event::Message(m) => Some(m),
-                _ => None,
-            });
-        let since = transcript(messages);
-        let since = match since.char_indices().nth_back(CARD_INPUT_CHARS) {
-            Some((cut, _)) => &since[cut..],
-            None => &since,
-        };
-        let input = match &previous {
-            Some(card) => format!("Current card:\n{}\n\nSince then:\n{since}", card.text),
-            None => since.to_string(),
         };
         let text = self.ask(CARD_PROMPT, input).await?;
         Ok(Some(self.memory.add_card(
@@ -232,8 +216,7 @@ impl<A: Api> Experience<A> {
 
     /// One model call for every retain/refine signal, with the memories related to them.
     async fn decide(&self, signals: &[&Signal], thread: &str) -> Result<Vec<Decision>> {
-        let mut scopes = vec![self.scopes.write.clone()];
-        scopes.extend(self.scopes.read.iter().cloned());
+        let scopes = self.scopes.searched();
         let mut related: HashMap<i64, Item> = HashMap::new();
         for signal in signals {
             for hit in self.memory.search(&signal.text, &scopes, RELATED_LIMIT)? {
@@ -265,33 +248,29 @@ impl<A: Api> Experience<A> {
             .collect())
     }
 
-    /// Returns (recalled, written).
+    /// Adds what it recalled or wrote to `outcome`.
     fn execute(
         &self,
         decision: &Decision,
         in_context: &mut HashSet<i64>,
-    ) -> Result<(Vec<Item>, Vec<Item>)> {
-        Ok(match decision {
-            Decision::Recall { query } => {
-                let recalled = self
-                    .memory
-                    .search(query, &self.scopes.read, RECALL_LIMIT)?
+        outcome: &mut Outcome,
+    ) -> Result<()> {
+        match decision {
+            Decision::Recall { query } => outcome.recalled.extend(
+                self.memory
+                    .search(query, &self.scopes.searched(), RECALL_LIMIT)?
                     .into_iter()
                     .map(|hit| hit.item)
-                    .filter(|item| in_context.insert(item.id))
-                    .collect();
-                (recalled, vec![])
-            }
-            Decision::Retain(write) => (vec![], vec![self.memory.write(write.clone())?]),
-            Decision::Refine { id, write } => {
-                (vec![], vec![self.memory.replace(*id, write.clone())?])
-            }
-            Decision::Forget { id } => {
-                self.memory.forget(*id)?;
-                (vec![], vec![])
-            }
-            Decision::Ignore { .. } => (vec![], vec![]),
-        })
+                    .filter(|item| in_context.insert(item.id)),
+            ),
+            Decision::Retain(write) => outcome.written.push(self.memory.write(write.clone())?),
+            Decision::Refine { id, write } => outcome
+                .written
+                .push(self.memory.replace(*id, write.clone())?),
+            Decision::Forget { id } => self.memory.forget(*id)?,
+            Decision::Ignore { .. } => {}
+        }
+        Ok(())
     }
 
     /// An episode for the finished turns since the last one, once there are enough.
@@ -301,23 +280,14 @@ impl<A: Api> Experience<A> {
             .episodes(&thread.id)?
             .last()
             .map_or(0, |e| e.to + 1);
-        let ends: Vec<usize> = thread.checkpoints()[start.min(thread.checkpoints().len())..]
-            .iter()
-            .filter(|c| c.event == Event::TurnEnded)
-            .map(|c| c.id)
-            .collect();
+        let ends = turn_ends(thread, start);
         let Some(&end) = ends.last() else {
             return Ok(None);
         };
         if ends.len() < self.summarize_after_turns {
             return Ok(None);
         }
-        let messages = thread.checkpoints()[start..=end]
-            .iter()
-            .filter_map(|c| match &c.event {
-                Event::Message(m) => Some(m),
-                _ => None,
-            });
+        let messages = messages(&thread.checkpoints()[start..=end]);
         let summary = self.ask(SUMMARIZE_PROMPT, transcript(messages)).await?;
         Ok(Some(self.memory.add_episode(
             &thread.id,
@@ -355,16 +325,22 @@ impl<A: Api> Experience<A> {
             .ask(REFINE_PROMPT, serde_json::to_string(&payload)?)
             .await?;
         let by_id: HashMap<i64, Item> = remaining.into_iter().map(|i| (i.id, i)).collect();
-        for raw in json_array(&reply)? {
-            match to_decision(&raw, &self.scopes.write, None, &by_id) {
-                Some(Decision::Forget { id }) => {
+        refined.extend(self.apply_refinements(&reply, &by_id)?);
+        Ok(refined)
+    }
+
+    /// Carries out the refine and forget decisions in `reply` about the memories `shown`.
+    fn apply_refinements(&self, reply: &str, shown: &HashMap<i64, Item>) -> Result<Vec<Item>> {
+        // Not current once an earlier decision replaced or forgot it: skipped.
+        let current = |id| self.memory.get(id).map(|item| item.is_some());
+        let mut refined = Vec::new();
+        for raw in json_array(reply)? {
+            match to_decision(&raw, &self.scopes.write, None, shown) {
+                Some(Decision::Forget { id }) if current(id)? => {
                     self.memory.forget(id)?;
-                    refined.push(by_id[&id].clone());
+                    refined.push(shown[&id].clone());
                 }
-                // Skipped when an earlier decision already replaced or forgot it.
-                Some(Decision::Refine { id, write })
-                    if self.memory.get(id).is_ok_and(|item| item.is_some()) =>
-                {
+                Some(Decision::Refine { id, write }) if current(id)? => {
                     refined.push(self.memory.replace(id, write)?);
                 }
                 _ => {}
@@ -403,20 +379,27 @@ impl<A: Api> Experience<A> {
     }
 }
 
-/// Memories recalled since the context was last compacted, so they aren't recalled twice.
+/// Memories recalled into messages still in the context, so they aren't recalled twice. Follows
+/// the context as State builds it: per message, its role and the memories recalled into it.
 fn recalled_in_context(thread: &Thread) -> HashSet<i64> {
-    let checkpoints = thread.checkpoints();
-    let start = checkpoints
-        .iter()
-        .rposition(|c| matches!(c.event, Event::Replaced { .. }))
-        .map_or(0, |i| i + 1);
-    checkpoints[start..]
-        .iter()
-        .flat_map(|c| match &c.event {
-            Event::Considered { recalled, .. } => recalled.iter().map(|r| r.id).collect(),
-            _ => Vec::new(),
-        })
-        .collect()
+    let mut messages: Vec<(Role, Vec<i64>)> = Vec::new();
+    for checkpoint in thread.checkpoints() {
+        match &checkpoint.event {
+            Event::Message(m) => messages.push((m.role, Vec::new())),
+            Event::Replaced { range, with } => {
+                messages.splice(range.clone(), with.iter().map(|m| (m.role, Vec::new())));
+            }
+            Event::Considered { recalled, .. } if !recalled.is_empty() => {
+                let ids = recalled.iter().map(|r| r.id);
+                match messages.last_mut() {
+                    Some((Role::User, recalled_here)) => recalled_here.extend(ids),
+                    _ => messages.push((Role::User, ids.collect())),
+                }
+            }
+            _ => {}
+        }
+    }
+    messages.into_iter().flat_map(|(_, ids)| ids).collect()
 }
 
 /// Where to cut so the kept part starts at a turn's opening message and holds at least
@@ -429,9 +412,59 @@ fn compaction_cut(messages: &[Message], keep: usize) -> Option<usize> {
                 .iter()
                 .any(|b| matches!(b, Block::ToolResult { .. }))
     };
-    (1..=messages.len().saturating_sub(keep))
+    (1..=messages.len().saturating_sub(keep.max(1)))
         .rev()
         .find(|&i| opens_turn(&messages[i]))
+}
+
+/// The checkpoints at which a turn ended, from `start` on.
+fn turn_ends(thread: &Thread, start: usize) -> Vec<usize> {
+    thread
+        .checkpoints()
+        .iter()
+        .skip(start)
+        .filter(|c| c.event == Event::TurnEnded)
+        .map(|c| c.id)
+        .collect()
+}
+
+fn messages(checkpoints: &[Checkpoint]) -> impl Iterator<Item = &Message> {
+    checkpoints.iter().filter_map(|c| match &c.event {
+        Event::Message(m) => Some(m),
+        _ => None,
+    })
+}
+
+/// For rewriting a card that covers checkpoints up to `previous`'s `to`: the last turn end since,
+/// and the input: the card (headed `label`), then the newest `max` characters of what happened
+/// since. `None` when no turn finished since.
+fn card_input(
+    thread: &Thread,
+    previous: Option<(&str, usize)>,
+    label: &str,
+    max: usize,
+) -> Option<(usize, String)> {
+    let start = previous.map_or(0, |(_, to)| to + 1);
+    let end = *turn_ends(thread, start).last()?;
+    let since = last_chars(
+        &transcript(messages(&thread.checkpoints()[start..=end])),
+        max,
+    );
+    let input = match previous {
+        Some((text, _)) => format!("{label}:\n{text}\n\nSince then:\n{since}"),
+        None => since,
+    };
+    Some((end, input))
+}
+
+/// The last `max` characters, marked "…" when cut.
+fn last_chars(text: &str, max: usize) -> String {
+    let count = text.chars().count();
+    if count <= max {
+        return text.to_string();
+    }
+    let tail: String = text.chars().skip(count - max).collect();
+    format!("…{tail}")
 }
 
 /// Messages as plain text, for summaries.
@@ -475,9 +508,15 @@ fn normalize(text: &str) -> String {
 
 /// The JSON array in a model's reply, ignoring any text around it.
 fn json_array(reply: &str) -> Result<Vec<Value>> {
-    let start = reply.find('[').context("no JSON array in reply")?;
-    let end = reply.rfind(']').context("no JSON array in reply")?;
-    serde_json::from_str(&reply[start..=end]).context("reply isn't a JSON array")
+    reply
+        .match_indices('[')
+        .find_map(|(start, _)| {
+            serde_json::Deserializer::from_str(&reply[start..])
+                .into_iter::<Vec<Value>>()
+                .next()?
+                .ok()
+        })
+        .context("no JSON array in reply")
 }
 
 /// One raw decision from the model. Refine and forget only work on ids it was shown.
@@ -487,18 +526,12 @@ fn to_decision(
     source: Option<Source>,
     shown: &HashMap<i64, Item>,
 ) -> Option<Decision> {
-    let str_of = |k: &str| {
-        raw[k]
-            .as_str()
-            .filter(|s| !s.trim().is_empty())
-            .map(String::from)
-    };
     let shown_item = || raw["id"].as_i64().and_then(|id| shown.get(&id));
     match raw["action"].as_str()? {
         "retain" => {
             let kind = raw["kind"].as_str().unwrap_or("semantic");
             let mut write = Write::new(scope.clone(), body(raw, kind, None)?);
-            write.key = str_of("key");
+            write.key = field(raw, "key");
             write.source = source;
             Some(Decision::Retain(write))
         }
@@ -516,49 +549,44 @@ fn to_decision(
             id: shown_item()?.id,
         }),
         "ignore" => Some(Decision::Ignore {
-            reason: str_of("reason").unwrap_or_default(),
+            reason: field(raw, "reason").unwrap_or_default(),
         }),
         _ => None,
     }
 }
 
+/// A non-blank string field.
+fn field(raw: &Value, key: &str) -> Option<String> {
+    raw[key]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .map(String::from)
+}
+
 /// A memory body from raw fields; a refine keeps old procedural fields it doesn't restate.
 fn body(raw: &Value, kind: &str, old: Option<&Body>) -> Option<Body> {
-    let str_of = |k: &str| {
-        raw[k]
-            .as_str()
-            .filter(|s| !s.trim().is_empty())
-            .map(String::from)
-    };
     match kind {
         "semantic" => Some(Body::Semantic {
-            text: str_of("text")?,
+            text: field(raw, "text")?,
         }),
         "procedural" => {
-            let (old_name, old_trigger, old_steps) = match old {
+            let (name, trigger, steps) = match old {
                 Some(Body::Procedural {
                     name,
                     trigger,
                     steps,
-                }) => (
-                    Some(name.clone()),
-                    Some(trigger.clone()),
-                    Some(steps.clone()),
-                ),
+                }) => (Some(name), Some(trigger), Some(steps)),
                 _ => (None, None, None),
             };
-            let steps = raw["steps"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|s| s.as_str().map(String::from))
-                        .collect()
-                })
-                .or(old_steps)?;
+            let new_steps = raw["steps"].as_array().map(|a| {
+                a.iter()
+                    .filter_map(|s| s.as_str().map(String::from))
+                    .collect()
+            });
             Some(Body::Procedural {
-                name: str_of("name").or(old_name)?,
-                trigger: str_of("trigger").or(old_trigger)?,
-                steps,
+                name: field(raw, "name").or_else(|| name.cloned())?,
+                trigger: field(raw, "trigger").or_else(|| trigger.cloned())?,
+                steps: new_steps.or_else(|| steps.cloned())?,
             })
         }
         _ => None,
@@ -660,6 +688,97 @@ pub(crate) mod tests {
         assert!(outcome.recalled.is_empty());
     }
 
+    /// `Scopes::write` is also searched: what was retained there can be recalled.
+    #[tokio::test]
+    async fn recalls_from_the_write_scope() {
+        let mut exp = experience("unused");
+        exp.scopes.read = vec![Scope::global()];
+        let fact = exp
+            .memory()
+            .write(Write::fact(me(), "The user's name is Jon."))
+            .unwrap();
+        let mut thread = Thread::new("t1");
+        thread.start_turn(Message::user("What's my name?")).unwrap();
+        let outcome = exp.consider(&mut thread).await.unwrap();
+        assert_eq!(outcome.recalled, [fact]);
+    }
+
+    /// Compaction that keeps the message a memory was recalled into doesn't make it recallable
+    /// again; one that drops it does.
+    #[tokio::test]
+    async fn recalls_again_only_once_compacted_away() {
+        let exp = experience("unused");
+        let fact = exp
+            .memory()
+            .write(Write::fact(me(), "The user's name is Jon."))
+            .unwrap();
+        let mut thread = Thread::new("t1");
+        turn(&mut thread, "Plan a trip to Kyoto.", "Sure.");
+        thread.start_turn(Message::user("What's my name?")).unwrap();
+        assert_eq!(exp.consider(&mut thread).await.unwrap().recalled, [fact]);
+        thread.push(Message::assistant("Jon.")).unwrap();
+        thread.end_turn().unwrap();
+
+        // Drops the Kyoto turn, keeps the one holding the recalled memory.
+        thread
+            .replace(0..2, vec![Message::user("<summary>Kyoto</summary>")])
+            .unwrap();
+        thread
+            .start_turn(Message::user("Remind me, what's my name?"))
+            .unwrap();
+        assert!(exp.consider(&mut thread).await.unwrap().recalled.is_empty());
+        thread.end_turn().unwrap();
+
+        let len = thread.context().messages.len();
+        thread
+            .replace(0..len, vec![Message::user("<summary>All</summary>")])
+            .unwrap();
+        thread
+            .start_turn(Message::user("What's my name again?"))
+            .unwrap();
+        assert_eq!(exp.consider(&mut thread).await.unwrap().recalled.len(), 1);
+    }
+
+    /// Later decisions about a memory an earlier one already replaced or forgot are skipped.
+    #[test]
+    fn refinements_skip_what_was_already_handled() {
+        let exp = experience("unused");
+        let memory = exp.memory();
+        let a = memory
+            .write(Write::fact(me(), "Deploys are daily."))
+            .unwrap();
+        let b = memory
+            .write(Write::fact(me(), "Deploys happen daily."))
+            .unwrap();
+        let shown = HashMap::from([(a.id, a.clone()), (b.id, b.clone())]);
+        let reply = format!(
+            r#"[{{"action":"refine","id":{a},"text":"Deploys are hourly."}},
+                {{"action":"forget","id":{a}}},
+                {{"action":"forget","id":{b}}},
+                {{"action":"forget","id":{b}}}]"#,
+            a = a.id,
+            b = b.id
+        );
+        let refined = exp.apply_refinements(&reply, &shown).unwrap();
+        let texts: Vec<_> = refined.iter().map(|i| i.body.text()).collect();
+        assert_eq!(texts, ["Deploys are hourly.", "Deploys happen daily."]);
+        let left: Vec<_> = memory.list(&[me()], 10).unwrap();
+        assert_eq!(left, [refined[0].clone()]);
+    }
+
+    #[test]
+    fn json_array_ignores_brackets_around_it() {
+        let reply = "Decisions [2 of them]:\n[{\"action\":\"forget\",\"id\":1}, {\"action\":\"forget\",\"id\":2}]\nSee [1].";
+        assert_eq!(json_array(reply).unwrap().len(), 2);
+        assert!(json_array("no array [here]").is_err());
+    }
+
+    #[test]
+    fn last_chars_keeps_exactly_max() {
+        assert_eq!(last_chars("héllo wörld", 5), "…wörld");
+        assert_eq!(last_chars("héllo", 5), "héllo");
+    }
+
     #[test]
     fn decisions_only_touch_shown_memories() {
         let memory = Memory::in_memory().unwrap();
@@ -719,6 +838,18 @@ pub(crate) mod tests {
         // Keep 3: index 3 is a tool call, 4 a tool result; the last turn opens at 2.
         assert_eq!(compaction_cut(&messages, 3), Some(2));
         assert_eq!(compaction_cut(&messages, 5), None);
+    }
+
+    /// Keeping nothing still cuts at a turn's opening message, not past the end.
+    #[test]
+    fn compaction_keeping_nothing() {
+        let messages = vec![
+            Message::user("a"),
+            Message::assistant("b"),
+            Message::user("c"),
+            Message::assistant("d"),
+        ];
+        assert_eq!(compaction_cut(&messages, 0), Some(2));
     }
 
     pub fn key() -> String {

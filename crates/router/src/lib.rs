@@ -27,7 +27,7 @@ pub mod search;
 
 pub use cues::{RouteCue, RouteDetector, RouteSignal};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -166,10 +166,9 @@ pub struct Router<A> {
     memory: Arc<Memory>,
     provider: Provider<A>,
     request: Request,
-    /// Idle time after which a thread is cool (and dreams).
+    /// Idle time after which a thread is cool: keep it equal to the agent's `dream_after_ms`,
+    /// when the thread dreams. (Settled comes from the resume card, not from a timer.)
     pub dream_after: Duration,
-    /// Idle time after which a thread settles into its resume card.
-    pub settle_after: Duration,
 }
 
 impl<A: Api> Router<A> {
@@ -183,7 +182,6 @@ impl<A: Api> Router<A> {
             provider,
             request,
             dream_after: Duration::from_secs(30 * 60),
-            settle_after: Duration::from_secs(2 * 3600),
         }
     }
 
@@ -195,12 +193,10 @@ impl<A: Api> Router<A> {
             .map(|info| {
                 let card = self.memory.card(&info.id)?;
                 let resume = self.memory.resume(&info.id)?;
-                let settled = resume.as_ref().is_some_and(|r| r.turns == info.turns);
-                let active_at = match &resume {
-                    Some(resume) if settled => resume.active_at,
-                    _ => info.active_at,
-                };
-                let phase = if settled {
+                // Settled until a turn after the resume card.
+                let settled = resume.as_ref().filter(|r| r.turns == info.turns);
+                let active_at = settled.map_or(info.active_at, |r| r.active_at);
+                let phase = if settled.is_some() {
                     Phase::Settled
                 } else if elapsed(now, active_at) < self.dream_after {
                     Phase::Hot
@@ -238,59 +234,54 @@ impl<A: Api> Router<A> {
             .last
             .as_ref()
             .and_then(|id| threads.iter().find(|t| t.info.id == *id));
-        let recent_last = last.filter(|t| elapsed(input.now, t.active_at) < CONTINUATION_WINDOW);
 
         // 1. Cues.
-        if let (Some(new), None) = (strong_new, reference) {
+        if let Some(new) = strong_new
+            && reference.is_none()
+        {
             return Ok(Route::new(By::Rule, &new.reason));
         }
-        if let (Some(cont), false, None, Some(last)) = (goes_on, any_new, reference, recent_last) {
+        if let Some(cont) = goes_on
+            && !any_new
+            && reference.is_none()
+            && let Some(last) =
+                last.filter(|t| elapsed(input.now, t.active_at) < CONTINUATION_WINDOW)
+        {
             return Ok(Route::cont(&last.info.id, By::Rule, &cont.reason));
         }
         if threads.is_empty() {
             return Ok(Route::new(By::Rule, "no earlier threads"));
         }
 
+        // 2. Continuity: stay in the hot thread unless the input is self-contained and shares
+        // nothing with it (a silent change of subject).
+        let last_hot = last.filter(|t| t.phase == Phase::Hot && !any_new);
+        if let Some(last) = last_hot.filter(|_| reference.is_none())
+            && still_on_subject(store, last, &input.text)?
+        {
+            return Ok(Route::cont(
+                &last.info.id,
+                By::Rule,
+                "the conversation is still going",
+            ));
+        }
+
         // The recent threads, the last one, and older ones whose cards match: a named thread,
         // or else the whole input.
         let query = reference.map_or(input.text.clone(), RouteSignal::spanned);
         let all_cards = self.memory.search_cards(&query, OLDER_THREADS)?;
-        let mut pool: Vec<&ThreadView> = threads.iter().take(ROUTE_THREADS).collect();
         let older = all_cards
             .iter()
             .filter_map(|(id, _)| threads.iter().find(|t| t.info.id == *id));
+        let mut pool: Vec<&ThreadView> = threads.iter().take(ROUTE_THREADS).collect();
         for view in last.into_iter().chain(older) {
             if !pool.iter().any(|t| t.info.id == view.info.id) {
                 pool.push(view);
             }
         }
-        let docs: HashMap<String, String> = pool
-            .iter()
-            .map(|t| (t.info.id.clone(), card_doc(t)))
-            .collect();
-
-        // 2. Continuity: stay in the hot thread unless the input is self-contained and shares
-        // nothing with it (a silent change of subject).
-        let words = terms_of(&input.text);
-        let last_hot = last.filter(|t| t.phase == Phase::Hot && !any_new && reference.is_none());
-        if let Some(last) = last_hot {
-            let mut talk = docs[&last.info.id].clone();
-            for message in store.recent_messages(&last.info.id, RECENT_MESSAGES)? {
-                talk.push('\n');
-                talk.push_str(&message.text());
-            }
-            let talk = terms_of(&talk);
-            if words.len() < DRIFT_MIN_TERMS || words.iter().any(|w| talk.contains(w)) {
-                return Ok(Route::cont(
-                    &last.info.id,
-                    By::Rule,
-                    "the conversation is still going",
-                ));
-            }
-        }
 
         // 3. Search: decisive coverage, or coverage and BM25 agreeing.
-        let ranked = rank_threads(&query, &pool, &docs);
+        let ranked = rank_threads(&query, &pool);
         let quoted: String = query.chars().take(60).collect();
         if let Some(&(best, score)) = ranked.first() {
             let second = ranked.get(1).map_or(0.0, |r| r.1);
@@ -324,7 +315,7 @@ impl<A: Api> Router<A> {
 
         // Candidates for the last tiers: evidence first, then the last thread, then the most
         // recent.
-        let fallback = match last.filter(|t| t.phase == Phase::Hot && !any_new) {
+        let fallback = match last_hot {
             Some(last) => Route::cont(&last.info.id, By::Rule, "no clear match; staying"),
             None => Route::new(By::Rule, "no thread matches"),
         };
@@ -356,26 +347,24 @@ impl<A: Api> Router<A> {
         }
 
         // 6. The model.
-        self.ask_model(input, last, &candidates, &docs, fallback)
-            .await
+        Ok(self.ask_model(input, last, &candidates, fallback).await)
     }
 
+    /// The model's pick among `candidates`; `fallback` when it fails or names no candidate.
     async fn ask_model(
         &self,
         input: &Input,
         last: Option<&ThreadView>,
         candidates: &[&ThreadView],
-        docs: &HashMap<String, String>,
         fallback: Route,
-    ) -> Result<Route> {
+    ) -> Route {
         let mut ctx = Context::new(ROUTE_PROMPT);
-        ctx.push(Message::user(route_request(input, last, candidates, docs)));
-        let answer = match self.provider.chat(&self.request, &ctx).await {
-            Ok(res) => json_object(&res.message.text()),
-            Err(_) => return Ok(fallback),
-        };
-        let Some(answer) = answer else {
-            return Ok(fallback);
+        ctx.push(Message::user(route_request(input, last, candidates)));
+        let Some(answer) = (self.provider.chat(&self.request, &ctx).await)
+            .ok()
+            .and_then(|res| json_object(&res.message.text()))
+        else {
+            return fallback;
         };
         let reason = answer["reason"]
             .as_str()
@@ -384,16 +373,32 @@ impl<A: Api> Router<A> {
         let chosen = match &answer["thread"] {
             Value::String(s) => s.clone(),
             Value::Number(n) => n.to_string(),
-            _ => return Ok(fallback),
+            _ => return fallback,
         };
         if chosen == "new" {
-            return Ok(Route::new(By::Model, reason));
+            return Route::new(By::Model, reason);
         }
-        Ok(candidates
+        candidates
             .iter()
             .find(|t| t.info.id == chosen)
-            .map_or(fallback, |t| Route::cont(&t.info.id, By::Model, reason)))
+            .map_or(fallback, |t| Route::cont(&t.info.id, By::Model, reason))
     }
+}
+
+/// Whether `text` stays on the subject of `thread` (its card and last messages): it shares a
+/// word with them, or is too short to tell.
+fn still_on_subject(store: &dyn Checkpointer, thread: &ThreadView, text: &str) -> Result<bool> {
+    let words = terms_of(text);
+    if words.len() < DRIFT_MIN_TERMS {
+        return Ok(true);
+    }
+    let mut talk = card_doc(thread);
+    for message in store.recent_messages(&thread.info.id, RECENT_MESSAGES)? {
+        talk.push('\n');
+        talk.push_str(&message.text());
+    }
+    let talk = terms_of(&talk);
+    Ok(words.iter().any(|w| talk.contains(w)))
 }
 
 /// What routing knows about a thread: its title and card.
@@ -417,12 +422,7 @@ fn ago(d: Duration) -> String {
     }
 }
 
-fn route_request(
-    input: &Input,
-    last: Option<&ThreadView>,
-    candidates: &[&ThreadView],
-    docs: &HashMap<String, String>,
-) -> String {
+fn route_request(input: &Input, last: Option<&ThreadView>, candidates: &[&ThreadView]) -> String {
     let threads: Vec<String> = candidates
         .iter()
         .map(|t| {
@@ -430,7 +430,7 @@ fn route_request(
                 "[{}] (last active {})\n{}",
                 t.info.id,
                 ago(elapsed(input.now, t.active_at)),
-                docs[&t.info.id]
+                card_doc(t)
             )
         })
         .collect();
@@ -451,7 +451,7 @@ fn route_request(
 /// The JSON object in a model's reply, ignoring any text around it.
 fn json_object(reply: &str) -> Option<Value> {
     let start = reply.find('{')?;
-    let end = reply.rfind('}')?;
+    let end = start + reply[start..].rfind('}')?;
     serde_json::from_str(&reply[start..=end]).ok()
 }
 
@@ -686,6 +686,16 @@ mod tests {
                 "matches “The Metabase dashboards are slow on Postgres.” (0.70)"
             )
         );
+    }
+
+    #[test]
+    fn json_object_survives_a_brace_before_the_object() {
+        assert_eq!(
+            json_object(r#"Answer} {"thread":"new"}"#),
+            Some(serde_json::json!({ "thread": "new" }))
+        );
+        // A truncated reply whose only `}` comes before its `{`.
+        assert_eq!(json_object(r#"} {"thread":"kyo"#), None);
     }
 
     struct Always(Option<&'static str>);

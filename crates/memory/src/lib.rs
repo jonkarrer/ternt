@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, bail};
-use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
 /// Who a memory belongs to. Reads take a list of scopes; every write goes to exactly one.
@@ -297,47 +297,53 @@ impl Memory {
 
     /// Adds an item, or a new version when its key already exists in the scope.
     pub fn write(&self, write: Write) -> Result<Item> {
-        let existing = match &write.key {
-            Some(key) => self
-                .conn
-                .lock()
-                .unwrap()
+        self.insert(write, |tx, write| {
+            let Some(key) = &write.key else {
+                return Ok(None);
+            };
+            Ok(tx
                 .query_row(
                     "SELECT id FROM items
                      WHERE kind = ?1 AND scope = ?2 AND key = ?3 AND current = 1",
                     params![write.body.kind(), write.scope.as_str(), key],
-                    |row| row.get::<_, i64>(0),
+                    |row| row.get(0),
                 )
-                .optional()?,
-            None => None,
-        };
-        match existing {
-            Some(id) => self.replace(id, write),
-            None => self.insert(None, write),
-        }
+                .optional()?)
+        })
     }
 
-    /// A new version of the item `id`, which must be current.
+    /// A new version of the item `id`, which must be current. Keeps its key unless `write`
+    /// names one.
     pub fn replace(&self, id: i64, write: Write) -> Result<Item> {
-        let Some(old) = self.get(id)? else {
-            bail!("memory {id} is not a current item");
-        };
-        if old.body.kind() != write.body.kind() {
-            bail!(
-                "memory {id} is {}, not {}",
-                old.body.kind(),
-                write.body.kind()
-            );
-        }
-        self.insert(Some(old), write)
+        self.insert(write, |_, _| Ok(Some(id)))
     }
 
-    fn insert(&self, old: Option<Item>, write: Write) -> Result<Item> {
+    /// Inserts `write`, as a new version of the item `replaces` picks, if any. One transaction,
+    /// so concurrent writes to the same item can't both make a new version of it.
+    fn insert(
+        &self,
+        write: Write,
+        replaces: impl FnOnce(&Transaction, &Write) -> Result<Option<i64>>,
+    ) -> Result<Item> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        if let Some(old) = &old {
-            tx.execute("UPDATE items SET current = 0 WHERE id = ?1", [old.id])?;
-        }
+        let old = match replaces(&tx, &write)? {
+            Some(id) => {
+                let Some(old) = current(&tx, id)? else {
+                    bail!("memory {id} is not a current item");
+                };
+                if old.body.kind() != write.body.kind() {
+                    bail!(
+                        "memory {id} is {}, not {}",
+                        old.body.kind(),
+                        write.body.kind()
+                    );
+                }
+                tx.execute("UPDATE items SET current = 0 WHERE id = ?1", [id])?;
+                Some(old)
+            }
+            None => None,
+        };
         let source = write
             .source
             .as_ref()
@@ -350,11 +356,11 @@ impl Memory {
                 old.as_ref().map_or(0, |o| o.lineage),
                 write.body.kind(),
                 write.scope.as_str(),
-                write.key,
+                write.key.as_ref().or(old.as_ref().and_then(|o| o.key.as_ref())),
                 old.as_ref().map_or(1, |o| o.version + 1),
                 old.as_ref().map(|o| o.id),
                 source,
-                millis(SystemTime::now()),
+                millis(now()),
                 serde_json::to_string(&write.body)?,
             ],
         )?;
@@ -369,8 +375,8 @@ impl Memory {
             item_row,
         )?;
         tx.commit()?;
-        drop(conn);
-        // After the commit: an index that falls behind is rebuilt by `reindex`.
+        // After the commit: an index that falls behind is rebuilt by `reindex`. Still holding
+        // the lock, so concurrent writes reach the index in the order they were committed.
         if let Some(old) = &old {
             self.index.remove(&[old.id])?;
         }
@@ -380,14 +386,7 @@ impl Memory {
 
     /// The current version only: `None` for an id that was replaced or forgotten.
     pub fn get(&self, id: i64) -> Result<Option<Item>> {
-        let conn = self.conn.lock().unwrap();
-        Ok(conn
-            .query_row(
-                &format!("SELECT {ITEM_COLUMNS} FROM items WHERE id = ?1 AND current = 1"),
-                [id],
-                item_row,
-            )
-            .optional()?)
+        current(&self.conn.lock().unwrap(), id)
     }
 
     /// Every version of the item `id` belongs to, newest first.
@@ -404,11 +403,14 @@ impl Memory {
 
     /// Removes the item and every version of it.
     pub fn forget(&self, id: i64) -> Result<()> {
-        let ids: Vec<i64> = self.history(id)?.iter().map(|item| item.id).collect();
-        self.conn.lock().unwrap().execute(
-            "DELETE FROM items WHERE lineage = (SELECT lineage FROM items WHERE id = ?1)",
-            [id],
-        )?;
+        let conn = self.conn.lock().unwrap();
+        let ids: Vec<i64> = conn
+            .prepare_cached(
+                "DELETE FROM items WHERE lineage = (SELECT lineage FROM items WHERE id = ?1)
+                 RETURNING id",
+            )?
+            .query_map([id], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
         self.index.remove(&ids)
     }
 
@@ -426,18 +428,17 @@ impl Memory {
 
     /// Rebuilds the index from every current item: after switching index, or if it fell behind.
     pub fn reindex(&self) -> Result<()> {
-        let items = {
-            let conn = self.conn.lock().unwrap();
-            let mut select = conn.prepare(&format!(
+        // Holds the lock throughout, so no write lands between reading items and indexing them.
+        let conn = self.conn.lock().unwrap();
+        let documents = conn
+            .prepare(&format!(
                 "SELECT {ITEM_COLUMNS} FROM items WHERE current = 1"
-            ))?;
-            select
-                .query_map([], item_row)?
-                .collect::<Result<Vec<_>, _>>()?
-        };
+            ))?
+            .query_map([], item_row)?
+            .map(|item| item.map(|item| document(&item)))
+            .collect::<Result<Vec<_>, _>>()?;
         self.index.clear()?;
-        self.index
-            .upsert(&items.iter().map(document).collect::<Vec<_>>())
+        self.index.upsert(&documents)
     }
 
     /// Current versions in `scopes`, newest first.
@@ -462,7 +463,7 @@ impl Memory {
         text: impl Into<String>,
     ) -> Result<Episode> {
         let text = text.into();
-        let at = SystemTime::now();
+        let at = now();
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO episodes (thread, scope, from_checkpoint, to_checkpoint, text, at)
@@ -483,7 +484,7 @@ impl Memory {
             from,
             to,
             text,
-            at: from_millis(millis(at)),
+            at,
         })
     }
 
@@ -518,7 +519,7 @@ impl Memory {
         active_at: SystemTime,
     ) -> Result<Resume> {
         let text = text.into();
-        let at = SystemTime::now();
+        let at = now();
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO resumes (thread, scope, text, to_checkpoint, turns, active_at, at)
@@ -541,7 +542,7 @@ impl Memory {
             to,
             turns,
             active_at: from_millis(millis(active_at)),
-            at: from_millis(millis(at)),
+            at,
         })
     }
 
@@ -577,7 +578,7 @@ impl Memory {
         to: usize,
     ) -> Result<Card> {
         let text = text.into();
-        let at = SystemTime::now();
+        let at = now();
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         tx.execute(
@@ -598,7 +599,7 @@ impl Memory {
             scope,
             text,
             to,
-            at: from_millis(millis(at)),
+            at,
         })
     }
 
@@ -641,8 +642,18 @@ impl Memory {
     }
 }
 
+/// The item `id`, if it is the current version.
+fn current(conn: &Connection, id: i64) -> Result<Option<Item>> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT {ITEM_COLUMNS} FROM items WHERE id = ?1 AND current = 1"),
+            [id],
+            item_row,
+        )
+        .optional()?)
+}
+
 fn item_row(row: &Row) -> rusqlite::Result<Item> {
-    let json = |i: usize| -> rusqlite::Result<String> { row.get(i) };
     let parse_err = |i, e: serde_json::Error| {
         rusqlite::Error::FromSqlConversionFailure(i, rusqlite::types::Type::Text, Box::new(e))
     };
@@ -659,7 +670,7 @@ fn item_row(row: &Row) -> rusqlite::Result<Item> {
         replaces: row.get(5)?,
         source,
         created_at: from_millis(row.get(7)?),
-        body: serde_json::from_str(&json(8)?).map_err(|e| parse_err(8, e))?,
+        body: serde_json::from_str(&row.get::<_, String>(8)?).map_err(|e| parse_err(8, e))?,
     })
 }
 
@@ -675,6 +686,11 @@ fn millis(at: SystemTime) -> i64 {
 
 fn from_millis(ms: i64) -> SystemTime {
     UNIX_EPOCH + Duration::from_millis(ms as u64)
+}
+
+/// Now, to the millisecond, as it reads back once stored.
+fn now() -> SystemTime {
+    from_millis(millis(SystemTime::now()))
 }
 
 fn document(item: &Item) -> Document {
@@ -744,6 +760,46 @@ mod tests {
             .write(Write::fact(Scope::global(), "Default is npm.").key("package-manager"))
             .unwrap();
         assert_eq!(other.version, 1);
+    }
+
+    /// Memory is shared between threads: writes to one key must still form one lineage.
+    #[test]
+    fn concurrent_writes_to_a_key_keep_one_current_version() {
+        let memory = Memory::in_memory().unwrap();
+        std::thread::scope(|s| {
+            for t in 0..8 {
+                let memory = &memory;
+                s.spawn(move || {
+                    for i in 0..25 {
+                        let fact = Write::fact(me(), format!("Fact {t}-{i}.")).key("k");
+                        memory.write(fact).unwrap();
+                    }
+                });
+            }
+        });
+        let current = memory.list(&[me()], 500).unwrap();
+        assert_eq!(current.len(), 1);
+        let history = memory.history(current[0].id).unwrap();
+        let versions: Vec<u32> = history.iter().map(|item| item.version).collect();
+        assert_eq!(versions, (1..=200).rev().collect::<Vec<_>>());
+    }
+
+    /// A replacement without a key keeps the item's key, so later writes to it still version it.
+    #[test]
+    fn replace_keeps_the_key() {
+        let memory = Memory::in_memory().unwrap();
+        let first = memory
+            .write(Write::fact(me(), "The user uses npm.").key("package-manager"))
+            .unwrap();
+        let fixed = memory
+            .replace(first.id, Write::fact(me(), "The user uses yarn."))
+            .unwrap();
+        assert_eq!(fixed.key.as_deref(), Some("package-manager"));
+        let latest = memory
+            .write(Write::fact(me(), "The user uses pnpm.").key("package-manager"))
+            .unwrap();
+        assert_eq!((latest.version, latest.lineage), (3, first.id));
+        assert_eq!(memory.list(&[me()], 10).unwrap(), [latest]);
     }
 
     #[test]
@@ -828,21 +884,17 @@ mod tests {
     /// A second index kept in step with the first, then rebuilt from items.
     #[test]
     fn reindex_rebuilds_a_new_index() {
-        let path = std::env::temp_dir().join(format!("memory-reindex-{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let fact = Memory::open(&path)
+        let db = TempDb::new("reindex");
+        let path = &db.0;
+        let fact = Memory::open(path)
             .unwrap()
             .write(Write::fact(me(), "The user's name is Jon."))
             .unwrap();
 
-        let memory = Memory::with_index(&path, Box::new(Fts::in_memory().unwrap())).unwrap();
+        let memory = Memory::with_index(path, Box::new(Fts::in_memory().unwrap())).unwrap();
         assert!(memory.search("name", &[me()], 5).unwrap().is_empty());
         memory.reindex().unwrap();
         assert_eq!(memory.search("name", &[me()], 5).unwrap()[0].item, fact);
-        drop(memory);
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
-        }
     }
 
     #[test]
@@ -886,18 +938,37 @@ mod tests {
 
     #[test]
     fn survives_reopen() {
-        let path = std::env::temp_dir().join(format!("memory-test-{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let written = Memory::open(&path)
+        let db = TempDb::new("reopen");
+        let written = Memory::open(&db.0)
             .unwrap()
             .write(Write::fact(me(), "The user's name is Jon.").key("name"))
             .unwrap();
-        let memory = Memory::open(&path).unwrap();
+        let memory = Memory::open(&db.0).unwrap();
         assert_eq!(memory.get(written.id).unwrap(), Some(written));
         assert_eq!(memory.search("name", &[me()], 5).unwrap().len(), 1);
-        drop(memory);
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+    }
+
+    /// A database file in the temp dir, removed (with its WAL files) when dropped.
+    struct TempDb(std::path::PathBuf);
+
+    impl TempDb {
+        fn new(name: &str) -> Self {
+            let db =
+                Self(std::env::temp_dir().join(format!("memory-{name}-{}.db", std::process::id())));
+            db.remove();
+            db
+        }
+
+        fn remove(&self) {
+            for suffix in ["", "-wal", "-shm"] {
+                let _ = std::fs::remove_file(format!("{}{suffix}", self.0.display()));
+            }
+        }
+    }
+
+    impl Drop for TempDb {
+        fn drop(&mut self) {
+            self.remove();
         }
     }
 }

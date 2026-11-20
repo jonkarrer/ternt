@@ -55,9 +55,13 @@ impl Api for OpenAi {
         }
         let mut body = json!({
             "model": req.model,
-            "max_tokens": req.max_tokens,
             "messages": messages,
         });
+        // Only when set: newer OpenAI reasoning models reject the key (they take
+        // `max_completion_tokens`), and leaving it out means the model's own limit.
+        if let Some(max_tokens) = req.max_tokens {
+            body["max_tokens"] = max_tokens.into();
+        }
         // One knob here: thinking off is effort "none"; thinking on just uses the effort.
         if req.thinking == Some(false) {
             body["reasoning_effort"] = "none".into();
@@ -123,7 +127,7 @@ fn push_message(out: &mut Vec<Value>, message: &Message) {
             Block::ToolCall { id, name, input } => tool_calls.push(json!({
                 "id": id,
                 "type": "function",
-                "function": { "name": name, "arguments": input.to_string() },
+                "function": { "name": name, "arguments": arguments(input) },
             })),
             Block::ToolResult {
                 call_id, content, ..
@@ -135,8 +139,10 @@ fn push_message(out: &mut Vec<Value>, message: &Message) {
             Block::Thinking { .. } | Block::RedactedThinking { .. } => {}
         }
     }
+    if text.is_empty() && tool_calls.is_empty() {
+        return;
+    }
     let mut msg = match message.role {
-        Role::User if text.is_empty() => return,
         Role::User => json!({ "role": "user", "content": text }),
         Role::Assistant => {
             json!({ "role": "assistant", "content": (!text.is_empty()).then_some(text) })
@@ -146,6 +152,15 @@ fn push_message(out: &mut Vec<Value>, message: &Message) {
         msg["tool_calls"] = tool_calls.into();
     }
     out.push(msg);
+}
+
+/// Tool-call arguments as a JSON string. Arguments that weren't valid JSON were kept as the
+/// raw string (see `response`) and go back unchanged.
+fn arguments(input: &Value) -> String {
+    match input {
+        Value::String(raw) => raw.clone(),
+        input => input.to_string(),
+    }
 }
 
 /// Full chat completion. Fields some vendors leave out are `Option`.
@@ -289,6 +304,52 @@ mod tests {
         );
     }
 
+    /// An assistant turn with neither text nor tool calls (e.g. only thinking from another
+    /// vendor) would be `{"content": null}` with no `tool_calls`, which OpenAI rejects.
+    #[test]
+    fn skips_empty_assistant_turns() {
+        let mut ctx = Context::default();
+        ctx.push(Message::user("Hi"));
+        ctx.push(Message {
+            role: Role::Assistant,
+            content: vec![Block::Thinking {
+                text: "signed".into(),
+                signature: Some("sig".into()),
+            }],
+        });
+        ctx.push(Message::user("Still there?"));
+        let body = OpenAi.body(&Request::new("m"), &ctx);
+        assert_eq!(
+            body["messages"],
+            json!([
+                { "role": "user", "content": "Hi" },
+                { "role": "user", "content": "Still there?" },
+            ])
+        );
+    }
+
+    /// Arguments that aren't valid JSON are kept as the raw string, and go back verbatim.
+    #[test]
+    fn invalid_tool_arguments_round_trip_verbatim() {
+        let reply: ChatCompletion = serde_json::from_value(json!({
+            "id": "c", "object": "chat.completion", "created": 0, "model": "m",
+            "choices": [{ "index": 0, "finish_reason": "length", "message": {
+                "role": "assistant", "content": null,
+                "tool_calls": [{ "id": "c1", "type": "function",
+                    "function": { "name": "weather", "arguments": "{\"city\": \"Par" } }],
+            }}],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+        }))
+        .unwrap();
+        let mut ctx = Context::default();
+        ctx.push(OpenAi.response(reply).unwrap().message);
+        let body = OpenAi.body(&Request::new("m"), &ctx);
+        assert_eq!(
+            body["messages"][0]["tool_calls"][0]["function"]["arguments"],
+            "{\"city\": \"Par"
+        );
+    }
+
     #[test]
     fn reasoning_effort() {
         let ctx = pong_context();
@@ -305,6 +366,20 @@ mod tests {
                 .get("reasoning_effort")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn max_tokens_only_when_set() {
+        let ctx = pong_context();
+        assert!(
+            OpenAi
+                .body(&Request::new("m"), &ctx)
+                .get("max_tokens")
+                .is_none()
+        );
+        let mut req = Request::new("m");
+        req.max_tokens = Some(256);
+        assert_eq!(OpenAi.body(&req, &ctx)["max_tokens"], 256);
     }
 
     #[test]

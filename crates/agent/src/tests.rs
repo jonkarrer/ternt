@@ -15,6 +15,8 @@ const T: Duration = Duration::from_secs(5);
 enum Reply {
     Text(&'static str),
     Call(&'static str, Value),
+    /// Several tool calls in one reply, without arguments.
+    Calls(Vec<&'static str>),
     Error(&'static str),
     /// Never answers: stands for a request a crash cuts off.
     Hang,
@@ -66,6 +68,15 @@ impl Model for Script {
                     name: name.into(),
                     input,
                 }]))
+            }
+            Reply::Calls(names) => {
+                let n = self.seen.lock().unwrap().len();
+                let calls = names.iter().enumerate().map(|(i, name)| Block::ToolCall {
+                    id: format!("call-{n}-{i}"),
+                    name: (*name).into(),
+                    input: json!({}),
+                });
+                Ok(response(calls.collect()))
             }
             Reply::Error(error) => Err(anyhow!(error)),
             Reply::Hang => std::future::pending().await,
@@ -171,6 +182,25 @@ async fn eventually(check: impl Fn() -> bool) {
         assert!(started.elapsed() < T, "timed out");
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
+}
+
+fn live_tools(agent: &Agent) -> Vec<engine::TaskRecord> {
+    let mut tasks = agent.engine().live_tasks();
+    tasks.retain(|t| t.kind == "agent.tool");
+    tasks
+}
+
+/// Waits until a tool call is running its tool: a crash now cuts it off.
+async fn tool_executing(agent: &Agent) {
+    eventually(|| {
+        live_tools(agent).iter().any(|t| {
+            matches!(t.state, TaskState::Running { .. })
+                && t.state
+                    .checkpoint()
+                    .is_some_and(|c| c["phase"] == "execute")
+        })
+    })
+    .await;
 }
 
 /// The thread's messages, as (role, text or a summary of the blocks).
@@ -349,17 +379,7 @@ async fn an_unsafe_tool_cut_off_is_not_run_again() {
     });
     let agent = start(&store, &script, tools);
     let id = agent.submit("t1", Input::new("order groceries")).unwrap();
-    let engine = agent.engine().clone();
-    eventually(|| {
-        engine.live_tasks().iter().any(|t| {
-            t.kind == "agent.tool"
-                && matches!(t.state, TaskState::Running { .. })
-                && t.state
-                    .checkpoint()
-                    .is_some_and(|c| c["phase"] == "execute")
-        })
-    })
-    .await;
+    tool_executing(&agent).await;
     agent.engine().crash();
 
     let script = Script::new(vec![Reply::Text("I couldn't confirm the order")]);
@@ -382,6 +402,36 @@ async fn an_unsafe_tool_cut_off_is_not_run_again() {
     );
 }
 
+/// A clean close counts no restart, but an unsafe tool it cut off still isn't run again.
+#[tokio::test]
+async fn an_unsafe_tool_cut_off_by_a_close_is_not_run_again() {
+    let store = store();
+    let script = Script::new(vec![Reply::Call("order", json!({}))]);
+    let mut tools = Tools::new();
+    tools.add(TestTool {
+        hang: true,
+        ..TestTool::new("order", "ordered")
+    });
+    let agent = start(&store, &script, tools);
+    let id = agent.submit("t1", Input::new("order groceries")).unwrap();
+    tool_executing(&agent).await;
+    agent.engine().close().unwrap();
+
+    let script = Script::new(vec![Reply::Text("I couldn't confirm the order")]);
+    let runs = Arc::new(AtomicUsize::new(0));
+    let mut tools = Tools::new();
+    tools.add(TestTool {
+        runs: runs.clone(),
+        ..TestTool::new("order", "ordered")
+    });
+    let agent = start(&store, &script, tools);
+    assert_eq!(
+        settled(&agent, &id).await,
+        done("I couldn't confirm the order")
+    );
+    assert_eq!(runs.load(Ordering::SeqCst), 0);
+}
+
 #[tokio::test]
 async fn a_safe_tool_cut_off_runs_again() {
     let store = store();
@@ -394,16 +444,7 @@ async fn a_safe_tool_cut_off_runs_again() {
     });
     let agent = start(&store, &script, tools);
     let id = agent.submit("t1", Input::new("look it up")).unwrap();
-    let engine = agent.engine().clone();
-    eventually(|| {
-        engine.live_tasks().iter().any(|t| {
-            t.kind == "agent.tool"
-                && t.state
-                    .checkpoint()
-                    .is_some_and(|c| c["phase"] == "execute")
-        })
-    })
-    .await;
+    tool_executing(&agent).await;
     agent.engine().crash();
 
     let script = Script::new(vec![Reply::Text("found it")]);
@@ -456,8 +497,7 @@ async fn an_abort_leaves_the_thread_valid() {
     });
     let agent = start(&store(), &script, tools);
     let id = agent.submit("t1", Input::new("go")).unwrap();
-    let engine = agent.engine().clone();
-    eventually(|| engine.live_tasks().iter().any(|t| t.kind == "agent.tool")).await;
+    eventually(|| !live_tools(&agent).is_empty()).await;
     let run = agent.submission(&id).unwrap().unwrap().run.unwrap();
     agent.engine().abort_task(run).unwrap();
     assert_eq!(
@@ -725,6 +765,33 @@ async fn send_routes_each_input() {
     );
 }
 
+/// Two `send`s with one request ID can both route before either commits: the later commit
+/// finds the first submission and changes nothing.
+#[tokio::test]
+async fn a_request_id_routed_twice_submits_once() {
+    let script = Script::new(vec![Reply::Text("hello")]);
+    let agent = start(&store(), &script, Tools::new());
+    let input = Input {
+        request_id: Some("r1".into()),
+        ..Input::new("hi")
+    };
+    let first = agent.submit("t1", input.clone()).unwrap();
+    let route = router::Route::new(router::By::Rule, "no earlier threads");
+    let again = agent.engine().commit(|tx| admit(tx, route, input)).unwrap();
+    assert_eq!(
+        again,
+        Sent {
+            thread: "t1".into(),
+            submission: first.clone(),
+            route: None
+        }
+    );
+    assert_eq!(agent.engine().doc::<String>(LAST_THREAD).unwrap(), None);
+    let created = agent.engine().thread("thread-1", |t| t.checkpoints().len());
+    assert_eq!(created.unwrap(), 0);
+    assert_eq!(settled(&agent, &first).await, done("hello"));
+}
+
 /// Everything together, live: the router on a fast model, Experience and the loop on Claude.
 /// Told in one thread; asked in a new one, it answers from memory.
 #[tokio::test]
@@ -803,4 +870,164 @@ async fn live_remembers_across_threads() {
         panic!("unanswered");
     };
     assert!(answer.contains("Jon"));
+}
+
+/// Panics in its first `consider`, once notified: a fault no handler of the run sees.
+struct Faulty {
+    gate: Arc<Notify>,
+    calls: AtomicUsize,
+}
+
+impl Mind for Faulty {
+    fn consider<'a>(&'a self, _: &'a mut Thread) -> MindFuture<'a> {
+        let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
+        Box::pin(async move {
+            if first {
+                self.gate.notified().await;
+                panic!("consider broke");
+            }
+            Ok(())
+        })
+    }
+
+    fn dream<'a>(&'a self, _: &'a mut Thread) -> MindFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn settle<'a>(&'a self, _: &'a mut Thread) -> MindFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn a_faulted_run_lets_the_queue_move_on() {
+    let mind = Arc::new(Faulty {
+        gate: Arc::new(Notify::new()),
+        calls: AtomicUsize::new(0),
+    });
+    let script = Script::new(vec![Reply::Text("second")]);
+    let agent = start_with(&store(), &script, Tools::new(), Some(mind.clone()), fast());
+    let a = agent.submit("t1", Input::new("one")).unwrap();
+    eventually(|| mind.calls.load(Ordering::SeqCst) == 1).await;
+    let b = agent.submit("t1", Input::new("two")).unwrap();
+    mind.gate.notify_one();
+    assert!(matches!(
+        settled(&agent, &a).await,
+        Settled::Unanswered { .. }
+    ));
+    assert_eq!(settled(&agent, &b).await, done("second"));
+    assert_eq!(
+        transcript(&agent, "t1"),
+        ["User: one", "User: two", "Assistant: second"]
+    );
+}
+
+#[tokio::test]
+async fn an_abort_keeps_the_results_of_finished_tools() {
+    let script = Script::new(vec![Reply::Calls(vec!["order", "slow"])]);
+    let mut tools = Tools::new();
+    tools.add(TestTool::new("order", "ordered"));
+    tools.add(TestTool {
+        hang: true,
+        ..TestTool::new("slow", "never")
+    });
+    let agent = start(&store(), &script, tools);
+    let id = agent.submit("t1", Input::new("order, then wait")).unwrap();
+    eventually(|| script.seen().len() == 1 && live_tools(&agent).len() == 1).await;
+    let run = agent.submission(&id).unwrap().unwrap().run.unwrap();
+    agent.engine().abort_task(run).unwrap();
+    settled(&agent, &id).await;
+    // The order went through: the model must not be told it didn't.
+    assert_eq!(
+        transcript(&agent, "t1")[2],
+        "User: ordered | error: aborted"
+    );
+}
+
+#[tokio::test]
+async fn the_turn_limit_counts_tool_rounds() {
+    let script = Script::new(vec![
+        Reply::Call("lookup", json!({})),
+        Reply::Call("lookup", json!({})),
+    ]);
+    let runs = Arc::new(AtomicUsize::new(0));
+    let mut tools = Tools::new();
+    tools.add(TestTool {
+        runs: runs.clone(),
+        ..TestTool::new("lookup", "found")
+    });
+    let settings = Settings {
+        max_rounds: 1,
+        ..fast()
+    };
+    let agent = start_with(&store(), &script, tools, None, settings);
+    let id = agent.submit("t1", Input::new("go")).unwrap();
+    assert_eq!(
+        settled(&agent, &id).await,
+        Settled::Unanswered {
+            reason: "turn_limit".into()
+        }
+    );
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        transcript(&agent, "t1"),
+        [
+            "User: go",
+            "Assistant: call lookup",
+            "User: found",
+            "Assistant: call lookup",
+            "User: error: not run: turn limit"
+        ]
+    );
+    assert!(!agent.engine().thread("t1", |t| t.in_turn()).unwrap());
+}
+
+/// The generation task as a later version would store it: older stored runs are orphaned.
+struct NextGeneration;
+
+impl Task for NextGeneration {
+    type Input = ();
+    type State = ();
+    type Output = ();
+    const NAME: &'static str = generation::NAME;
+    const VERSION: u32 = 2;
+
+    fn initial(&self, _: &()) {}
+
+    async fn run(&self, rt: Runtime<Self>) -> Result<()> {
+        rt.commit(|_| Ok(Some(engine::Next::Complete(()))))
+    }
+}
+
+#[tokio::test]
+async fn a_run_that_ends_abnormally_leaves_the_thread_valid() {
+    let store = store();
+    let script = Script::new(vec![Reply::Call("slow", json!({}))]);
+    let mut tools = Tools::new();
+    tools.add(TestTool {
+        hang: true,
+        ..TestTool::new("slow", "never")
+    });
+    let agent = start(&store, &script, tools);
+    let id = agent.submit("t1", Input::new("go")).unwrap();
+    eventually(|| !live_tools(&agent).is_empty()).await;
+    agent.engine().crash();
+
+    // Reopened by a version whose runs can't resume this one: it's orphaned mid-round.
+    let mut registry = Registry::new();
+    registry
+        .register(NextGeneration)
+        .register(ToolCall::new(Tools::new()))
+        .register(Idle::new(None, fast()));
+    let engine = Engine::open(store, registry, EngineSettings::default()).unwrap();
+    engine.resume();
+    let agent = Agent::new(engine);
+    assert!(matches!(
+        settled(&agent, &id).await,
+        Settled::Unanswered { .. }
+    ));
+    let transcript = transcript(&agent, "t1");
+    assert_eq!(transcript.len(), 3, "{transcript:?}");
+    assert!(transcript[2].starts_with("User: error: "), "{transcript:?}");
+    assert!(!agent.engine().thread("t1", |t| t.in_turn()).unwrap());
 }

@@ -64,7 +64,8 @@ impl RouteDetector for CueDetector {
 
     fn detect(&self, text: &str) -> Vec<RouteSignal> {
         let text = text.trim();
-        if text.is_empty() || self.max_length.is_some_and(|max| length_of(text) > max) {
+        let too_long = |max| text.split_whitespace().count() > max;
+        if text.is_empty() || self.max_length.is_some_and(too_long) {
             return Vec::new();
         }
         let mut spans = Vec::new();
@@ -95,10 +96,6 @@ impl RouteDetector for CueDetector {
     }
 }
 
-fn length_of(text: &str) -> usize {
-    text.split_whitespace().count()
-}
-
 pub fn defaults() -> Vec<Box<dyn RouteDetector>> {
     vec![
         Box::new(new_topic()),
@@ -108,9 +105,9 @@ pub fn defaults() -> Vec<Box<dyn RouteDetector>> {
     ]
 }
 
-fn patterns(list: &[(&str, f32)]) -> Vec<(Regex, f32)> {
+fn patterns(list: &[(impl AsRef<str>, f32)]) -> Vec<(Regex, f32)> {
     list.iter()
-        .map(|(p, s)| (Regex::new(p).expect("valid pattern"), *s))
+        .map(|(p, s)| (Regex::new(p.as_ref()).expect("valid pattern"), *s))
         .collect()
 }
 
@@ -158,33 +155,32 @@ const THREAD_NOUN: &str = r"(?:thing|stuff|topic|discussion|conversation|chat|th
 const END: &str = r"(?:\s*[.?!,;:]|\s*$)";
 
 pub fn thread_reference() -> CueDetector {
-    let p = |s: String, salience| (s, salience);
     let list = [
-        p(
+        (
             format!(
                 r"(?i)\b(?:back to|return(?:ing)? to|going back to|continu(?:e|ing)(?: with| on)?|pick(?:ing)? (?:back )?up(?: on| with)?|resum(?:e|ing))\s+(?:the |our |that |my |this )?{REF}(?:\s+{THREAD_NOUN}\b|{END})"
             ),
             0.9,
         ),
-        p(
+        (
             format!(
                 r"(?i)\b(?:about|regarding|on|with) (?:the |that |our |my ){REF} (?:we|you|i) (?:talked|discussed|were|spoke|did|looked|chatted|worked|started)"
             ),
             0.8,
         ),
-        p(
+        (
             format!(
                 r"(?i)\bwhere (?:were|did) we (?:leave off |land |end up )?(?:on|with) (?:the |our |that )?{REF}{END}"
             ),
             0.9,
         ),
-        p(
+        (
             format!(
                 r"(?i)\b(?:remember|recall) (?:the |our |that ){REF} (?:{THREAD_NOUN}|we|you|i)\b"
             ),
             0.8,
         ),
-        p(
+        (
             format!(
                 r"(?i)\b(?:what (?:happened|came of|about)|how(?:'s| is| did| are)|any (?:update|news|progress)) (?:with |on |about |to )?(?:the |our |that |my ){REF}(?:\s+(?:going|go|turn out|coming along))?{END}"
             ),
@@ -196,10 +192,7 @@ pub fn thread_reference() -> CueDetector {
         cue: RouteCue::ThreadReference,
         reason: "refers to an earlier conversation".into(),
         max_length: None,
-        patterns: list
-            .iter()
-            .map(|(p, s)| (Regex::new(p).expect("valid pattern"), *s))
-            .collect(),
+        patterns: patterns(&list),
     }
 }
 

@@ -133,7 +133,19 @@ impl Checkpointer for Sqlite {
     }
 
     fn recent_messages(&self, thread_id: &str, n: usize) -> Result<Vec<Message>> {
-        self.recent(thread_id, n)
+        let conn = self.conn.lock().unwrap();
+        // Walks the thread's rows backwards on the primary key and stops after `n` messages.
+        let mut select = conn.prepare_cached(
+            "SELECT json_extract(event, '$.data') FROM checkpoints
+             WHERE thread_id = ?1 AND json_extract(event, '$.type') = 'message'
+             ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = select.query_map(params![thread_id, n as i64], |row| row.get::<_, String>(0))?;
+        let mut messages = rows
+            .map(|json| Ok(serde_json::from_str(&json?)?))
+            .collect::<Result<Vec<Message>>>()?;
+        messages.reverse();
+        Ok(messages)
     }
 
     fn threads(&self) -> Result<Vec<ThreadInfo>> {
@@ -171,24 +183,6 @@ impl Checkpointer for Sqlite {
             })
         })
         .collect()
-    }
-}
-
-impl Sqlite {
-    fn recent(&self, thread_id: &str, n: usize) -> Result<Vec<Message>> {
-        let conn = self.conn.lock().unwrap();
-        // Walks the thread's rows backwards on the primary key and stops after `n` messages.
-        let mut select = conn.prepare_cached(
-            "SELECT json_extract(event, '$.data') FROM checkpoints
-             WHERE thread_id = ?1 AND json_extract(event, '$.type') = 'message'
-             ORDER BY id DESC LIMIT ?2",
-        )?;
-        let rows = select.query_map(params![thread_id, n as i64], |row| row.get::<_, String>(0))?;
-        let mut messages = rows
-            .map(|json| Ok(serde_json::from_str(&json?)?))
-            .collect::<Result<Vec<Message>>>()?;
-        messages.reverse();
-        Ok(messages)
     }
 }
 
@@ -250,8 +244,13 @@ mod tests {
         let store = Sqlite::memory().unwrap();
         let mut paris = Thread::new("paris");
         tool_turn(&mut paris, "Weather in Paris?\nAnd a second line.");
+        // Timestamps are only as fine as the OS clock (microseconds on macOS): space the events
+        // so their order isn't a tie.
+        let tick = || std::thread::sleep(std::time::Duration::from_millis(2));
+        tick();
         let mut rome = Thread::new("rome");
         rome.start_turn(Message::user("Weather in Rome?")).unwrap();
+        tick();
         // Not activity: routing and compaction leave `active_at` alone.
         paris.routed("rule", "test").unwrap();
         store.save_thread(&mut paris).unwrap();

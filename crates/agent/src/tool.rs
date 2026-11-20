@@ -62,38 +62,41 @@ impl Task for ToolCall {
 
     async fn run(&self, rt: Runtime<Self>) -> Result<()> {
         let call = rt.input();
-        let tool = self.tools.get(&call.name);
-        match (rt.state(), tool) {
-            (_, None) => {
-                let output = ToolOutput::error(format!("tool {} is not available", call.name));
-                rt.commit(|_| Ok(Some(Next::Complete(output))))
-            }
+        let output = match (rt.state(), self.tools.get(&call.name)) {
+            (_, None) => ToolOutput::error(format!("tool {} is not available", call.name)),
+            // Like pi-durable: the intent is committed and the tool runs in this same phase, so
+            // `Execute` is only ever reached when an invocation was cut off mid-call, by a crash
+            // or a close alike, and the replay rule decides.
             (State::Call, Some(tool)) => {
                 let replay = tool.replay();
-                rt.commit(|_| Ok(Some(Next::Continue(State::Execute { replay }))))
+                rt.commit(|_| Ok(Some(Next::Continue(State::Execute { replay }))))?;
+                execute(&rt, tool.as_ref()).await?
             }
-            (&State::Execute { replay }, Some(tool)) => {
-                let safe = replay == Replay::Safe && tool.replay() == Replay::Safe;
-                if rt.restarts() > 0 && !safe {
-                    let output = ToolOutput::error(format!(
-                        "tool {} was interrupted and may have partially run; it was not run again",
-                        call.name
-                    ));
-                    return rt.commit(|_| Ok(Some(Next::Complete(output))));
-                }
-                let result = tokio::select! {
-                    result = tool.execute(call.arguments.clone()) => result,
-                    _ = rt.cancelled() => bail!("cancelled"),
-                };
-                let output = match result {
-                    Ok(content) => ToolOutput {
-                        content,
-                        is_error: false,
-                    },
-                    Err(error) => ToolOutput::error(format!("{error:#}")),
-                };
-                rt.commit(|_| Ok(Some(Next::Complete(output))))
+            (&State::Execute { replay }, Some(tool))
+                if replay == Replay::Unsafe || tool.replay() == Replay::Unsafe =>
+            {
+                ToolOutput::error(format!(
+                    "tool {} was interrupted and may have partially run; it was not run again",
+                    call.name
+                ))
             }
-        }
+            (State::Execute { .. }, Some(tool)) => execute(&rt, tool.as_ref()).await?,
+        };
+        rt.commit(|_| Ok(Some(Next::Complete(output))))
     }
+}
+
+async fn execute(rt: &Runtime<ToolCall>, tool: &dyn crate::Tool) -> Result<ToolOutput> {
+    let call = rt.input();
+    let result = tokio::select! {
+        result = tool.execute(call.arguments.clone()) => result,
+        _ = rt.cancelled() => bail!("cancelled"),
+    };
+    Ok(match result {
+        Ok(content) => ToolOutput {
+            content,
+            is_error: false,
+        },
+        Err(error) => ToolOutput::error(format!("{error:#}")),
+    })
 }

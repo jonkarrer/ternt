@@ -1,4 +1,4 @@
-//! Settling: after a long idle (the router's `settle_after`), a thread's context is reset to a
+//! Settling: after a long idle (the agent's `settle_after_ms`), a thread's context is reset to a
 //! resume card that holds just enough to pick it up again. History keeps everything.
 
 use anyhow::{Result, ensure};
@@ -7,7 +7,7 @@ use inference::providers::Api;
 use memory::Resume;
 use state::{Event, Thread};
 
-use crate::{Experience, transcript};
+use crate::{Experience, card_input};
 
 const RESUME_INPUT_CHARS: usize = 24_000;
 /// Heads the context of a settled thread.
@@ -20,35 +20,17 @@ impl<A: Api> Experience<A> {
     pub async fn settle(&self, thread: &mut Thread) -> Result<Option<Resume>> {
         ensure!(!thread.in_turn(), "can't settle during a turn");
         let previous = self.memory.resume(&thread.id)?;
-        let start = previous.as_ref().map_or(0, |c| c.to + 1);
-        let checkpoints = thread.checkpoints();
-        let Some(end) = checkpoints
-            .iter()
-            .skip(start)
-            .rev()
-            .find(|c| c.event == Event::TurnEnded)
-            .map(|c| c.id)
+        let previous = previous.as_ref().map(|r| (r.text.as_str(), r.to));
+        let Some((end, input)) = card_input(thread, previous, "Previous card", RESUME_INPUT_CHARS)
         else {
             return Ok(None);
         };
-        let messages: Vec<&Message> = checkpoints[start..=end]
-            .iter()
-            .filter_map(|c| match &c.event {
-                Event::Message(m) => Some(m),
-                _ => None,
-            })
-            .collect();
-        let active_at = checkpoints[..=end]
+        let checkpoints = &thread.checkpoints()[..=end];
+        let active_at = checkpoints
             .iter()
             .rev()
             .find(|c| matches!(c.event, Event::Message(_)))
             .map_or(checkpoints[end].at, |c| c.at);
-
-        let since = last_chars(&transcript(messages.into_iter()), RESUME_INPUT_CHARS);
-        let input = match &previous {
-            Some(card) => format!("Previous card:\n{}\n\nSince then:\n{since}", card.text),
-            None => since,
-        };
         let text = self.ask(RESUME_PROMPT, input).await?;
         let resume = self.memory.add_resume(
             &thread.id,
@@ -63,16 +45,6 @@ impl<A: Api> Experience<A> {
         thread.replace(0..len, vec![handoff])?;
         Ok(Some(resume))
     }
-}
-
-/// The last `max` characters, marked "…" when cut.
-fn last_chars(text: &str, max: usize) -> String {
-    let count = text.chars().count();
-    if count <= max {
-        return text.to_string();
-    }
-    let tail: String = text.chars().skip(count - max).collect();
-    format!("…{tail}")
 }
 
 const RESUME_PROMPT: &str =
