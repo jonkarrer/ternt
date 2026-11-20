@@ -33,7 +33,8 @@ use tracing_subscriber::{EnvFilter, Layer};
 /// What the journal records unless `TOKIDOKI_JOURNAL` says otherwise: everything from our
 /// crates at debug and above, only warnings from dependencies.
 pub const JOURNAL_DEFAULT: &str = "warn,agent=debug,attention=debug,context=debug,engine=debug,\
-experience=debug,inference=debug,memory=debug,router=debug,state=debug,telemetry=debug";
+experience=debug,inference=debug,interface=debug,memory=debug,router=debug,state=debug,\
+telemetry=debug,tokidoki=debug";
 
 /// Installs the global subscriber: the journal at `journal` (if any), and the console on
 /// stderr, filtered by `TOKIDOKI_LOG` (default `warn`; e.g. `TOKIDOKI_LOG=router=debug`).

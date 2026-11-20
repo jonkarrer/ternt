@@ -596,9 +596,11 @@ fn message_text(message: &Message) -> String {
                 true => format!("[error result: {content}]"),
                 false => format!("[result: {content}]"),
             },
+            Block::Thinking { text, .. } if text.trim().is_empty() => String::new(),
             Block::Thinking { text, .. } => format!("[thinking: {text}]"),
             Block::RedactedThinking { .. } => "[redacted thinking]".into(),
         })
+        .filter(|part| !part.is_empty())
         .collect();
     parts.join(" ")
 }

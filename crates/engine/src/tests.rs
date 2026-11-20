@@ -1002,3 +1002,33 @@ async fn background_work_outlives_its_owner() {
     let child = engine.task(child).unwrap().unwrap();
     assert!(!child.abort_requested && matches!(child.state, TaskState::Running { .. }));
 }
+
+#[tokio::test]
+async fn subscribers_hear_what_each_commit_changed() {
+    let engine = engine(&store());
+    let mut changes = engine.subscribe();
+    engine
+        .commit(|tx| {
+            tx.thread("t1")?.push(Message::user("one"))?;
+            tx.thread("t1")?.push(Message::user("two"))?;
+            tx.put_doc("greeting", &"hi")
+        })
+        .unwrap();
+    let id = engine
+        .create_task::<Steps>("t1", "three".into(), TaskOptions::default())
+        .unwrap();
+
+    let first = changes.recv().await.unwrap();
+    assert_eq!(first.threads, [("t1".to_string(), 0..2)]);
+    assert_eq!(first.docs, ["greeting"]);
+    assert!(first.tasks.is_empty());
+    let created = changes.recv().await.unwrap();
+    assert_eq!(created.tasks[0].id, id);
+    assert_eq!(created.tasks[0].state, "pending");
+    assert_eq!(created.tasks[0].kind, "test.steps");
+    wait(&engine, id).await;
+    while changes.try_recv().is_ok() {}
+    // A commit that only reads changes nothing, and says nothing.
+    engine.commit(|tx| tx.thread("t1").map(drop)).unwrap();
+    assert!(changes.try_recv().is_err());
+}

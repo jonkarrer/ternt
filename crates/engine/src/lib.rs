@@ -35,7 +35,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use state::{Savepoint, Sqlite, Thread};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use tokio::task::AbortHandle;
 use tracing::Instrument;
 
@@ -67,7 +67,34 @@ pub(crate) struct Shared {
     inner: Mutex<Inner>,
     /// Bumped after every commit and every invocation's end; the scheduler and waits watch it.
     version: watch::Sender<u64>,
+    /// What each commit changed, for `subscribe`.
+    changes: broadcast::Sender<Arc<Committed>>,
 }
+
+/// What one commit changed, as `Engine::subscribe` reports it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Committed {
+    /// Threads with new checkpoints, and which (their positions).
+    pub threads: Vec<(String, std::ops::Range<usize>)>,
+    /// Documents written or deleted.
+    pub docs: Vec<String>,
+    /// Tasks written, as they now are.
+    pub tasks: Vec<TaskChange>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskChange {
+    pub id: TaskId,
+    pub thread: String,
+    pub kind: String,
+    /// `TaskState::name`.
+    pub state: &'static str,
+    /// The checkpoint's `phase` tag; "" once ended.
+    pub phase: String,
+}
+
+/// How many commits a subscriber may fall behind before it misses some (and is told so).
+const CHANGES_BUFFER: usize = 1024;
 
 struct Inner {
     /// Threads loaded so far, as last committed.
@@ -133,9 +160,16 @@ impl Engine {
                 failed: None,
             }),
             version: watch::channel(0).0,
+            changes: broadcast::channel(CHANGES_BUFFER).0,
         });
         shared.recover()?;
         Ok(Self { shared })
+    }
+
+    /// What every commit from now on changes, in commit order. A subscriber that falls more
+    /// than 1024 commits behind gets `RecvError::Lagged` and should re-read what it shows.
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<Committed>> {
+        self.shared.changes.subscribe()
     }
 
     /// The store, for reads outside the engine (thread lists, recent messages).
@@ -354,8 +388,13 @@ impl Shared {
             return Err(error);
         }
 
+        let mut committed = Committed::default();
         for id in savepoints.keys() {
-            inner.threads.get_mut(id).expect("touched").mark_saved();
+            let thread = inner.threads.get_mut(id).expect("touched");
+            if let (Some(first), Some(last)) = (thread.unsaved().first(), thread.unsaved().last()) {
+                committed.threads.push((id.clone(), first.id..last.id + 1));
+            }
+            thread.mark_saved();
         }
         for id in advanced {
             *inner.progress.entry(id).or_default() += 1;
@@ -365,7 +404,15 @@ impl Shared {
             if before != Some(task.state.name()) {
                 trace_change(task, before);
             }
+            committed.tasks.push(TaskChange {
+                id: *id,
+                thread: task.thread.clone(),
+                kind: task.kind.clone(),
+                state: task.state.name(),
+                phase: task.state.checkpoint().map_or("", phase_name).to_string(),
+            });
         }
+        committed.docs = docs.keys().cloned().collect();
         for (id, task) in tasks {
             if task.state.is_terminal() {
                 inner.tasks.remove(&id);
@@ -382,6 +429,10 @@ impl Shared {
         }
         drop(guard);
         self.version.send_modify(|v| *v += 1);
+        if committed != Committed::default() {
+            // No subscribers is fine: nobody is listening.
+            let _ = self.changes.send(Arc::new(committed));
+        }
         Ok(value)
     }
 

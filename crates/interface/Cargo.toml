@@ -1,0 +1,11 @@
+[package]
+name = "interface"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+# Only the protocol's types: front ends (a Dioxus web build, say) can share them without the
+# engine, Tokio or SQLite.
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

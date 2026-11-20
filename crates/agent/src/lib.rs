@@ -40,6 +40,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use state::{Event, Thread};
 
+use interface::{Input, Rejected, Sent, Status, Submission, WhenBusy};
+
 /// What the agent loop calls for each request.
 pub trait Model: Send + Sync + 'static {
     fn chat(&self, ctx: &Context) -> impl Future<Output = Result<Response>> + Send;
@@ -101,6 +103,41 @@ impl Tools {
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.by_name.get(name).cloned()
     }
+
+    /// Every tool's spec, by name.
+    pub fn specs(&self) -> Vec<context::Tool> {
+        let mut specs: Vec<context::Tool> = self.by_name.values().map(|t| t.spec()).collect();
+        specs.sort_by(|a, b| a.name.cmp(&b.name));
+        specs
+    }
+}
+
+/// What a new thread starts with, set in the commit that admits its first input.
+#[derive(Debug, Clone, Default)]
+pub struct NewThreads {
+    pub system: Option<String>,
+    pub tools: Vec<context::Tool>,
+}
+
+impl NewThreads {
+    fn set_up(&self, tx: &mut Tx, thread: &str) -> Result<()> {
+        let thread = tx.thread(thread)?;
+        if !thread.checkpoints().is_empty() {
+            return Ok(());
+        }
+        if let Some(system) = &self.system {
+            thread.set_system(system.clone())?;
+        }
+        for tool in &self.tools {
+            thread.register(tool.clone())?;
+        }
+        Ok(())
+    }
+}
+
+/// The submission a document key holds, if it holds one: for reading `Engine::subscribe`.
+pub fn submission_in(key: &str) -> Option<&str> {
+    key.strip_prefix("agent/submission/")
 }
 
 #[derive(Debug, Clone)]
@@ -211,69 +248,55 @@ pub(crate) async fn think<T: Task>(
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum WhenBusy {
-    /// Waits for the run to answer, then starts the next run.
-    #[default]
-    FollowUp,
-    /// Joins the running work after its current tool round.
-    Steer,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Input {
+/// An input as the inbox admits it: its text, and how to queue it.
+#[derive(Debug, Clone)]
+pub(crate) struct Draft {
     pub text: String,
-    /// The same request ID finds the same submission instead of submitting twice.
     pub request_id: Option<String>,
     pub when_busy: WhenBusy,
 }
 
-impl Input {
-    pub fn new(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            ..Self::default()
+impl Draft {
+    /// The input's text; other kinds of parts are refused until the loop can use them.
+    fn of(input: &Input) -> Result<Self> {
+        let mut texts = Vec::new();
+        for part in &input.parts {
+            match part {
+                interface::Part::Text { text } => texts.push(text.as_str()),
+                other => {
+                    let kind = other.kind();
+                    return Err(Rejected(format!("{kind} inputs aren't supported yet")).into());
+                }
+            }
         }
+        let text = texts.join("\n\n");
+        if text.trim().is_empty() {
+            return Err(Rejected("the input is empty".into()).into());
+        }
+        Ok(Self {
+            text,
+            request_id: input.request_id.clone(),
+            when_busy: input.when_busy,
+        })
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Status {
-    Queued,
-    Placed,
-    Done,
-    Unanswered,
-}
-
+/// A submission as stored: what `interface::Submission` shows, and what only the inbox needs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Submission {
-    pub id: String,
-    pub thread: String,
-    pub text: String,
+pub(crate) struct Record {
+    #[serde(flatten)]
+    pub shown: Submission,
     pub request_id: Option<String>,
     pub when_busy: WhenBusy,
-    pub status: Status,
     /// The run it was placed in.
     pub run: Option<TaskId>,
-    pub answer: Option<String>,
-    pub reason: Option<String>,
-}
-
-/// Where `send` put an input.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Sent {
-    pub thread: String,
-    pub submission: String,
-    /// `None` when the request ID was already submitted.
-    pub route: Option<router::Route>,
 }
 
 const LAST_THREAD: &str = "agent/last-thread";
 
+/// How a run settles its inputs.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Settled {
+pub(crate) enum Settled {
     Done { answer: String },
     Unanswered { reason: String },
 }
@@ -290,21 +313,55 @@ impl Settled {
 #[derive(Clone)]
 pub struct Agent {
     engine: Engine,
+    new_threads: Arc<NewThreads>,
 }
 
 impl Agent {
     pub fn new(engine: Engine) -> Self {
-        Self { engine }
+        Self::with_new_threads(engine, NewThreads::default())
+    }
+
+    /// Threads this agent starts get `new_threads`' system prompt and tools.
+    pub fn with_new_threads(engine: Engine, new_threads: NewThreads) -> Self {
+        Self {
+            engine,
+            new_threads: Arc::new(new_threads),
+        }
     }
 
     pub fn engine(&self) -> &Engine {
         &self.engine
     }
 
-    /// Routes an input to a thread (an existing one, or a new one) and submits it there. The
-    /// route is noted in the thread, and the submission admitted, in one commit.
+    /// Stops the thread's run, if one is running: its inputs, and those queued behind it, are
+    /// settled unanswered. Returns whether there was one.
+    pub fn abort(&self, thread: &str) -> Result<bool> {
+        self.engine.commit(|tx| {
+            let inbox: inbox::Inbox = tx.doc(&inbox::inbox_key(thread))?.unwrap_or_default();
+            match inbox.run.filter(|&run| tx.task(run).is_some()) {
+                Some(run) => {
+                    tx.abort_task(run, "stopped by the user")?;
+                    Ok(true)
+                }
+                None => Ok(false),
+            }
+        })
+    }
+
+    /// Admits an input: to the thread it names, or else routed to a thread (an existing one,
+    /// or a new one), the route noted in the thread and the input admitted in one commit.
+    /// Fails with an `interface::Rejected` for an input it can't take (no text, say).
     pub async fn send<A: Api>(&self, router: &router::Router<A>, input: Input) -> Result<Sent> {
-        if let Some(request_id) = &input.request_id
+        let draft = Draft::of(&input)?;
+        if let Some(thread) = input.thread {
+            let submission = self.submit_draft(&thread, draft)?;
+            return Ok(Sent {
+                thread,
+                submission,
+                route: None,
+            });
+        }
+        if let Some(request_id) = &draft.request_id
             && let Some(id) = self.engine.doc::<String>(&inbox::request_key(request_id))?
             && let Some(submission) = self.submission(&id)?
         {
@@ -318,20 +375,22 @@ impl Agent {
         let store = self.engine.store().as_ref();
         let threads = router.threads(store, now)?;
         let routing = router::Input {
-            text: input.text.clone(),
+            text: draft.text.clone(),
             now,
             last: self.engine.doc(LAST_THREAD)?,
         };
         let route = router.route(store, &routing, &threads).await?;
-        let text = input.text.clone();
-        let sent = self.engine.commit(|tx| admit(tx, route, input))?;
+        let text = draft.text.clone();
+        let sent = self
+            .engine
+            .commit(|tx| admit(tx, &self.new_threads, route, draft))?;
         if let Some(route) = &sent.route {
             tracing::info!(
                 thread = %sent.thread,
                 submission = %sent.submission,
-                by = route.by.as_str(),
+                by = %route.by,
                 reason = %route.reason,
-                new = matches!(route.target, router::Target::New),
+                new = route.new,
                 text = %text,
                 "input routed"
             );
@@ -339,39 +398,40 @@ impl Agent {
         Ok(sent)
     }
 
-    /// Admits an input durably and returns its submission ID.
+    /// Admits an input to `thread` durably and returns its submission ID; the thread it names,
+    /// if any, is ignored.
     pub fn submit(&self, thread: &str, input: Input) -> Result<String> {
-        let (text, when_busy) = (input.text.clone(), input.when_busy);
-        let id = self.engine.commit(|tx| inbox::submit(tx, thread, input))?;
+        self.submit_draft(thread, Draft::of(&input)?)
+    }
+
+    fn submit_draft(&self, thread: &str, draft: Draft) -> Result<String> {
+        let (text, when_busy) = (draft.text.clone(), draft.when_busy);
+        let id = self.engine.commit(|tx| {
+            self.new_threads.set_up(tx, thread)?;
+            inbox::submit(tx, thread, draft)
+        })?;
         tracing::info!(thread, submission = %id, when_busy = ?when_busy, text = %text, "input submitted");
         Ok(id)
     }
 
     pub fn submission(&self, id: &str) -> Result<Option<Submission>> {
-        self.engine.doc(&inbox::submission_key(id))
+        let record: Option<Record> = self.engine.doc(&inbox::submission_key(id))?;
+        Ok(record.map(|r| r.shown))
     }
 
     /// Resolves once the submission is answered or can't be.
-    pub async fn wait(&self, id: &str) -> Result<Settled> {
+    pub async fn wait(&self, id: &str) -> Result<Submission> {
         self.engine
             .watch(|engine| {
-                let Some(submission) = engine.doc::<Submission>(&inbox::submission_key(id))? else {
+                let Some(record) = engine.doc::<Record>(&inbox::submission_key(id))? else {
                     anyhow::bail!("no submission {id}");
                 };
-                match submission.status {
-                    Status::Done => {
-                        let answer = submission.answer.unwrap_or_default();
-                        return Ok(Some(Settled::Done { answer }));
-                    }
-                    Status::Unanswered => {
-                        let reason = submission.reason.unwrap_or_default();
-                        return Ok(Some(Settled::Unanswered { reason }));
-                    }
-                    Status::Queued | Status::Placed => {}
+                if record.shown.is_settled() {
+                    return Ok(Some(record.shown));
                 }
                 // A run that ended without settling its inputs (it faulted, say) never will:
                 // nothing else notices until the next submission, so recover from it here.
-                let thread = &submission.thread;
+                let thread = &record.shown.thread;
                 let inbox: inbox::Inbox =
                     engine.doc(&inbox::inbox_key(thread))?.unwrap_or_default();
                 if let Some(run) = inbox.run
@@ -388,10 +448,15 @@ impl Agent {
 
 /// Submits a routed input to its thread (an existing one, or a new one) and notes the route
 /// there. A request ID submitted since `send` checked (by another `send`) changes nothing.
-fn admit(tx: &mut Tx, route: router::Route, input: Input) -> Result<Sent> {
-    if let Some(submission) = inbox::existing(tx, &input)? {
+fn admit(
+    tx: &mut Tx,
+    new_threads: &NewThreads,
+    route: router::Route,
+    draft: Draft,
+) -> Result<Sent> {
+    if let Some(submission) = inbox::existing(tx, &draft)? {
         return Ok(Sent {
-            thread: inbox::submission(tx, &submission)?.thread,
+            thread: inbox::submission(tx, &submission)?.shown.thread,
             submission,
             route: None,
         });
@@ -404,14 +469,19 @@ fn admit(tx: &mut Tx, route: router::Route, input: Input) -> Result<Sent> {
             format!("thread-{n}")
         }
     };
+    new_threads.set_up(tx, &thread)?;
     tx.thread(&thread)?
         .routed(route.by.as_str(), &route.reason)?;
-    let submission = inbox::submit(tx, &thread, input)?;
+    let submission = inbox::submit(tx, &thread, draft)?;
     tx.put_doc(LAST_THREAD, &thread)?;
     Ok(Sent {
         thread,
         submission,
-        route: Some(route),
+        route: Some(interface::Route {
+            by: route.by.as_str().to_string(),
+            new: matches!(route.target, router::Target::New),
+            reason: route.reason,
+        }),
     })
 }
 

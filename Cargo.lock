@@ -11,6 +11,7 @@ dependencies = [
  "engine",
  "experience",
  "inference",
+ "interface",
  "memory",
  "router",
  "serde",
@@ -651,6 +652,14 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "interface"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1553,6 +1562,26 @@ name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+
+[[package]]
+name = "tokidoki"
+version = "0.1.0"
+dependencies = [
+ "agent",
+ "anyhow",
+ "context",
+ "engine",
+ "experience",
+ "inference",
+ "interface",
+ "memory",
+ "router",
+ "serde_json",
+ "state",
+ "telemetry",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "tokio"

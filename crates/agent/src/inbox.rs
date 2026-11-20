@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::generation::{NAME as GENERATION, close_calls};
 use crate::idle::NAME as IDLE;
-use crate::{Input, Settled, Status, Submission, WhenBusy};
+use crate::{Draft, Record, Settled, Status, Submission, WhenBusy};
 
 /// What a thread is working on, and what waits for it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -43,26 +43,26 @@ fn save(tx: &mut Tx, thread: &str, inbox: &Inbox) -> Result<()> {
     tx.put_doc(&inbox_key(thread), inbox)
 }
 
-pub(crate) fn submission(tx: &mut Tx, id: &str) -> Result<Submission> {
+pub(crate) fn submission(tx: &mut Tx, id: &str) -> Result<Record> {
     tx.doc(&submission_key(id))?
         .with_context(|| format!("no submission {id}"))
 }
 
-fn update(tx: &mut Tx, id: &str, change: impl FnOnce(&mut Submission)) -> Result<()> {
+fn update(tx: &mut Tx, id: &str, change: impl FnOnce(&mut Record)) -> Result<()> {
     let mut submission = submission(tx, id)?;
     change(&mut submission);
     tx.put_doc(&submission_key(id), &submission)
 }
 
 /// The submission the input's request ID already made, if any.
-pub(crate) fn existing(tx: &mut Tx, input: &Input) -> Result<Option<String>> {
+pub(crate) fn existing(tx: &mut Tx, input: &Draft) -> Result<Option<String>> {
     match &input.request_id {
         Some(request_id) => tx.doc(&request_key(request_id)),
         None => Ok(None),
     }
 }
 
-pub(crate) fn submit(tx: &mut Tx, thread: &str, input: Input) -> Result<String> {
+pub(crate) fn submit(tx: &mut Tx, thread: &str, input: Draft) -> Result<String> {
     if let Some(id) = existing(tx, &input)? {
         return Ok(id);
     }
@@ -74,16 +74,18 @@ pub(crate) fn submit(tx: &mut Tx, thread: &str, input: Input) -> Result<String> 
     }
     tx.put_doc(
         &submission_key(&id),
-        &Submission {
-            id: id.clone(),
-            thread: thread.to_string(),
-            text: input.text,
+        &Record {
+            shown: Submission {
+                id: id.clone(),
+                thread: thread.to_string(),
+                text: input.text,
+                status: Status::Queued,
+                answer: None,
+                reason: None,
+            },
             request_id: input.request_id,
             when_busy: input.when_busy,
-            status: Status::Queued,
             run: None,
-            answer: None,
-            reason: None,
         },
     )?;
 
@@ -126,7 +128,7 @@ fn start_next(tx: &mut Tx, thread: &str, inbox: &mut Inbox) -> Result<()> {
         tx.abort_task(idle, "a new run started")?;
     }
     let id = inbox.queue.remove(0);
-    let text = submission(tx, &id)?.text;
+    let text = submission(tx, &id)?.shown.text;
     tx.thread(thread)?.start_turn(Message::user(text))?;
     let run = tx.create_task_named(
         GENERATION,
@@ -135,7 +137,7 @@ fn start_next(tx: &mut Tx, thread: &str, inbox: &mut Inbox) -> Result<()> {
         TaskOptions::default(),
     )?;
     update(tx, &id, |s| {
-        s.status = Status::Placed;
+        s.shown.status = Status::Placed;
         s.run = Some(run);
     })?;
     inbox.run = Some(run);
@@ -153,10 +155,10 @@ pub(crate) fn place_steers(tx: &mut Tx, thread: &str) -> Result<()> {
             kept.push(id);
             continue;
         }
-        tracing::info!(thread, submission = %id, text = %queued.text, "steer placed");
-        tx.thread(thread)?.push(Message::user(queued.text))?;
+        tracing::info!(thread, submission = %id, text = %queued.shown.text, "steer placed");
+        tx.thread(thread)?.push(Message::user(queued.shown.text))?;
         update(tx, &id, |s| {
-            s.status = Status::Placed;
+            s.shown.status = Status::Placed;
             s.run = inbox.run;
         })?;
         inbox.placed.push(id);
@@ -197,7 +199,7 @@ fn finish(
 }
 
 fn settle(tx: &mut Tx, id: &str, settled: Settled) -> Result<()> {
-    let thread = submission(tx, id)?.thread;
+    let thread = submission(tx, id)?.shown.thread;
     match &settled {
         Settled::Done { answer } => {
             tracing::info!(thread, submission = id, answer, "input answered")
@@ -208,12 +210,12 @@ fn settle(tx: &mut Tx, id: &str, settled: Settled) -> Result<()> {
     }
     update(tx, id, |s| match settled {
         Settled::Done { answer } => {
-            s.status = Status::Done;
-            s.answer = Some(answer);
+            s.shown.status = Status::Done;
+            s.shown.answer = Some(answer);
         }
         Settled::Unanswered { reason } => {
-            s.status = Status::Unanswered;
-            s.reason = Some(reason);
+            s.shown.status = Status::Unanswered;
+            s.shown.reason = Some(reason);
         }
     })
 }

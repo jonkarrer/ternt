@@ -26,3 +26,7 @@ db path="data/tokidoki.db":
 # Read what the agent did, e.g. `just inspect recent` or `just inspect search vegetarian`.
 inspect *args:
     cargo run -q -p telemetry --bin inspect -- {{args}}
+
+# Talk to a fresh tokidoki in the terminal; its data is deleted on exit unless `--keep`.
+chat *args:
+    cargo run -q -p tokidoki --bin chat -- {{args}}

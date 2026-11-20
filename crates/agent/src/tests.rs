@@ -164,10 +164,31 @@ fn start_with(
 }
 
 async fn settled(agent: &Agent, id: &str) -> Settled {
-    tokio::time::timeout(T, agent.wait(id))
+    let submission = tokio::time::timeout(T, agent.wait(id))
         .await
         .unwrap()
+        .unwrap();
+    match submission.status {
+        Status::Done => Settled::Done {
+            answer: submission.answer.unwrap_or_default(),
+        },
+        _ => Settled::unanswered(submission.reason.unwrap_or_default()),
+    }
+}
+
+/// The run a submission was placed in.
+fn run_of(agent: &Agent, id: &str) -> TaskId {
+    let record: Record = agent
+        .engine()
+        .doc(&inbox::submission_key(id))
         .unwrap()
+        .unwrap();
+    record.run.unwrap()
+}
+
+/// An input from the owner.
+fn input(text: &str) -> Input {
+    Input::text(interface::Speaker::owner(), text)
 }
 
 fn done(answer: &str) -> Settled {
@@ -239,7 +260,7 @@ fn store() -> Arc<Sqlite> {
 async fn answers_an_input() {
     let script = Script::new(vec![Reply::Text("hello")]);
     let agent = start(&store(), &script, Tools::new());
-    let id = agent.submit("t1", Input::new("hi")).unwrap();
+    let id = agent.submit("t1", input("hi")).unwrap();
     assert_eq!(settled(&agent, &id).await, done("hello"));
     assert_eq!(transcript(&agent, "t1"), ["User: hi", "Assistant: hello"]);
     assert!(!agent.engine().thread("t1", |t| t.in_turn()).unwrap());
@@ -254,7 +275,7 @@ async fn runs_tools_between_requests() {
     let mut tools = Tools::new();
     tools.add(TestTool::new("weather", "18C"));
     let agent = start(&store(), &script, tools);
-    let id = agent.submit("t1", Input::new("Weather in Paris?")).unwrap();
+    let id = agent.submit("t1", input("Weather in Paris?")).unwrap();
     assert_eq!(settled(&agent, &id).await, done("18C and sunny"));
     assert_eq!(
         transcript(&agent, "t1"),
@@ -275,7 +296,7 @@ async fn a_request_id_submits_once() {
     let agent = start(&store(), &script, Tools::new());
     let input = Input {
         request_id: Some("greeting-1".into()),
-        ..Input::new("hi")
+        ..input("hi")
     };
     let first = agent.submit("t1", input.clone()).unwrap();
     let again = agent.submit("t1", input).unwrap();
@@ -292,9 +313,9 @@ async fn follow_ups_wait_for_the_answer() {
         Reply::Text("second"),
     ]);
     let agent = start(&store(), &script, Tools::new());
-    let a = agent.submit("t1", Input::new("one")).unwrap();
+    let a = agent.submit("t1", input("one")).unwrap();
     eventually(|| script.seen().len() == 1).await;
-    let b = agent.submit("t1", Input::new("two")).unwrap();
+    let b = agent.submit("t1", input("two")).unwrap();
     assert_eq!(
         agent.submission(&b).unwrap().unwrap().status,
         Status::Queued
@@ -326,11 +347,11 @@ async fn steers_join_after_the_tool_round() {
         ..TestTool::new("slow", "measured")
     });
     let agent = start(&store(), &script, tools);
-    let a = agent.submit("t1", Input::new("measure it")).unwrap();
+    let a = agent.submit("t1", input("measure it")).unwrap();
     eventually(|| script.seen().len() == 1).await;
     let steer = Input {
         when_busy: WhenBusy::Steer,
-        ..Input::new("use metric")
+        ..input("use metric")
     };
     let b = agent.submit("t1", steer).unwrap();
     gate.notify_one();
@@ -354,7 +375,7 @@ async fn a_request_cut_off_by_a_crash_is_retried() {
     let store = store();
     let script = Script::new(vec![Reply::Hang]);
     let agent = start(&store, &script, Tools::new());
-    let id = agent.submit("t1", Input::new("hi")).unwrap();
+    let id = agent.submit("t1", input("hi")).unwrap();
     eventually(|| script.seen().len() == 1).await;
     agent.engine().crash();
 
@@ -378,7 +399,7 @@ async fn an_unsafe_tool_cut_off_is_not_run_again() {
         ..TestTool::new("order", "ordered")
     });
     let agent = start(&store, &script, tools);
-    let id = agent.submit("t1", Input::new("order groceries")).unwrap();
+    let id = agent.submit("t1", input("order groceries")).unwrap();
     tool_executing(&agent).await;
     agent.engine().crash();
 
@@ -413,7 +434,7 @@ async fn an_unsafe_tool_cut_off_by_a_close_is_not_run_again() {
         ..TestTool::new("order", "ordered")
     });
     let agent = start(&store, &script, tools);
-    let id = agent.submit("t1", Input::new("order groceries")).unwrap();
+    let id = agent.submit("t1", input("order groceries")).unwrap();
     tool_executing(&agent).await;
     agent.engine().close().unwrap();
 
@@ -443,7 +464,7 @@ async fn a_safe_tool_cut_off_runs_again() {
         ..TestTool::new("lookup", "found")
     });
     let agent = start(&store, &script, tools);
-    let id = agent.submit("t1", Input::new("look it up")).unwrap();
+    let id = agent.submit("t1", input("look it up")).unwrap();
     tool_executing(&agent).await;
     agent.engine().crash();
 
@@ -469,7 +490,7 @@ async fn model_errors_are_retried_then_unanswered() {
         Reply::Error("overloaded"),
     ]);
     let agent = start(&store(), &script, Tools::new());
-    let id = agent.submit("t1", Input::new("hi")).unwrap();
+    let id = agent.submit("t1", input("hi")).unwrap();
     assert_eq!(
         settled(&agent, &id).await,
         Settled::Unanswered {
@@ -483,7 +504,7 @@ async fn model_errors_are_retried_then_unanswered() {
         .lock()
         .unwrap()
         .push_back(Reply::Text("better now"));
-    let next = agent.submit("t1", Input::new("hi again")).unwrap();
+    let next = agent.submit("t1", input("hi again")).unwrap();
     assert_eq!(settled(&agent, &next).await, done("better now"));
 }
 
@@ -496,9 +517,9 @@ async fn an_abort_leaves_the_thread_valid() {
         ..TestTool::new("slow", "never")
     });
     let agent = start(&store(), &script, tools);
-    let id = agent.submit("t1", Input::new("go")).unwrap();
+    let id = agent.submit("t1", input("go")).unwrap();
     eventually(|| !live_tools(&agent).is_empty()).await;
-    let run = agent.submission(&id).unwrap().unwrap().run.unwrap();
+    let run = run_of(&agent, &id);
     agent.engine().abort_task(run).unwrap();
     assert_eq!(
         settled(&agent, &id).await,
@@ -543,7 +564,7 @@ async fn live_tool_loop() {
     let agent = Agent::new(engine);
 
     let id = agent
-        .submit("t1", Input::new("What's the weather in Paris?"))
+        .submit("t1", input("What's the weather in Paris?"))
         .unwrap();
     let answer = tokio::time::timeout(Duration::from_secs(60), agent.wait(&id))
         .await
@@ -551,7 +572,7 @@ async fn live_tool_loop() {
         .unwrap();
     println!("{answer:?}");
     println!("{:#?}", transcript(&agent, "t1"));
-    let Settled::Done { answer } = answer else {
+    let Some(answer) = answer.answer.filter(|_| answer.status == Status::Done) else {
         panic!("unanswered");
     };
     assert!(answer.contains("18"));
@@ -600,7 +621,7 @@ async fn idle_threads_dream_then_settle() {
         Some(recorder.clone()),
         settings,
     );
-    let id = agent.submit("t1", Input::new("hi")).unwrap();
+    let id = agent.submit("t1", input("hi")).unwrap();
     assert_eq!(settled(&agent, &id).await, done("hello"));
     eventually(|| recorder.calls.lock().unwrap().contains(&"settle")).await;
     eventually(|| transcript(&agent, "t1") == ["User: card: said hi"]).await;
@@ -638,7 +659,7 @@ async fn a_new_input_cancels_the_idle_countdown() {
         Some(recorder.clone()),
         settings,
     );
-    let id = agent.submit("t1", Input::new("hi")).unwrap();
+    let id = agent.submit("t1", input("hi")).unwrap();
     assert_eq!(settled(&agent, &id).await, done("hello"));
     let engine = agent.engine().clone();
     let idle = || {
@@ -650,7 +671,7 @@ async fn a_new_input_cancels_the_idle_countdown() {
     eventually(|| idle().is_some_and(|t| matches!(t.state, TaskState::Sleeping { .. }))).await;
     let first_idle = idle().unwrap().id;
 
-    let next = agent.submit("t1", Input::new("hi again")).unwrap();
+    let next = agent.submit("t1", input("hi again")).unwrap();
     assert_eq!(settled(&agent, &next).await, done("again"));
     let ended = tokio::time::timeout(T, agent.engine().wait(first_idle))
         .await
@@ -694,7 +715,7 @@ async fn experience_recalls_before_the_request() {
         Some(Arc::new(experience)),
         fast(),
     );
-    let id = agent.submit("t1", Input::new("What's my name?")).unwrap();
+    let id = agent.submit("t1", input("What's my name?")).unwrap();
     assert_eq!(settled(&agent, &id).await, done("You're Jon."));
     let asked = script.seen()[0].messages[0].text();
     assert!(
@@ -723,18 +744,18 @@ async fn send_routes_each_input() {
     let agent = start(&store(), &script, Tools::new());
 
     let first = agent
-        .send(&router, Input::new("Plan a trip to Kyoto in April."))
+        .send(&router, input("Plan a trip to Kyoto in April."))
         .await
         .unwrap();
     assert_eq!(first.thread, "thread-1");
     settled(&agent, &first.submission).await;
-    let second = agent.send(&router, Input::new("yes, do it")).await.unwrap();
+    let second = agent.send(&router, input("yes, do it")).await.unwrap();
     assert_eq!(second.thread, "thread-1");
     settled(&agent, &second.submission).await;
     let third = agent
         .send(
             &router,
-            Input::new("Write a cron job that rotates logs nightly."),
+            input("Write a cron job that rotates logs nightly."),
         )
         .await
         .unwrap();
@@ -774,11 +795,14 @@ async fn a_request_id_routed_twice_submits_once() {
     let agent = start(&store(), &script, Tools::new());
     let input = Input {
         request_id: Some("r1".into()),
-        ..Input::new("hi")
+        ..input("hi")
     };
     let first = agent.submit("t1", input.clone()).unwrap();
     let route = router::Route::new(router::By::Rule, "no earlier threads");
-    let again = agent.engine().commit(|tx| admit(tx, route, input)).unwrap();
+    let again = agent
+        .engine()
+        .commit(|tx| admit(tx, &NewThreads::default(), route, Draft::of(&input)?))
+        .unwrap();
     assert_eq!(
         again,
         Sent {
@@ -850,7 +874,7 @@ async fn live_remembers_across_threads() {
     let told = agent
         .send(
             &router,
-            Input::new("Hi! I'm Jon, and I prefer Rust for everything."),
+            input("Hi! I'm Jon, and I prefer Rust for everything."),
         )
         .await
         .unwrap();
@@ -861,14 +885,14 @@ async fn live_remembers_across_threads() {
     );
 
     let asked = agent
-        .send(&router, Input::new("New topic: what's my name?"))
+        .send(&router, input("New topic: what's my name?"))
         .await
         .unwrap();
     let answer = wait(asked.submission.clone()).await;
     println!("asked: {:?} -> {answer:?}", asked.route);
     println!("{:#?}", transcript(&agent, &asked.thread));
     assert_ne!(asked.thread, told.thread);
-    let Settled::Done { answer } = answer else {
+    let Some(answer) = answer.answer.filter(|_| answer.status == Status::Done) else {
         panic!("unanswered");
     };
     assert!(answer.contains("Jon"));
@@ -909,9 +933,9 @@ async fn a_faulted_run_lets_the_queue_move_on() {
     });
     let script = Script::new(vec![Reply::Text("second")]);
     let agent = start_with(&store(), &script, Tools::new(), Some(mind.clone()), fast());
-    let a = agent.submit("t1", Input::new("one")).unwrap();
+    let a = agent.submit("t1", input("one")).unwrap();
     eventually(|| mind.calls.load(Ordering::SeqCst) == 1).await;
-    let b = agent.submit("t1", Input::new("two")).unwrap();
+    let b = agent.submit("t1", input("two")).unwrap();
     mind.gate.notify_one();
     assert!(matches!(
         settled(&agent, &a).await,
@@ -934,9 +958,9 @@ async fn a_faulted_run_recovers_on_its_own() {
     });
     let script = Script::new(vec![Reply::Text("second")]);
     let agent = start_with(&store(), &script, Tools::new(), Some(mind.clone()), fast());
-    let a = agent.submit("t1", Input::new("one")).unwrap();
+    let a = agent.submit("t1", input("one")).unwrap();
     eventually(|| mind.calls.load(Ordering::SeqCst) == 1).await;
-    let b = agent.submit("t1", Input::new("two")).unwrap();
+    let b = agent.submit("t1", input("two")).unwrap();
     mind.gate.notify_one();
     let status = |id: &str| agent.submission(id).unwrap().unwrap();
     eventually(|| status(&a).status == Status::Unanswered && status(&b).status == Status::Done)
@@ -955,9 +979,9 @@ async fn an_abort_keeps_the_results_of_finished_tools() {
         ..TestTool::new("slow", "never")
     });
     let agent = start(&store(), &script, tools);
-    let id = agent.submit("t1", Input::new("order, then wait")).unwrap();
+    let id = agent.submit("t1", input("order, then wait")).unwrap();
     eventually(|| script.seen().len() == 1 && live_tools(&agent).len() == 1).await;
-    let run = agent.submission(&id).unwrap().unwrap().run.unwrap();
+    let run = run_of(&agent, &id);
     agent.engine().abort_task(run).unwrap();
     settled(&agent, &id).await;
     // The order went through: the model must not be told it didn't.
@@ -984,7 +1008,7 @@ async fn the_turn_limit_counts_tool_rounds() {
         ..fast()
     };
     let agent = start_with(&store(), &script, tools, None, settings);
-    let id = agent.submit("t1", Input::new("go")).unwrap();
+    let id = agent.submit("t1", input("go")).unwrap();
     assert_eq!(
         settled(&agent, &id).await,
         Settled::Unanswered {
@@ -1032,7 +1056,7 @@ async fn a_run_that_ends_abnormally_leaves_the_thread_valid() {
         ..TestTool::new("slow", "never")
     });
     let agent = start(&store, &script, tools);
-    let id = agent.submit("t1", Input::new("go")).unwrap();
+    let id = agent.submit("t1", input("go")).unwrap();
     eventually(|| !live_tools(&agent).is_empty()).await;
     agent.engine().crash();
 
@@ -1067,7 +1091,7 @@ async fn a_turn_can_be_traced_back_step_by_step() {
     tools.add(TestTool::new("weather", "18C"));
     let store = store();
     let agent = start(&store, &script, tools);
-    let id = agent.submit("t1", Input::new("Weather in Paris?")).unwrap();
+    let id = agent.submit("t1", input("Weather in Paris?")).unwrap();
     assert_eq!(settled(&agent, &id).await, done("18C and sunny"));
 
     let traced = journal.entries(&telemetry::Filter::default()).unwrap();
@@ -1103,4 +1127,70 @@ async fn a_turn_can_be_traced_back_step_by_step() {
     assert!(at("tool call") < at("Assistant: 18C and sunny"));
     let recent = inspector.recent(1).unwrap();
     assert_eq!(recent.json[0]["problems"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn new_threads_start_with_the_system_prompt_and_tools() {
+    let script = Script::new(vec![Reply::Text("hi"), Reply::Text("again")]);
+    let mut tools = Tools::new();
+    tools.add(TestTool::new("weather", "18C"));
+    let store = store();
+    let mut registry = Registry::new();
+    let specs = tools.specs();
+    register(&mut registry, script.clone(), tools, None, fast());
+    let engine = Engine::open(store.clone(), registry, EngineSettings::default()).unwrap();
+    engine.resume();
+    let new_threads = NewThreads {
+        system: Some("Be brief.".into()),
+        tools: specs,
+    };
+    let agent = Agent::with_new_threads(engine, new_threads);
+    let id = agent.submit("t1", input("Hello")).unwrap();
+    settled(&agent, &id).await;
+    let id = agent.submit("t1", input("Hello again")).unwrap();
+    settled(&agent, &id).await;
+
+    let seen = script.seen();
+    assert_eq!(seen[0].system.as_deref(), Some("Be brief."));
+    assert_eq!(seen[0].tools.len(), 1);
+    // Set up once, not again for the second input.
+    let registered = agent
+        .engine()
+        .thread("t1", |t| {
+            t.checkpoints()
+                .iter()
+                .filter(|c| matches!(c.event, Event::ToolRegistered(_)))
+                .count()
+        })
+        .unwrap();
+    assert_eq!(registered, 1);
+}
+
+#[tokio::test]
+async fn abort_stops_the_running_turn() {
+    let script = Script::new(vec![Reply::Hang]);
+    let agent = start(&store(), &script, Tools::new());
+    assert!(!agent.abort("t1").unwrap());
+    let id = agent.submit("t1", input("Take your time")).unwrap();
+    eventually(|| !script.seen().is_empty()).await;
+    assert!(agent.abort("t1").unwrap());
+    assert!(matches!(
+        settled(&agent, &id).await,
+        Settled::Unanswered { .. }
+    ));
+    assert!(!agent.abort("t1").unwrap());
+}
+
+#[test]
+fn stored_submissions_keep_their_shape() {
+    // Databases written before the protocol's types were adopted still read.
+    let stored = json!({
+        "id": "s1", "thread": "t1", "text": "hi", "request_id": null, "when_busy": "steer",
+        "status": "done", "run": 4, "answer": "hello", "reason": null,
+    });
+    let record: Record = serde_json::from_value(stored.clone()).unwrap();
+    assert_eq!(record.shown.status, Status::Done);
+    assert_eq!(record.when_busy, WhenBusy::Steer);
+    assert_eq!(record.run, Some(4));
+    assert_eq!(serde_json::to_value(&record).unwrap(), stored);
 }
