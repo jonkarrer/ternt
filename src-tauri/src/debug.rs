@@ -347,7 +347,8 @@ pub fn debug_downloads() -> Vec<(String, bool, String)> {
 
 /// Click at (x, y) in a webview (CSS px from its top left) with real mouse
 /// events, so pages see a user gesture (a scripted `.click()` isn't one).
-/// With `to`, drag there instead (selecting text); `alt` holds Option.
+/// With `to`, drag there instead (selecting text); `keys` are held
+/// ("alt", "cmd", "shift").
 #[tauri::command]
 pub async fn debug_click(
     app: AppHandle,
@@ -355,10 +356,14 @@ pub async fn debug_click(
     x: f64,
     y: f64,
     to: Option<(f64, f64)>,
-    alt: Option<bool>,
+    keys: Option<Vec<String>>,
 ) -> Result<(), String> {
-    // NSEventModifierFlagOption
-    let modifiers: usize = if alt == Some(true) { 1 << 19 } else { 0 };
+    // NSEventModifierFlagShift, Option, Command
+    let modifiers: usize = [("shift", 1 << 17), ("alt", 1 << 19), ("cmd", 1 << 20)]
+        .iter()
+        .filter(|(key, _)| keys.iter().flatten().any(|k| k == key))
+        .map(|(_, flag)| flag)
+        .sum();
     let webview = app
         .get_webview(&label)
         .ok_or_else(|| format!("no webview {label}"))?;

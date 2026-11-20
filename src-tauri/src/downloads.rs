@@ -176,11 +176,11 @@ pub fn started(webview: &Webview, url: &Url, path: &mut PathBuf) {
         missing: false,
     });
     #[cfg(target_os = "macos")]
-    if let Some(native) = crate::native::current_download() {
-        NATIVE.with(|n| n.borrow_mut().insert(id, native.download));
+    if let Some(download) = crate::native::current_download() {
+        NATIVE.with(|n| n.borrow_mut().insert(id, download));
         // A link opened in a new tab that was only ever a file: close the
         // empty tab (or window), as Safari and Arc do.
-        if native.nothing_shown {
+        if crate::native::shows_nothing(webview) {
             close_empty(app, webview.label().to_string());
         }
     }
@@ -218,7 +218,7 @@ pub fn finished(app: &AppHandle, url: &Url, success: bool) {
                 let mut n = n.borrow_mut();
                 let id = n
                     .iter()
-                    .find(|(_, d)| objc2::rc::Retained::as_ptr(d) == objc2::rc::Retained::as_ptr(&current.download))
+                    .find(|(_, d)| objc2::rc::Retained::as_ptr(d) == objc2::rc::Retained::as_ptr(&current))
                     .map(|(id, _)| *id)?;
                 n.remove(&id);
                 Some(id)

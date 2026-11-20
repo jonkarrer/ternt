@@ -574,7 +574,8 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
 /// Handle `window.open()` / `target=_blank`. Scripted popups that ask for a
 /// size (OAuth sign-in, payment flows) get a real window that shares the
 /// opener's configuration, so `window.opener` messaging works. Everything
-/// else opens as a tab; from a tab (`opener`), Back returns to it.
+/// else opens as a tab; from a tab (`opener`), Back returns to it. (On macOS
+/// a tab's own new windows mostly don't come here: see `adopt_new_window`.)
 pub fn on_new_window(
     app: &AppHandle,
     url: Url,
@@ -774,16 +775,37 @@ pub fn page_builder(
 }
 
 /// Create the webview for a web tab at its current URL. Must not be called
-/// from the main thread (it blocks on it).
+/// from the main thread (it blocks on it), unless it's on it.
 fn load_tab(app: &AppHandle, id: u32) -> tauri::Result<Webview> {
+    load_tab_with(app, id, None)
+}
+
+/// `load_tab`, or with WebKit's `configuration` for a view a page opened,
+/// left blank for WebKit to load the page's request in.
+fn load_tab_with(
+    app: &AppHandle,
+    id: u32,
+    #[cfg(target_os = "macos")] configuration: Option<
+        objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration>,
+    >,
+    #[cfg(not(target_os = "macos"))] configuration: Option<()>,
+) -> tauri::Result<Webview> {
     let (url, profile) = with(app, |s| {
         let tab = s.tab(id)?;
         Some((tab.url.clone(), s.profile_for(tab)))
     })
     .unwrap_or_default();
-    let url = Url::parse(&url).unwrap_or_else(|_| "about:blank".parse().unwrap());
+    let url = match configuration {
+        Some(_) => "about:blank".parse().unwrap(),
+        None => Url::parse(&url).unwrap_or_else(|_| "about:blank".parse().unwrap()),
+    };
 
     let builder = page_builder(app, tab_label(id), url, profile.as_deref(), Some(id));
+    #[cfg(target_os = "macos")]
+    let builder = match configuration {
+        Some(configuration) => builder.with_webview_configuration(configuration),
+        None => builder,
+    };
 
     // macOS reads navigation state via KVO (see `native::observe`); elsewhere
     // fall back to load/title callbacks.
@@ -894,6 +916,105 @@ fn unload_tab(app: &AppHandle, id: u32) -> tauri::Result<()> {
 /// the main thread (it blocks on it).
 pub fn open_tab(app: &AppHandle, url: Url) -> tauri::Result<u32> {
     open_tab_from(app, url, None)
+}
+
+/// The view for a new tab that tab `opener`'s page opened without a size
+/// (`target=_blank`, `window.open()`), made with WebKit's `configuration`
+/// for WebKit to load the request in (see `native::create_web_view`). The
+/// page gets a real window: one it can point somewhere after opening it
+/// blank, post a form into, or reach through `window.opener`. Opening the
+/// URL in a tab of our own lost all three. On the main thread. `None` leaves
+/// it to `on_new_window`.
+#[cfg(target_os = "macos")]
+pub fn adopt_new_window(
+    app: &AppHandle,
+    opener: u32,
+    url: Url,
+    configuration: objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration>,
+) -> Option<Webview> {
+    if !is_web_link(&url) {
+        return None;
+    }
+    let id = with(app, |s| {
+        let profile = s.profile_for(s.tab(opener)?);
+        let id = s.add_tab(TabKind::Web, url.to_string(), String::new());
+        // The configuration holds the opener's cookies: only for a tab
+        // signed in the same way.
+        if s.tab(id).map(|t| s.profile_for(t)) != Some(profile) {
+            s.tabs.retain(|t| t.id != id);
+            return None;
+        }
+        let tab = s.tab_mut(id)?;
+        tab.opener = Some(opener);
+        tab.set_page_back(false);
+        Some(id)
+    })?;
+    match load_tab_with(app, id, Some(configuration)) {
+        Ok(view) => {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let _ = activate(&app, id);
+            });
+            Some(view)
+        }
+        Err(err) => {
+            eprintln!("failed to open {url} in a new tab: {err}");
+            with(app, |s| s.tabs.retain(|t| t.id != id));
+            emit_state(app);
+            None
+        }
+    }
+}
+
+/// A link ⌘-clicked or middle-clicked in page view `label`: a new tab,
+/// loaded behind the one you're on, or shown with `front` (⇧). On the main
+/// thread. Returns whether it opened (`false` for a link to another app).
+pub fn open_link_in_new_tab(app: &AppHandle, label: Option<&str>, url: Url, front: bool) -> bool {
+    if !is_web_link(&url) {
+        return false;
+    }
+    let opener = label.and_then(|l| l.strip_prefix("tab-")?.parse().ok());
+    let app = app.clone();
+    if front {
+        std::thread::spawn(move || {
+            let _ = open_tab_from(&app, url, opener);
+        });
+        return true;
+    }
+    let id = with(&app, |s| {
+        let id = s.add_tab(TabKind::Web, url.to_string(), String::new());
+        if let Some(tab) = s.tab_mut(id) {
+            tab.opener = opener;
+            tab.set_page_back(false);
+        }
+        id
+    });
+    // Made and hidden in one go on the main thread: it never shows.
+    match load_tab(&app, id).and_then(|view| view.hide()) {
+        Ok(()) => emit_state(&app),
+        Err(err) => {
+            eprintln!("failed to open {url} in a new tab: {err}");
+            with(&app, |s| s.tabs.retain(|t| t.id != id));
+            emit_state(&app);
+        }
+    }
+    true
+}
+
+/// Another page's link or form loads in tab `label` (one it opened earlier
+/// and named, `target="results"`): show that tab, as a browser brings the
+/// window forward. On the main thread.
+pub fn on_link_into(app: &AppHandle, label: &str) {
+    let Some(id) = label.strip_prefix("tab-").and_then(|id| id.parse::<u32>().ok()) else {
+        return;
+    };
+    if with(app, |s| s.active) == Some(id) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let _ = activate(&app, id);
+    });
 }
 
 /// A new tab for a link clicked in tab `opener`.

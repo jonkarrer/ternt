@@ -1,0 +1,12 @@
+<!doctype html>
+<title>Fixture Popups</title>
+<body style="font: 16px system-ui; padding: 20px">
+  <!-- Ways pages open links elsewhere. Each goes to /page2.html?<id>. -->
+  <p><button id="then-set" onclick="const w = window.open(); w.opener = null; w.location = '/page2.html?then-set'">blank, then set</button></p>
+  <p><button id="blank-fetch" onclick="const w = window.open('', '_blank'); fetch('/page2.html').then(() => { w.location.href = '/page2.html?blank-fetch' })">blank, fetch, set</button></p>
+  <p><button id="talk" onclick="const w = window.open('/page2.html?talk'); setTimeout(() => { document.title = 'opened: ' + (!!w && !w.closed && w.opener === window) }, 500)">open and keep</button></p>
+  <p><button id="closes" onclick="setTimeout(() => window.open('/closes.html'), 1200)">opens a page that closes itself, later</button></p>
+  <p><a id="named" href="/page2.html?named" target="ternt-named">named target</a></p>
+  <p><a id="plain" href="/page2.html?plain">plain link</a></p>
+  <form method="post" action="/echo" target="_blank"><input name="q" value="posted" /> <button id="post">POST, new tab</button></form>
+</body>

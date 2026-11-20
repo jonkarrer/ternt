@@ -921,35 +921,35 @@ static RESPONSE_POLICY: std::sync::OnceLock<ResponsePolicy> = std::sync::OnceLoc
 /// `WKNavigationResponsePolicyDownload`.
 const RESPONSE_DOWNLOAD: isize = 2;
 
-/// A download WebKit is asking wry about, on the main thread.
-pub struct Download {
-    pub download: Retained<AnyObject>,
-    /// Its page view never showed a page: a link opened in a new tab (or
-    /// window) that turned out to be a file.
-    pub nothing_shown: bool,
-}
-
 thread_local! {
     static CURRENT_DOWNLOAD: RefCell<Option<Retained<AnyObject>>> = const { RefCell::new(None) };
 }
 
-/// The download whose delegate method is running (wry's download handlers
-/// run inside it), if any.
-pub fn current_download() -> Option<Download> {
-    let download = CURRENT_DOWNLOAD.with(|d| d.borrow().clone())?;
-    let nothing_shown = caught_or(false, || unsafe {
-        let view: *mut AnyObject = msg_send![&*download, webView];
-        let Some(view) = view.as_ref() else {
-            return false;
-        };
-        let list: *mut AnyObject = msg_send![view, backForwardList];
-        let item: *mut AnyObject = match list.as_ref() {
-            Some(list) => msg_send![list, currentItem],
-            None => ptr::null_mut(),
-        };
-        item.is_null()
+/// The download (a `WKDownload`) whose delegate method is running (wry's
+/// download handlers run inside it), if any.
+pub fn current_download() -> Option<Retained<AnyObject>> {
+    CURRENT_DOWNLOAD.with(|d| d.borrow().clone())
+}
+
+/// Whether `webview` never showed a page: a link opened in a new tab (or
+/// window) that turned out to be a file. On the main thread. (Ask the view,
+/// not the download: a download in a view another page opened names the
+/// opener's view as its own.)
+pub fn shows_nothing(webview: &Webview) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _ = webview.with_webview(move |p| {
+        let empty = caught_or(false, || unsafe {
+            let view = &*(p.inner() as *const AnyObject);
+            let list: *mut AnyObject = msg_send![view, backForwardList];
+            let item: *mut AnyObject = match list.as_ref() {
+                Some(list) => msg_send![list, currentItem],
+                None => ptr::null_mut(),
+            };
+            item.is_null()
+        });
+        let _ = tx.send(empty);
     });
-    Some(Download { download, nothing_shown })
+    rx.try_recv().unwrap_or(false)
 }
 
 /// Bytes received so far and the size (-1 when the server didn't say).
@@ -1199,12 +1199,196 @@ fn prepare_page_view(webview: tauri::webview::PlatformWebview, label: String) {
         let delegate: *mut AnyObject = msg_send![view, UIDelegate];
         if let Some(delegate) = delegate.as_ref() {
             add_js_dialogs(delegate.class());
+            guard_new_windows(delegate.class());
             // WebKit notes which methods a delegate has when it's set:
             // set it again so it sees the added ones.
             let _: () = msg_send![view, setUIDelegate: delegate];
         }
         guard_downloads(view);
+        guard_link_clicks(view);
     }
+}
+
+/// The label of page view `view` (a `WKWebView`), if it's one of ours.
+fn page_label(view: &AnyObject) -> Option<String> {
+    let view = view as *const AnyObject as usize;
+    PAGE_LABELS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(v, _)| *v == view)
+        .map(|(_, label)| label.clone())
+}
+
+/// The URL a navigation action asks for (empty for `window.open()`).
+unsafe fn action_url(action: &AnyObject) -> Option<String> {
+    unsafe {
+        let request: *mut AnyObject = msg_send![action, request];
+        let url: *mut NSURL = msg_send![request.as_ref()?, URL];
+        Some(url.as_ref()?.absoluteString()?.to_string())
+    }
+}
+
+// --- New windows and modified clicks -----------------------------------------
+//
+// A page opening a window without a size (`target=_blank`, `window.open()`)
+// gets a tab whose view WebKit loads the request in: a real window the page
+// can point somewhere after opening it blank, post a form into, or reach
+// through `window.opener`. Tauri's new-window handler can only return a
+// whole window, so wry's delegate method is hooked here. Sized popups
+// (sign-in) still go to the handler (`browser::on_new_window`).
+
+type CreateWebView = unsafe extern "C-unwind" fn(
+    &AnyObject,
+    objc2::runtime::Sel,
+    &AnyObject,
+    &AnyObject,
+    &AnyObject,
+    &AnyObject,
+) -> *mut AnyObject;
+
+static CREATE_WEB_VIEW: std::sync::OnceLock<CreateWebView> = std::sync::OnceLock::new();
+
+type ActionPolicy = unsafe extern "C-unwind" fn(
+    &AnyObject,
+    objc2::runtime::Sel,
+    &AnyObject,
+    &AnyObject,
+    &block2::Block<dyn Fn(isize)>,
+);
+
+static ACTION_POLICY: std::sync::OnceLock<ActionPolicy> = std::sync::OnceLock::new();
+
+/// Hook wry's UI delegate class's `createWebView…` (once).
+unsafe fn guard_new_windows(class: &objc2::runtime::AnyClass) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        if let Some(old) = swizzle(
+            class,
+            objc2::sel!(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:),
+            std::mem::transmute::<CreateWebView, objc2::runtime::Imp>(create_web_view),
+        ) {
+            let _ = CREATE_WEB_VIEW.set(std::mem::transmute::<objc2::runtime::Imp, CreateWebView>(old));
+        }
+    });
+}
+
+unsafe extern "C-unwind" fn create_web_view(
+    this: &AnyObject,
+    cmd: objc2::runtime::Sel,
+    web_view: &AnyObject,
+    configuration: &AnyObject,
+    action: &AnyObject,
+    features: &AnyObject,
+) -> *mut AnyObject {
+    let adopted = caught_or(None, || unsafe {
+        let width: *mut AnyObject = msg_send![features, width];
+        let height: *mut AnyObject = msg_send![features, height];
+        if !width.is_null() && !height.is_null() {
+            return None;
+        }
+        let opener = page_label(web_view)?.strip_prefix("tab-")?.parse().ok()?;
+        let url = action_url(action).filter(|u| !u.is_empty());
+        let url = tauri::Url::parse(url.as_deref().unwrap_or("about:blank")).ok()?;
+        let configuration = Retained::retain(
+            configuration as *const AnyObject as *mut objc2_web_kit::WKWebViewConfiguration,
+        )?;
+        let view = browser::adopt_new_window(APP.get()?, opener, url, configuration)?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        // On the main thread, this runs at once.
+        view.with_webview(move |p| {
+            let _ = tx.send(p.inner() as usize);
+        })
+        .ok()?;
+        rx.try_recv().ok()
+    });
+    if let Some(view) = adopted {
+        return view as *mut AnyObject;
+    }
+    caught_or(ptr::null_mut(), || unsafe {
+        match CREATE_WEB_VIEW.get() {
+            Some(original) => original(this, cmd, web_view, configuration, action, features),
+            None => ptr::null_mut(),
+        }
+    })
+}
+
+/// Hook wry's navigation delegate's link decisions (once): ⌘-click and
+/// middle-click open a link in a new tab, as in every browser; WebKit alone
+/// follows it in place.
+unsafe fn guard_link_clicks(view: &AnyObject) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        let delegate: *mut AnyObject = msg_send![view, navigationDelegate];
+        if let Some(delegate) = delegate.as_ref()
+            && let Some(old) = swizzle(
+                delegate.class(),
+                objc2::sel!(webView:decidePolicyForNavigationAction:decisionHandler:),
+                std::mem::transmute::<ActionPolicy, objc2::runtime::Imp>(action_policy),
+            )
+        {
+            let _ = ACTION_POLICY.set(std::mem::transmute::<objc2::runtime::Imp, ActionPolicy>(old));
+        }
+    });
+}
+
+/// `WKNavigationTypeLinkActivated`, `WKNavigationTypeFormSubmitted`.
+const LINK_ACTIVATED: isize = 0;
+const FORM_SUBMITTED: isize = 1;
+/// `WKNavigationActionPolicyCancel`.
+const ACTION_CANCEL: isize = 0;
+/// `WKNavigationAction.buttonNumber` for the middle button (a mask).
+const MIDDLE_BUTTON: isize = 1 << 2;
+
+unsafe extern "C-unwind" fn action_policy(
+    this: &AnyObject,
+    cmd: objc2::runtime::Sel,
+    web_view: &AnyObject,
+    action: &AnyObject,
+    handler: &block2::Block<dyn Fn(isize)>,
+) {
+    // The link, and whether to show its tab (⇧).
+    let new_tab = caught_or(None, || unsafe {
+        let kind: isize = msg_send![action, navigationType];
+        let flags: usize = msg_send![action, modifierFlags];
+        let button: isize = msg_send![action, buttonNumber];
+        let download: bool = msg_send![action, shouldPerformDownload];
+        let command = flags & (1 << 20) != 0;
+        if kind != LINK_ACTIVATED || download || !(command || button == MIDDLE_BUTTON) {
+            return None;
+        }
+        let url = tauri::Url::parse(&action_url(action)?).ok()?;
+        Some((url, flags & (1 << 17) != 0))
+    });
+    // A link or form in another view that targets this one by name.
+    caught(|| unsafe {
+        let kind: isize = msg_send![action, navigationType];
+        let source: *mut AnyObject = msg_send![action, sourceFrame];
+        let source_view: *mut AnyObject = match source.as_ref() {
+            Some(frame) => msg_send![frame, webView],
+            None => ptr::null_mut(),
+        };
+        if matches!(kind, LINK_ACTIVATED | FORM_SUBMITTED)
+            && new_tab.is_none()
+            && !source_view.is_null()
+            && !ptr::eq(source_view, web_view)
+            && let (Some(app), Some(label)) = (APP.get(), page_label(web_view))
+        {
+            browser::on_link_into(app, &label);
+        }
+    });
+    if let Some((url, front)) = new_tab
+        && let Some(app) = APP.get()
+        && browser::open_link_in_new_tab(app, page_label(web_view).as_deref(), url, front)
+    {
+        handler.call((ACTION_CANCEL,));
+        return;
+    }
+    caught(|| unsafe {
+        if let Some(original) = ACTION_POLICY.get() {
+            original(this, cmd, web_view, action, handler);
+        }
+    });
 }
 
 // --- JavaScript dialogs ------------------------------------------------------
@@ -1373,14 +1557,7 @@ unsafe extern "C-unwind" fn did_close(
     web_view: &AnyObject,
 ) {
     caught(|| {
-        let view = web_view as *const AnyObject as usize;
-        let label = PAGE_LABELS
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|(v, _)| *v == view)
-            .map(|(_, label)| label.clone());
-        if let (Some(app), Some(label)) = (APP.get(), label) {
+        if let (Some(app), Some(label)) = (APP.get(), page_label(web_view)) {
             let app = app.clone();
             // Closing views blocks on the main thread.
             std::thread::spawn(move || browser::on_page_closed(&app, &label));

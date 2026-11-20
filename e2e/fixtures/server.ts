@@ -16,6 +16,11 @@ Bun.serve({
       return new Response("plain notes", {
         headers: { "content-type": "text/plain", "content-disposition": 'attachment; filename="notes.txt"' },
       });
+    // A form's POST, echoed: its title says what came.
+    if (pathname === "/echo")
+      return new Response(`<title>echo: ${req.method} ${req.method === "POST" ? await req.text() : ""}</title>`, {
+        headers: { "content-type": "text/html" },
+      });
     const name = pathname.startsWith("/spa") ? "spa.html" : pathname.slice(1) || "index.html";
     const file = Bun.file(`${dir}/${name}`);
     return (await file.exists()) ? new Response(file) : new Response("not found", { status: 404 });
