@@ -97,6 +97,18 @@ impl<M: Model> Task for Generation<M> {
         }
     }
 
+    /// The engine faulted or orphaned the run, so it never settled its inputs: settle them now,
+    /// close its tool calls and let the queue move on, rather than waiting for the next
+    /// `submit` or `wait` on the thread to notice.
+    fn on_fault(&self, tx: &mut engine::Tx, task: &engine::TaskRecord) -> Result<()> {
+        let reason = match task.state.outcome() {
+            Some(Outcome::Faulted { error }) => format!("run faulted: {error}"),
+            Some(Outcome::Orphaned { reason }) => format!("run orphaned: {reason}"),
+            _ => "the run ended without an answer".to_string(),
+        };
+        inbox::recover(tx, &task.thread, &reason)
+    }
+
     /// Settles the run's inputs and withdraws the queue. The round's tool calls have all ended
     /// by now (owned work is aborted first): each gets its result, so the thread stays valid
     /// and the model isn't told a call that went through was aborted.
@@ -219,13 +231,11 @@ fn results<M: Model>(
 /// Gives the last message's tool calls `error` results, if it's a reply still waiting for
 /// them: every call needs a result before the next request.
 pub(crate) fn close_calls(thread: &mut Thread, error: &str) -> Result<()> {
-    let content: Vec<Block> = match thread.context().messages.last() {
-        Some(last) if last.role == Role::Assistant => last
-            .tool_calls()
-            .map(|(id, ..)| result_block(id, ToolOutput::error(error.into())))
-            .collect(),
-        _ => return Ok(()),
-    };
+    let content: Vec<Block> = thread
+        .unanswered_calls()
+        .into_iter()
+        .map(|id| result_block(id, ToolOutput::error(error.into())))
+        .collect();
     if content.is_empty() {
         return Ok(());
     }

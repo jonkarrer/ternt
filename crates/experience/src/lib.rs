@@ -90,6 +90,15 @@ pub struct Dream {
     /// Memories replaced or forgotten while cleaning up.
     pub refined: Vec<Item>,
     pub compacted: bool,
+    /// Parts that failed, as (part, error). Each part runs on its own, so one failing (a model
+    /// reply that won't parse, say) doesn't stop the others; it's tried again next dream.
+    pub failed: Vec<(&'static str, String)>,
+}
+
+impl Dream {
+    fn fail(&mut self, part: &'static str, error: anyhow::Error) {
+        self.failed.push((part, format!("{error:#}")));
+    }
 }
 
 pub struct Experience<A> {
@@ -189,12 +198,24 @@ impl<A: Api> Experience<A> {
     /// on its own, so dropping the future (a new message arrived) stops it at a safe point.
     pub async fn dream(&self, thread: &mut Thread) -> Result<Dream> {
         ensure!(!thread.in_turn(), "can't dream during a turn");
-        Ok(Dream {
-            episode: self.summarize(thread).await?,
-            card: self.card(thread).await?,
-            refined: self.refine().await?,
-            compacted: self.compact(thread).await?,
-        })
+        let mut dream = Dream::default();
+        match self.summarize(thread).await {
+            Ok(episode) => dream.episode = episode,
+            Err(error) => dream.fail("summarize", error),
+        }
+        match self.card(thread).await {
+            Ok(card) => dream.card = card,
+            Err(error) => dream.fail("card", error),
+        }
+        match self.refine().await {
+            Ok(refined) => dream.refined = refined,
+            Err(error) => dream.fail("refine", error),
+        }
+        match self.compact(thread).await {
+            Ok(compacted) => dream.compacted = compacted,
+            Err(error) => dream.fail("compact", error),
+        }
+        Ok(dream)
     }
 
     /// Rewrites the thread's card when turns finished since the last one.
@@ -653,6 +674,35 @@ pub(crate) mod tests {
         thread.start_step().unwrap();
         thread.push(Message::assistant(reply)).unwrap();
         thread.end_turn().unwrap();
+    }
+
+    /// The model is unreachable: the parts that need it fail, the code-only cleanup still runs.
+    #[tokio::test]
+    async fn a_failing_dream_part_doesnt_stop_the_others() {
+        let unreachable = Provider::new(Anthropic, "Nowhere", "http://127.0.0.1:9/", vec![]);
+        let scopes = Scopes {
+            read: vec![me()],
+            write: me(),
+        };
+        let memory = Arc::new(Memory::in_memory().unwrap());
+        let exp = Experience::new(unreachable, Request::new(MODEL), memory, scopes);
+        exp.memory()
+            .write(Write::fact(me(), "The user's name is Jon."))
+            .unwrap();
+        exp.memory()
+            .write(Write::fact(me(), "The user's name is Jon."))
+            .unwrap();
+        let mut thread = Thread::new("t1");
+        for n in 0..3 {
+            turn(&mut thread, &format!("question {n}"), "answer");
+        }
+
+        let dream = exp.dream(&mut thread).await.unwrap();
+        let failed: Vec<&str> = dream.failed.iter().map(|(part, _)| *part).collect();
+        assert_eq!(failed, ["summarize", "card"]);
+        // The duplicate was dropped in code, without the model.
+        assert_eq!(dream.refined.len(), 1);
+        assert_eq!(exp.memory().list(&[me()], 10).unwrap().len(), 1);
     }
 
     /// Recall is decided in code, so this makes no model call.

@@ -26,7 +26,8 @@ pub(crate) fn init(store: &Sqlite) -> Result<()> {
                  status TEXT NOT NULL,
                  state TEXT NOT NULL,
                  created_at INTEGER NOT NULL,
-                 ended_at INTEGER
+                 ended_at INTEGER,
+                 aborting INTEGER NOT NULL DEFAULT 0
              );
              CREATE INDEX IF NOT EXISTS tasks_status ON tasks (status);
              CREATE INDEX IF NOT EXISTS tasks_owner ON tasks (owner);
@@ -35,6 +36,10 @@ pub(crate) fn init(store: &Sqlite) -> Result<()> {
                  value TEXT NOT NULL
              );",
         )?;
+        // Added after the first release of the table: a database from before it gains it.
+        if tx.prepare("SELECT aborting FROM tasks LIMIT 0").is_err() {
+            tx.execute_batch("ALTER TABLE tasks ADD COLUMN aborting INTEGER NOT NULL DEFAULT 0;")?;
+        }
         Ok(())
     })
 }
@@ -43,8 +48,8 @@ pub(crate) fn save(tx: &Transaction, task: &TaskRecord) -> Result<()> {
     tx.prepare_cached(
         "INSERT OR REPLACE INTO tasks (id, thread, kind, version, input, owner, background,
              abandon_on_restart, abort_requested, abort_reason, restarts, memos, status, state,
-             created_at, ended_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+             created_at, ended_at, aborting)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
     )?
     .execute(params![
         task.id,
@@ -63,12 +68,13 @@ pub(crate) fn save(tx: &Transaction, task: &TaskRecord) -> Result<()> {
         serde_json::to_string(&task.state)?,
         task.created_at as i64,
         task.ended_at.map(|t| t as i64),
+        task.aborting,
     ])?;
     Ok(())
 }
 
 const COLUMNS: &str = "id, thread, kind, version, input, owner, background, abandon_on_restart,
-    abort_requested, abort_reason, restarts, memos, state, created_at, ended_at";
+    abort_requested, abort_reason, restarts, memos, state, created_at, ended_at, aborting";
 
 pub(crate) fn live(conn: &Connection) -> Result<Vec<TaskRecord>> {
     select(conn, "status != 'terminal' ORDER BY id", [])
@@ -115,6 +121,7 @@ fn parse(row: &Row) -> Result<TaskRecord> {
         state: serde_json::from_str(&text(12)?)?,
         created_at: row.get::<_, i64>(13)? as u64,
         ended_at: row.get::<_, Option<i64>>(14)?.map(|t| t as u64),
+        aborting: row.get(15)?,
     })
 }
 

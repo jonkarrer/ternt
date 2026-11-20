@@ -11,6 +11,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::Tx;
 use crate::runtime::{Invocation, Runtime};
 
 pub type TaskId = i64;
@@ -149,7 +150,9 @@ pub struct TaskRecord {
     pub input: Value,
     /// The task that owns it; `None` for a top-level task.
     pub owner: Option<TaskId>,
-    /// Owned work that doesn't keep its owner from finishing.
+    /// A boundary, as in pi-durable: owned work that doesn't keep its owner from finishing and
+    /// isn't aborted with it. It lives on until it ends or is aborted itself (a subagent that
+    /// outlives the call that started it, say).
     pub background: bool,
     /// Aborted, with what it owns, if still live when a new process opens the engine.
     pub abandon_on_restart: bool,
@@ -157,6 +160,9 @@ pub struct TaskRecord {
     /// work it owns has ended.
     pub abort_requested: bool,
     pub abort_reason: Option<String>,
+    /// Its abort handler has started. From then on every phase runs the handler, and its own
+    /// waits and sleeps are kept like any task's, so cleanup can take steps.
+    pub aborting: bool,
     /// Times in a row a crash cut it off without it committing a new state since.
     pub restarts: u32,
     /// First-writer-wins values (`Runtime::memo`).
@@ -232,6 +238,15 @@ pub trait Task: Send + Sync + 'static {
     {
         async move { rt.commit(|_| Ok(Some(Next::Aborted(None)))) }
     }
+
+    /// Called after the engine itself ended the task: faulted (it broke the contract, or kept
+    /// crashing) or orphaned. Its own code never ran to the end, so this is where to clean up
+    /// what it was in the middle of. Runs in a commit of its own; best effort, an error is
+    /// ignored. By default: nothing.
+    fn on_fault(&self, tx: &mut Tx, task: &TaskRecord) -> Result<()> {
+        let _ = (tx, task);
+        Ok(())
+    }
 }
 
 pub(crate) type BoxFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
@@ -242,6 +257,7 @@ pub(crate) trait Erased: Send + Sync {
     fn initial(&self, input: &Value) -> Result<Value>;
     fn run(self: Arc<Self>, invocation: Arc<Invocation>) -> BoxFuture;
     fn abort(self: Arc<Self>, invocation: Arc<Invocation>) -> BoxFuture;
+    fn on_fault(&self, tx: &mut Tx, task: &TaskRecord) -> Result<()>;
 }
 
 struct Kind<T>(T);
@@ -262,6 +278,10 @@ impl<T: Task> Erased for Kind<T> {
 
     fn abort(self: Arc<Self>, invocation: Arc<Invocation>) -> BoxFuture {
         Box::pin(async move { self.0.abort(Runtime::new(invocation)?).await })
+    }
+
+    fn on_fault(&self, tx: &mut Tx, task: &TaskRecord) -> Result<()> {
+        self.0.on_fault(tx, task)
     }
 }
 

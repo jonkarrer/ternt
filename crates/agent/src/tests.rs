@@ -713,6 +713,7 @@ async fn send_routes_each_input() {
         Provider::<OpenAi>::baseten("unused"),
         Request::new("unused"),
         Arc::new(Memory::in_memory().unwrap()),
+        vec![memory::Scope::user("jon")],
     );
     let script = Script::new(vec![
         Reply::Text("Kyoto in April, then."),
@@ -810,6 +811,7 @@ async fn live_remembers_across_threads() {
         Provider::<OpenAi>::baseten(&baseten),
         Request::new("deepseek-ai/DeepSeek-V4.1-Flash").thinking(false),
         memory.clone(),
+        vec![Scope::user("jon")],
     );
     let experience = Experience::new(
         Provider::<Anthropic>::anthropic(&anthropic),
@@ -920,6 +922,27 @@ async fn a_faulted_run_lets_the_queue_move_on() {
         transcript(&agent, "t1"),
         ["User: one", "User: two", "Assistant: second"]
     );
+}
+
+/// The engine tells the run it faulted: its inputs settle and the queue moves on at once,
+/// with nobody calling `wait` or `submit` (which recover too, but only when called).
+#[tokio::test]
+async fn a_faulted_run_recovers_on_its_own() {
+    let mind = Arc::new(Faulty {
+        gate: Arc::new(Notify::new()),
+        calls: AtomicUsize::new(0),
+    });
+    let script = Script::new(vec![Reply::Text("second")]);
+    let agent = start_with(&store(), &script, Tools::new(), Some(mind.clone()), fast());
+    let a = agent.submit("t1", Input::new("one")).unwrap();
+    eventually(|| mind.calls.load(Ordering::SeqCst) == 1).await;
+    let b = agent.submit("t1", Input::new("two")).unwrap();
+    mind.gate.notify_one();
+    let status = |id: &str| agent.submission(id).unwrap().unwrap();
+    eventually(|| status(&a).status == Status::Unanswered && status(&b).status == Status::Done)
+        .await;
+    let reason = status(&a).reason.unwrap();
+    assert!(reason.starts_with("run faulted:"), "{reason}");
 }
 
 #[tokio::test]

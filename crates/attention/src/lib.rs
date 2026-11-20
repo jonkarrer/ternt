@@ -115,7 +115,7 @@ impl Attention {
 }
 
 /// The texts a checkpoint carries, by source. Only messages have any.
-pub fn texts(checkpoint: &Checkpoint) -> Vec<(Source, String)> {
+pub(crate) fn texts(checkpoint: &Checkpoint) -> Vec<(Source, String)> {
     let Event::Message(message) = &checkpoint.event else {
         return Vec::new();
     };
@@ -253,7 +253,7 @@ impl Detector for PatternDetector {
 }
 
 /// Sorted, with overlapping ranges joined.
-pub fn merge_spans(mut spans: Vec<Range<usize>>) -> Vec<Range<usize>> {
+pub(crate) fn merge_spans(mut spans: Vec<Range<usize>>) -> Vec<Range<usize>> {
     spans.sort_by_key(|s| s.start);
     let mut out: Vec<Range<usize>> = Vec::new();
     for span in spans {

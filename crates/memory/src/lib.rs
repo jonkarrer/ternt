@@ -285,10 +285,20 @@ impl Memory {
                  to_checkpoint INTEGER NOT NULL,
                  at INTEGER NOT NULL
              );
-             CREATE INDEX IF NOT EXISTS cards_thread ON cards (thread, id);
-             CREATE VIRTUAL TABLE IF NOT EXISTS cards_fts
-                 USING fts5(thread UNINDEXED, text, tokenize = 'porter unicode61');",
+             CREATE INDEX IF NOT EXISTS cards_thread ON cards (thread, id);",
         )?;
+        // The card index gained a scope column: an index from before it is rebuilt from the
+        // cards, newest per thread.
+        if conn.prepare("SELECT scope FROM cards_fts LIMIT 0").is_err() {
+            conn.execute_batch(
+                "DROP TABLE IF EXISTS cards_fts;
+                 CREATE VIRTUAL TABLE cards_fts
+                     USING fts5(thread UNINDEXED, scope UNINDEXED, text, tokenize = 'porter unicode61');
+                 INSERT INTO cards_fts (thread, scope, text)
+                     SELECT thread, scope, text FROM cards
+                     WHERE id IN (SELECT MAX(id) FROM cards GROUP BY thread);",
+            )?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
             index,
@@ -338,6 +348,10 @@ impl Memory {
                         old.body.kind(),
                         write.body.kind()
                     );
+                }
+                // A version history stays in one scope: one user's fact never becomes another's.
+                if old.scope != write.scope {
+                    bail!("memory {id} is in {}, not {}", old.scope, write.scope);
                 }
                 tx.execute("UPDATE items SET current = 0 WHERE id = ?1", [id])?;
                 Some(old)
@@ -589,8 +603,8 @@ impl Memory {
         // Only the newest card per thread is searchable.
         tx.execute("DELETE FROM cards_fts WHERE thread = ?1", [thread])?;
         tx.execute(
-            "INSERT INTO cards_fts (thread, text) VALUES (?1, ?2)",
-            params![thread, text],
+            "INSERT INTO cards_fts (thread, scope, text) VALUES (?1, ?2, ?3)",
+            params![thread, scope.as_str(), text],
         )?;
         tx.commit()?;
         Ok(Card {
@@ -603,19 +617,29 @@ impl Memory {
         })
     }
 
-    /// Threads whose newest card matches any word of `query`, best first, with scores.
-    pub fn search_cards(&self, query: &str, limit: usize) -> Result<Vec<(String, f64)>> {
+    /// Threads in `scopes` whose newest card matches any word of `query`, best first, with
+    /// scores. Scoped, so one user's cards never match another's threads.
+    pub fn search_cards(
+        &self,
+        query: &str,
+        scopes: &[Scope],
+        limit: usize,
+    ) -> Result<Vec<(String, f64)>> {
         let Some(terms) = index::fts_query(query) else {
             return Ok(Vec::new());
         };
+        if scopes.is_empty() {
+            return Ok(Vec::new());
+        }
         let conn = self.conn.lock().unwrap();
-        let mut select = conn.prepare_cached(
+        let mut select = conn.prepare_cached(&format!(
             "SELECT thread, -bm25(cards_fts) AS score FROM cards_fts
-             WHERE cards_fts MATCH ?1 ORDER BY score DESC LIMIT ?2",
-        )?;
-        let hits = select.query_map(params![terms, limit as i64], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
+             WHERE cards_fts MATCH ? AND scope IN ({}) ORDER BY score DESC LIMIT {limit}",
+            placeholders(scopes.len())
+        ))?;
+        let args = std::iter::once(terms).chain(scopes.iter().map(|s| s.0.clone()));
+        let hits =
+            select.query_map(params_from_iter(args), |row| Ok((row.get(0)?, row.get(1)?)))?;
         Ok(hits.collect::<Result<_, _>>()?)
     }
 
@@ -814,6 +838,10 @@ mod tests {
         assert!(memory.replace(fact.id, Write::fact(me(), "x")).is_err());
         let procedure = Write::procedure(me(), "Deploy", "deploying", vec!["test".into()]);
         assert!(memory.replace(fixed.id, procedure).is_err());
+        // Never into another scope.
+        let elsewhere = Write::fact(Scope::user("ann"), "Deploys are weekly.");
+        assert!(memory.replace(fixed.id, elsewhere).is_err());
+        assert!(memory.get(fixed.id).unwrap().is_some());
 
         memory.forget(fact.id).unwrap();
         assert!(memory.history(fixed.id).unwrap().is_empty());
@@ -923,7 +951,7 @@ mod tests {
             .unwrap();
         let threads = |q| -> Vec<String> {
             memory
-                .search_cards(q, 5)
+                .search_cards(q, &[me()], 5)
                 .unwrap()
                 .into_iter()
                 .map(|(thread, _)| thread)
@@ -934,6 +962,17 @@ mod tests {
         // Only the newest card counts: t1's first card said Osaka.
         assert!(threads("osaka").is_empty());
         assert!(threads("weather").is_empty());
+
+        // Another user's card never matches.
+        memory
+            .add_card("t3", Scope::user("ann"), "Ann's ryokan booking.", 2)
+            .unwrap();
+        assert_eq!(threads("ryokan"), ["t1"]);
+        let anns = memory
+            .search_cards("ryokan", &[Scope::user("ann")], 5)
+            .unwrap();
+        assert_eq!(anns.len(), 1);
+        assert_eq!(anns[0].0, "t3");
     }
 
     #[test]
@@ -970,5 +1009,30 @@ mod tests {
         fn drop(&mut self) {
             self.remove();
         }
+    }
+
+    /// A card index from before cards had a scope in it is rebuilt on open.
+    #[test]
+    fn rebuilds_an_unscoped_card_index() {
+        let db = TempDb::new("unscoped-cards");
+        {
+            let memory = Memory::open(&db.0).unwrap();
+            memory.add_card("t1", me(), "Old Osaka card.", 3).unwrap();
+            memory
+                .add_card("t1", me(), "Kyoto ryokan booked.", 9)
+                .unwrap();
+        }
+        let conn = Connection::open(&db.0).unwrap();
+        conn.execute_batch(
+            "DROP TABLE cards_fts;
+             CREATE VIRTUAL TABLE cards_fts USING fts5(thread UNINDEXED, text);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let memory = Memory::open(&db.0).unwrap();
+        let hits = memory.search_cards("ryokan", &[me()], 5).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(memory.search_cards("osaka", &[me()], 5).unwrap().is_empty());
     }
 }

@@ -20,7 +20,8 @@ fn registry() -> Registry {
         .register(Memo)
         .register(Stubborn)
         .register(Holder)
-        .register(Panics);
+        .register(Panics)
+        .register(Tidy);
     registry
 }
 
@@ -874,4 +875,130 @@ async fn a_close_counts_no_restart_for_an_owner_waiting_to_abort() {
     let task = reopened.task(id).unwrap().unwrap();
     assert!(task.abort_requested);
     assert_eq!(task.restarts, 0);
+}
+
+/// Runs until aborted; its abort handler takes two steps, sleeping between them.
+struct Tidy;
+
+static TIDY_ABORTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "phase")]
+enum TidyState {
+    Working,
+    CleanUp,
+}
+
+impl Task for Tidy {
+    type Input = ();
+    type State = TidyState;
+    type Output = ();
+    const NAME: &'static str = "test.tidy";
+
+    fn initial(&self, _: &()) -> TidyState {
+        TidyState::Working
+    }
+
+    async fn run(&self, rt: Runtime<Self>) -> Result<()> {
+        rt.cancelled().await;
+        Err(anyhow!("cancelled"))
+    }
+
+    async fn abort(&self, rt: Runtime<Self>) -> Result<()> {
+        TIDY_ABORTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        match rt.state() {
+            TidyState::Working => rt.sleep_until(rt.now() + 100, TidyState::CleanUp),
+            TidyState::CleanUp => rt.commit(|_| Ok(Some(Next::Aborted(Some("cleaned".into()))))),
+        }
+    }
+}
+
+/// An abort handler that sleeps is parked like any sleeper, not rerun at once, and a crash
+/// during its sleep resumes the abort, not the run.
+#[tokio::test]
+async fn abort_handlers_can_sleep() {
+    use std::sync::atomic::Ordering;
+    let store = store();
+    let engine = engine(&store);
+    let id = engine
+        .create_task::<Tidy>("t1", (), TaskOptions::default())
+        .unwrap();
+    until(&engine, id, |t| {
+        matches!(t.state, TaskState::Running { .. })
+    })
+    .await;
+    engine.abort_task(id).unwrap();
+    until(&engine, id, |t| {
+        t.aborting && matches!(t.state, TaskState::Sleeping { .. })
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    // Parked: the handler ran once, and isn't spinning.
+    assert_eq!(TIDY_ABORTS.load(Ordering::SeqCst), 1);
+    engine.crash();
+
+    let engine = engine_with(&store, Settings::default());
+    assert_eq!(
+        wait(&engine, id).await,
+        Outcome::Aborted {
+            reason: Some("cleaned".into())
+        }
+    );
+    assert_eq!(TIDY_ABORTS.load(Ordering::SeqCst), 2);
+}
+
+/// A tasks table from before `aborting` existed gains the column on open.
+#[tokio::test]
+async fn older_task_tables_gain_the_aborting_column() {
+    let store = store();
+    store
+        .transaction(|tx| {
+            tx.execute_batch(
+                "CREATE TABLE tasks (
+                     id INTEGER PRIMARY KEY, thread TEXT NOT NULL, kind TEXT NOT NULL,
+                     version INTEGER NOT NULL, input TEXT NOT NULL, owner INTEGER,
+                     background INTEGER NOT NULL, abandon_on_restart INTEGER NOT NULL,
+                     abort_requested INTEGER NOT NULL, abort_reason TEXT,
+                     restarts INTEGER NOT NULL, memos TEXT NOT NULL, status TEXT NOT NULL,
+                     state TEXT NOT NULL, created_at INTEGER NOT NULL, ended_at INTEGER
+                 );",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let engine = engine(&store);
+    let id = engine
+        .create_task::<Steps>("t1", "hello".into(), TaskOptions::default())
+        .unwrap();
+    assert!(wait(&engine, id).await.is_completed());
+}
+
+/// Background work is a boundary: its owner's abort doesn't reach it or wait for it.
+#[tokio::test]
+async fn background_work_outlives_its_owner() {
+    let engine = engine(&store());
+    let owner = engine
+        .create_task::<Hang>("t1", true, TaskOptions::default())
+        .unwrap();
+    let child = engine
+        .create_task::<Child>(
+            "t1",
+            -1,
+            TaskOptions {
+                background: true,
+                ..TaskOptions::owned_by(owner)
+            },
+        )
+        .unwrap();
+    until(&engine, child, |t| {
+        matches!(t.state, TaskState::Running { .. })
+    })
+    .await;
+    engine.abort_task(owner).unwrap();
+    assert!(matches!(
+        wait(&engine, owner).await,
+        Outcome::Aborted { .. }
+    ));
+    let child = engine.task(child).unwrap().unwrap();
+    assert!(!child.abort_requested && matches!(child.state, TaskState::Running { .. }));
 }

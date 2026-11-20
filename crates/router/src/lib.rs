@@ -35,7 +35,7 @@ use anyhow::Result;
 use context::{Context, Message};
 use inference::providers::Api;
 use inference::{Provider, Request};
-use memory::{Card, Memory, Resume};
+use memory::{Card, Memory, Resume, Scope};
 use serde_json::Value;
 use state::{Checkpointer, ThreadInfo};
 
@@ -164,6 +164,8 @@ pub struct Router<A> {
     /// A classifier answer at least this confident is taken.
     pub classifier_min: f32,
     memory: Arc<Memory>,
+    /// Whose thread cards it searches: the same scopes Experience writes cards to.
+    scopes: Vec<Scope>,
     provider: Provider<A>,
     request: Request,
     /// Idle time after which a thread is cool: keep it equal to the agent's `dream_after_ms`,
@@ -172,13 +174,20 @@ pub struct Router<A> {
 }
 
 impl<A: Api> Router<A> {
-    /// `provider` and `request` are the fast model for the last tier.
-    pub fn new(provider: Provider<A>, request: Request, memory: Arc<Memory>) -> Self {
+    /// `provider` and `request` are the fast model for the last tier; `scopes` are whose
+    /// thread cards it searches.
+    pub fn new(
+        provider: Provider<A>,
+        request: Request,
+        memory: Arc<Memory>,
+        scopes: Vec<Scope>,
+    ) -> Self {
         Self {
             cues: cues::defaults(),
             classifier: None,
             classifier_min: 0.8,
             memory,
+            scopes,
             provider,
             request,
             dream_after: Duration::from_secs(30 * 60),
@@ -269,7 +278,9 @@ impl<A: Api> Router<A> {
         // The recent threads, the last one, and older ones whose cards match: a named thread,
         // or else the whole input.
         let query = reference.map_or(input.text.clone(), RouteSignal::spanned);
-        let all_cards = self.memory.search_cards(&query, OLDER_THREADS)?;
+        let all_cards = self
+            .memory
+            .search_cards(&query, &self.scopes, OLDER_THREADS)?;
         let older = all_cards
             .iter()
             .filter_map(|(id, _)| threads.iter().find(|t| t.info.id == *id));
@@ -481,6 +492,7 @@ mod tests {
             Provider::baseten(key),
             Request::new(BASETEN_MODEL).thinking(false),
             Arc::new(Memory::in_memory().unwrap()),
+            vec![me()],
         )
     }
 

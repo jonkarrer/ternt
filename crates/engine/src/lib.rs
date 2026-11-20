@@ -14,7 +14,9 @@
 //!
 //! Tasks own tasks. A task waits on others without running any code (`Next::Wait`); one that
 //! finishes while work it owns is live is `completing` until that work has ended. Aborts run
-//! bottom-up: owned work is aborted first, then the task's own abort handler runs.
+//! bottom-up: owned work is aborted first, then the task's own abort handler runs, which may
+//! itself wait and sleep. Background work (`TaskOptions::background`) is a boundary: it neither
+//! holds its owner up nor is aborted with it.
 
 pub mod runtime;
 mod store;
@@ -396,9 +398,23 @@ impl Shared {
         self.lock().progress.get(&id).copied().unwrap_or(0)
     }
 
+    /// Lets each task's definition clean up after the engine itself ended it (`Task::on_fault`),
+    /// one commit each. Best effort: errors are ignored.
+    fn after_faults(&self, ids: &[TaskId]) {
+        for &id in ids {
+            let Ok(Some(task)) = self.task(id) else {
+                continue;
+            };
+            if let Some(kind) = self.registry.get(&task.kind) {
+                let _ = self.commit(|tx| kind.on_fault(tx, &task));
+            }
+        }
+    }
+
     /// What a crash or an earlier process left: running tasks were cut off.
     fn recover(&self) -> Result<()> {
         let limit = self.settings.restart_limit;
+        let mut faulted = Vec::new();
         self.commit(|tx| {
             let ids: Vec<TaskId> = tx.inner.tasks.keys().copied().collect();
             for &id in &ids {
@@ -414,6 +430,7 @@ impl Shared {
                 if restarts >= limit {
                     let error = format!("restart_limit: cut off by {restarts} crashes in a row");
                     tx.end(id, Outcome::Faulted { error })?;
+                    faulted.push(id);
                 }
             }
             for id in ids {
@@ -425,7 +442,9 @@ impl Shared {
                 }
             }
             Ok(())
-        })
+        })?;
+        self.after_faults(&faulted);
+        Ok(())
     }
 
     /// Stops the scheduler and every invocation, and refuses further commits.
@@ -478,15 +497,22 @@ impl Shared {
                     }
                     Some(_) => {}
                 }
-                if task.abort_requested {
+                // The abort handler starts once the work the task owns has ended; after that it
+                // runs as any phase does, its own waits and sleeps included.
+                if task.abort_requested && !task.aborting {
                     if !owns_live(id) {
                         starts.push((id, Mode::Abort));
                     }
                     continue;
                 }
+                let mode = if task.aborting {
+                    Mode::Abort
+                } else {
+                    Mode::Run
+                };
                 match &task.state {
                     TaskState::Pending { .. } | TaskState::Running { .. } => {
-                        starts.push((id, Mode::Run));
+                        starts.push((id, mode));
                     }
                     TaskState::Waiting { on, policy, .. } => {
                         let (live, ended): (Vec<TaskId>, Vec<TaskId>) = on
@@ -494,7 +520,7 @@ impl Shared {
                             .copied()
                             .partition(|o| inner.tasks.contains_key(o));
                         if live.is_empty() {
-                            starts.push((id, Mode::Run));
+                            starts.push((id, mode));
                         } else if *policy == Policy::FailFast && !ended.is_empty() {
                             let unmarked: Vec<TaskId> = live
                                 .into_iter()
@@ -506,7 +532,7 @@ impl Shared {
                         }
                     }
                     TaskState::Sleeping { until, .. } if *until <= now => {
-                        starts.push((id, Mode::Run));
+                        starts.push((id, mode));
                     }
                     TaskState::Sleeping { until, .. } => {
                         earliest = Some(earliest.map_or(*until, |e| e.min(*until)));
@@ -533,7 +559,7 @@ impl Shared {
                 for (id, outcome) in finals {
                     tx.end(id, outcome)?;
                 }
-                for id in orphans {
+                for &id in &orphans {
                     let reason = "task_too_old: stored by another version".to_string();
                     tx.end(id, Outcome::Orphaned { reason })?;
                 }
@@ -542,6 +568,7 @@ impl Shared {
                 }
                 Ok(())
             })?;
+            self.after_faults(&orphans);
         }
         for (id, mode) in starts {
             self.start(id, mode)?;
@@ -564,8 +591,12 @@ impl Shared {
             };
             let was_running = matches!(task.state, TaskState::Running { .. });
             let kind = self.registry.get(&task.kind).context("unregistered")?;
-            if !was_running {
-                tx.update(id, |task| task.state = TaskState::Running { checkpoint })?;
+            let starts_aborting = mode == Mode::Abort && !task.aborting;
+            if !was_running || starts_aborting {
+                tx.update(id, |task| {
+                    task.state = TaskState::Running { checkpoint };
+                    task.aborting |= mode == Mode::Abort;
+                })?;
             }
             tx.inner.generation += 1;
             let generation = tx.inner.generation;
@@ -693,6 +724,7 @@ async fn supervise(
             {
                 return;
             }
+            shared.after_faults(&[id]);
             break;
         }
     }
@@ -811,6 +843,7 @@ impl Tx<'_> {
                 abandon_on_restart: options.abandon_on_restart,
                 abort_requested: false,
                 abort_reason: None,
+                aborting: false,
                 restarts: 0,
                 memos: BTreeMap::new(),
                 state: TaskState::Pending { checkpoint },

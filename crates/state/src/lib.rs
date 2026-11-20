@@ -301,6 +301,17 @@ impl Thread {
         Ok(())
     }
 
+    /// Tool calls the model is still waiting on: those of the last message, when it's an
+    /// assistant reply. Each needs a result before the next request.
+    pub fn unanswered_calls(&self) -> Vec<&str> {
+        match self.context.messages.last() {
+            Some(last) if last.role == Role::Assistant => {
+                last.tool_calls().map(|(id, ..)| id).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// What the model sees now.
     pub fn context(&self) -> &Context {
         &self.context
@@ -437,6 +448,17 @@ pub(crate) mod tests {
         thread.start_step().unwrap();
         thread.push(Message::assistant("18C and sunny.")).unwrap();
         thread.end_turn().unwrap();
+    }
+
+    #[test]
+    fn unanswered_calls_are_the_last_replys() {
+        let mut thread = Thread::new("t1");
+        thread.start_turn(Message::user("Weather?")).unwrap();
+        assert!(thread.unanswered_calls().is_empty());
+        thread.push(call("c1")).unwrap();
+        assert_eq!(thread.unanswered_calls(), ["c1"]);
+        thread.push(Message::tool_result("c1", "18C")).unwrap();
+        assert!(thread.unanswered_calls().is_empty());
     }
 
     #[test]
