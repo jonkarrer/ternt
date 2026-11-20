@@ -1,10 +1,10 @@
 //! Everything that gets pushed into inference: system prompt, registered tools, message history.
 //! Vendor-neutral: each provider format translates this to its own wire shape.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Context {
     pub system: Option<String>,
     pub tools: Vec<Tool>,
@@ -28,20 +28,21 @@ impl Context {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     User,
     Assistant,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
     pub content: Vec<Block>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Block {
     Text {
         text: String,
@@ -117,7 +118,7 @@ impl Message {
 }
 
 /// A tool the model may call. `input_schema` is a JSON Schema object.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tool {
     pub name: String,
     pub description: String,
