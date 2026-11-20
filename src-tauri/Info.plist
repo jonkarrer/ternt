@@ -5,6 +5,13 @@
      Links); links then arrive as RunEvent::Opened (src-tauri/src/little.rs). -->
 <plist version="1.0">
 <dict>
+  <!-- Video calls (Meet, Zoom, Cal Video…). Without these WebKit hides
+       navigator.mediaDevices from pages and macOS refuses the camera and
+       microphone. Each site still asks first (src-tauri/src/media.rs). -->
+  <key>NSCameraUsageDescription</key>
+  <string>Websites you allow can use your camera, for video calls.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Websites you allow can use your microphone, for calls and voice input.</string>
   <key>CFBundleURLTypes</key>
   <array>
     <dict>

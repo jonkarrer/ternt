@@ -56,6 +56,9 @@ pub struct Prefs {
     /// Air Traffic Control: links from other apps that go to a given space
     /// (see `routing`).
     pub link_rules: Vec<crate::routing::LinkRule>,
+    /// Sites allowed the camera and microphone, as origins
+    /// (`https://meet.google.com`); the rest ask first.
+    pub media_sites: Vec<String>,
 }
 
 impl Default for Prefs {
@@ -66,6 +69,7 @@ impl Default for Prefs {
             terminal_font_size: TERMINAL_FONT_SIZE,
             unload_tabs: true,
             link_rules: Vec::new(),
+            media_sites: Vec::new(),
         }
     }
 }
@@ -118,13 +122,31 @@ pub fn set_prefs(app: AppHandle, mut prefs: Prefs) {
     } else {
         TERMINAL_FONT_SIZE
     };
+    store(&app, prefs);
+}
+
+fn store(app: &AppHandle, prefs: Prefs) {
     *app.state::<Store>().0.lock().unwrap() = prefs.clone();
-    save(&app, &prefs);
+    save(app, &prefs);
     let _ = app.emit_to(
         EventTarget::webview(crate::settings::SETTINGS_WINDOW),
         "prefs:changed",
         prefs,
     );
+}
+
+/// Whether `origin` may use the camera and microphone without asking.
+pub fn media_allowed(app: &AppHandle, origin: &str) -> bool {
+    get(app).media_sites.iter().any(|s| s == origin)
+}
+
+/// Let `origin` use the camera and microphone from now on.
+pub fn allow_media(app: &AppHandle, origin: &str) {
+    let mut prefs = get(app);
+    if !prefs.media_sites.iter().any(|s| s == origin) {
+        prefs.media_sites.push(origin.to_string());
+        store(app, prefs);
+    }
 }
 
 #[cfg(test)]

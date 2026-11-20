@@ -1200,6 +1200,7 @@ fn prepare_page_view(webview: tauri::webview::PlatformWebview, label: String) {
         if let Some(delegate) = delegate.as_ref() {
             add_js_dialogs(delegate.class());
             guard_new_windows(delegate.class());
+            guard_media(delegate.class());
             // WebKit notes which methods a delegate has when it's set:
             // set it again so it sees the added ones.
             let _: () = msg_send![view, setUIDelegate: delegate];
@@ -1227,6 +1228,135 @@ unsafe fn action_url(action: &AnyObject) -> Option<String> {
         let url: *mut NSURL = msg_send![request.as_ref()?, URL];
         Some(url.as_ref()?.absoluteString()?.to_string())
     }
+}
+
+// --- Camera, microphone and screen ------------------------------------------
+//
+// wry grants every site the camera and microphone without asking. Instead a
+// site asks once, in a sheet like Safari's, and is remembered if allowed
+// (Settings → General lists them). Screen sharing goes to macOS's picker,
+// which is the asking.
+
+type MediaPermission = unsafe extern "C-unwind" fn(
+    &AnyObject,
+    objc2::runtime::Sel,
+    &AnyObject,
+    &AnyObject,
+    &AnyObject,
+    isize,
+    &block2::Block<dyn Fn(isize)>,
+);
+
+type DisplayPermission = unsafe extern "C-unwind" fn(
+    &AnyObject,
+    objc2::runtime::Sel,
+    &AnyObject,
+    &AnyObject,
+    &AnyObject,
+    objc2::runtime::Bool,
+    &block2::Block<dyn Fn(isize)>,
+);
+
+/// `WKPermissionDecision`.
+const PERMISSION_GRANT: isize = 1;
+const PERMISSION_DENY: isize = 2;
+/// `WKMediaCaptureType`.
+const CAPTURE_CAMERA: isize = 0;
+const CAPTURE_MICROPHONE: isize = 1;
+/// `_WKDisplayCapturePermissionDecisionScreenPrompt`: macOS's picker.
+const DISPLAY_PROMPT: isize = 1;
+
+/// Hook wry's UI delegate class's capture permissions (once).
+unsafe fn guard_media(class: &objc2::runtime::AnyClass) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        swizzle(
+            class,
+            objc2::sel!(webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:),
+            std::mem::transmute::<MediaPermission, objc2::runtime::Imp>(media_permission),
+        );
+        // WebKit's private method (Safari's): without it, getDisplayMedia()
+        // is refused.
+        objc2::ffi::class_addMethod(
+            class as *const _ as *mut objc2::runtime::AnyClass,
+            objc2::sel!(_webView:requestDisplayCapturePermissionForOrigin:initiatedByFrame:withSystemAudio:decisionHandler:),
+            std::mem::transmute::<DisplayPermission, objc2::runtime::Imp>(display_permission),
+            c"v@:@@@B@?".as_ptr(),
+        );
+    });
+}
+
+/// `https://meet.google.com` (with a port when it isn't the default).
+unsafe fn origin_string(origin: &AnyObject) -> (String, String) {
+    unsafe {
+        let protocol: *mut NSString = msg_send![origin, protocol];
+        let host: *mut NSString = msg_send![origin, host];
+        let port: isize = msg_send![origin, port];
+        let protocol = protocol.as_ref().map(|p| p.to_string()).unwrap_or_default();
+        let host = host.as_ref().map(|h| h.to_string()).unwrap_or_default();
+        let origin = match port {
+            0 => format!("{protocol}://{host}"),
+            port => format!("{protocol}://{host}:{port}"),
+        };
+        (origin, host)
+    }
+}
+
+unsafe extern "C-unwind" fn media_permission(
+    _this: &AnyObject,
+    _cmd: objc2::runtime::Sel,
+    web_view: &AnyObject,
+    origin: &AnyObject,
+    _frame: &AnyObject,
+    kind: isize,
+    decision: &block2::Block<dyn Fn(isize)>,
+) {
+    let asked = caught_or(false, || unsafe {
+        let Some(app) = APP.get() else {
+            return false;
+        };
+        let (origin, host) = origin_string(origin);
+        if crate::prefs::media_allowed(app, &origin) {
+            decision.call((PERMISSION_GRANT,));
+            return true;
+        }
+        let what = match kind {
+            CAPTURE_CAMERA => "camera",
+            CAPTURE_MICROPHONE => "microphone",
+            _ => "camera and microphone",
+        };
+        let alert: Retained<AnyObject> = msg_send![objc2::class!(NSAlert), new];
+        let title = format!("Allow {host} to use your {what}?");
+        let _: () = msg_send![&*alert, setMessageText: &*NSString::from_str(&title)];
+        let info = "Ternt remembers your answer for this site. Settings → General lists the sites you've allowed.";
+        let _: () = msg_send![&*alert, setInformativeText: &*NSString::from_str(info)];
+        let _: *mut AnyObject = msg_send![&*alert, addButtonWithTitle: &*NSString::from_str("Allow")];
+        let _: *mut AnyObject = msg_send![&*alert, addButtonWithTitle: &*NSString::from_str("Don\u{2019}t Allow")];
+        let decision = decision.copy();
+        let app = app.clone();
+        js_dialog_show(web_view, &alert, move |allow| {
+            if allow {
+                crate::prefs::allow_media(&app, &origin);
+            }
+            decision.call((if allow { PERMISSION_GRANT } else { PERMISSION_DENY },));
+        });
+        true
+    });
+    if !asked {
+        decision.call((PERMISSION_DENY,));
+    }
+}
+
+unsafe extern "C-unwind" fn display_permission(
+    _this: &AnyObject,
+    _cmd: objc2::runtime::Sel,
+    _web_view: &AnyObject,
+    _origin: &AnyObject,
+    _frame: &AnyObject,
+    _system_audio: objc2::runtime::Bool,
+    decision: &block2::Block<dyn Fn(isize)>,
+) {
+    decision.call((DISPLAY_PROMPT,));
 }
 
 // --- New windows and modified clicks -----------------------------------------

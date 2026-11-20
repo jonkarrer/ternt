@@ -173,6 +173,8 @@ export interface Prefs {
   /** Air Traffic Control: links from other apps matching a rule open in its
       space (first match wins; src-tauri/src/routing.rs). */
   linkRules: LinkRule[];
+  /** Sites allowed the camera and microphone (origins); the rest ask. */
+  mediaSites: string[];
 }
 
 export interface LinkRule {

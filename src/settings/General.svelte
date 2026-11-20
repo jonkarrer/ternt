@@ -5,13 +5,28 @@
 
   let version = $state("");
   let unloadTabs = $state(true);
+  /** Sites allowed the camera and microphone. */
+  let mediaSites = $state<string[]>([]);
   watchUpdates();
   const status = $derived(updates.status);
 
   onMount(() => {
     browser.appVersion().then((v) => (version = v));
-    browser.getPrefs().then((p) => (unloadTabs = p.unloadTabs));
+    const load = () =>
+      browser.getPrefs().then((p) => {
+        unloadTabs = p.unloadTabs;
+        mediaSites = p.mediaSites;
+      });
+    load();
+    // A site allowed in a tab while Settings is open.
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
   });
+
+  function forgetSite(site: string) {
+    mediaSites = mediaSites.filter((s) => s !== site);
+    browser.updatePrefs({ mediaSites });
+  }
 
   function setUnloadTabs(event: Event) {
     unloadTabs = (event.currentTarget as HTMLInputElement).checked;
@@ -71,7 +86,38 @@
   </div>
 </div>
 
+<h2>Camera and microphone</h2>
+<div class="card media">
+  <div class="row">
+    <div class="label">
+      Sites you've allowed
+      <div class="hint">
+        A site asks the first time it wants your camera or microphone (a call joining, say). Remove one to have it ask
+        again. Sharing your screen always asks, in macOS's picker.
+      </div>
+    </div>
+  </div>
+  {#each mediaSites as site (site)}
+    <div class="row site">
+      <span class="origin">{site.replace(/^https:\/\//, "")}</span>
+      <button class="button" onclick={() => forgetSite(site)}>Remove</button>
+    </div>
+  {:else}
+    <div class="row"><span class="none">None yet.</span></div>
+  {/each}
+</div>
+
 <style>
+  .origin {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .none {
+    color: var(--text-muted);
+  }
   .unload {
     flex: none;
     margin: 0;

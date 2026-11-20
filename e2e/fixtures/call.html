@@ -1,0 +1,24 @@
+<!doctype html>
+<title>Fixture Call</title>
+<body style="font: 16px system-ui; padding: 20px">
+  <h1>Call</h1>
+  <video id="me" autoplay muted playsinline width="320"></video>
+  <script>
+    // join(): the camera and microphone, and says what it got in the title.
+    async function join(constraints = { audio: true, video: true }) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        document.getElementById("me").srcObject = stream;
+        document.title = "joined: " + stream.getTracks().map((t) => t.kind).sort().join(",");
+      } catch (e) {
+        document.title = "refused: " + e.name;
+      }
+    }
+    function leave() {
+      const v = document.getElementById("me");
+      v.srcObject?.getTracks().forEach((t) => t.stop());
+      v.srcObject = null;
+      document.title = "left";
+    }
+  </script>
+</body>

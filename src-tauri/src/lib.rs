@@ -186,6 +186,8 @@ pub fn run() {
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_allow_popups,
             #[cfg(all(debug_assertions, target_os = "macos"))]
+            debug::debug_mock_media,
+            #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_windows,
             #[cfg(all(debug_assertions, target_os = "macos"))]
             debug::debug_set,

@@ -144,6 +144,15 @@ of progress while something downloads. A link opened in a new tab that turns out
 leaves no empty tab behind. Links for other apps
 (`mailto:`, `tel:`, Zoom, Slack…) open in those apps.
 
+Links and buttons that open a new window open a tab, which the page keeps as its window (it can
+point it somewhere after opening it, or post a form into it); sign-in popups that ask for a size
+get a window of their own. ⌘-click (or middle-click) opens a link in a tab behind the one you're
+on, ⇧⌘-click shows it.
+
+Video calls (Meet, Zoom in the browser, Cal Video…) work: the first time a site wants your camera
+or microphone it asks, and remembers if you allow it (*Settings → General* lists those sites, to
+remove). Sharing your screen asks through macOS's picker.
+
 ## Little Ternt
 
 Make Ternt your default browser (*Ternt → Make Default Browser…*, the palette, or the button in *Settings → Account* or *Links*) and links you click in other
@@ -154,7 +163,7 @@ space you're in. Read it and close it (⌘W), or click *Open in Ternt* to move t
 ## Settings
 
 *Ternt → Settings…* (⌘,) opens an Arc-style window with pages along the top: **Account** (your
-name and email, kept on this Mac, and a summary of your profiles), **General** (version, updates),
+name and email, kept on this Mac, and a summary of your profiles), **General** (version, updates, sites allowed the camera and microphone),
 **Profiles** (Default and each separate profile),
 **Links** (default browser, where links from other apps open), **Shortcuts** and **Advanced**
 (data folder).

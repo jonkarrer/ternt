@@ -122,6 +122,24 @@ pub async fn debug_allow_popups(app: AppHandle, label: String) -> Result<(), Str
         .map_err(|e| e.to_string())
 }
 
+/// Give a page WebKit's fake camera and microphone (no macOS prompt, no
+/// devices needed), on http too. Reload the page after.
+#[tauri::command]
+pub async fn debug_mock_media(app: AppHandle, label: String) -> Result<(), String> {
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| format!("no webview {label}"))?;
+    webview
+        .with_webview(|platform| unsafe {
+            let view = &*(platform.inner() as *const objc2::runtime::AnyObject);
+            let config: *mut objc2::runtime::AnyObject = objc2::msg_send![view, configuration];
+            let prefs: *mut objc2::runtime::AnyObject = objc2::msg_send![&*config, preferences];
+            let _: () = objc2::msg_send![&*prefs, _setMockCaptureDevicesEnabled: true];
+            let _: () = objc2::msg_send![&*prefs, _setMediaCaptureRequiresSecureConnection: false];
+        })
+        .map_err(|e| e.to_string())
+}
+
 /// Labels of all open windows (popups, Settings, Little Ternt).
 #[tauri::command]
 pub fn debug_windows(app: AppHandle) -> Vec<String> {
@@ -607,7 +625,8 @@ pub async fn debug_ctrl_key(app: AppHandle, key: String) -> Result<(), String> {
 }
 
 /// Answer the JavaScript dialog sheet on the main window: type `text` into
-/// a prompt's field (if given), then press OK or Cancel. Returns the
+/// a prompt's field (if given), then press OK or Cancel (Allow or Don't
+/// Allow on a camera and microphone sheet). Returns the
 /// dialog's texts (title, message), or `None` if no dialog is showing.
 #[tauri::command]
 pub async fn debug_answer_dialog(
@@ -643,7 +662,7 @@ pub async fn debug_answer_dialog(
             }
             walk(&*content, &mut views);
             let mut texts = vec![];
-            let wanted = if ok { "OK" } else { "Cancel" };
+            let wanted = if ok { ["OK", "Allow"] } else { ["Cancel", "Don\u{2019}t Allow"] };
             let mut button = None;
             for &view in &views {
                 let view = &*view;
@@ -653,7 +672,7 @@ pub async fn debug_answer_dialog(
                     objc2::msg_send![view, isKindOfClass: objc2::class!(NSTextField)];
                 if is_button {
                     let title: *mut NSString = objc2::msg_send![view, title];
-                    if (*title).to_string() == wanted {
+                    if wanted.contains(&(*title).to_string().as_str()) {
                         button = Some(view);
                     }
                 } else if is_field {
