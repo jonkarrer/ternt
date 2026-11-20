@@ -6,15 +6,15 @@
 //! A turn runs from the user's message to the model's final reply. Each `chat` call inside
 //! it, plus the tools it asks for, is one step.
 //!
-//! With a `Checkpointer`, every checkpoint is saved before it takes effect; if the save
-//! fails, the thread is unchanged and the call returns the error.
+//! A `Thread` lives in memory and never saves itself. The engine saves its new checkpoints in
+//! the same commit as everything else that happened with them, and rolls it back if that commit
+//! fails; outside the engine, `Sqlite::save_thread` does the same for one thread.
 
 pub mod sqlite;
 
 pub use sqlite::Sqlite;
 
 use std::ops::Range;
-use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::{Result, ensure};
@@ -98,16 +98,27 @@ pub trait Checkpointer: Send + Sync {
 
 /// Runs after every recorded event and may record more. Events recorded from inside a hook
 /// are checkpointed but don't trigger hooks again, so hooks can't loop on each other.
-/// Hooks are code, not state: re-register them after `Thread::open`.
-pub type Hook = Box<dyn FnMut(&mut Thread, &Event) -> Result<()> + Send>;
+/// Hooks are code, not state: re-register them after loading a thread.
+pub type Hook = Box<dyn FnMut(&mut Thread, &Event) -> Result<()> + Send + Sync>;
 
+/// A thread in memory. It never saves itself: changes are recorded here, and whoever owns it
+/// (the engine, in one commit with everything else) saves `unsaved()` and calls `mark_saved()`.
 pub struct Thread {
     pub id: String,
     checkpoints: Vec<Checkpoint>,
     context: Context,
     position: Position,
-    store: Option<Arc<dyn Checkpointer>>,
+    /// Checkpoints before this index are stored.
+    saved: usize,
     hooks: Vec<Hook>,
+}
+
+/// Where to roll a thread back to when a commit doesn't go through.
+pub struct Savepoint {
+    len: usize,
+    saved: usize,
+    position: Position,
+    context: Context,
 }
 
 /// Where the thread is: turn and step numbers, and whether a turn is open.
@@ -135,22 +146,29 @@ impl Position {
 }
 
 impl Thread {
-    /// An in-memory thread.
+    /// An empty thread.
     pub fn new(id: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             checkpoints: Vec::new(),
             context: Context::default(),
             position: Position::default(),
-            store: None,
+            saved: 0,
             hooks: Vec::new(),
         }
     }
 
-    /// Resume a saved thread, or start it if the store has none by this id.
-    pub fn open(id: impl Into<String>, store: Arc<dyn Checkpointer>) -> Result<Self> {
+    /// A saved thread, or an empty one if the store has none by this id.
+    pub fn load(id: impl Into<String>, store: &dyn Checkpointer) -> Result<Self> {
+        let id = id.into();
+        let checkpoints = store.load(&id)?;
+        Self::from_checkpoints(id, checkpoints)
+    }
+
+    /// A thread rebuilt from its stored checkpoints, all counted as saved.
+    pub fn from_checkpoints(id: impl Into<String>, checkpoints: Vec<Checkpoint>) -> Result<Self> {
         let mut thread = Self::new(id);
-        for (i, checkpoint) in store.load(&thread.id)?.into_iter().enumerate() {
+        for (i, checkpoint) in checkpoints.into_iter().enumerate() {
             ensure!(
                 checkpoint.id == i,
                 "thread {} has a gap at checkpoint {i}",
@@ -158,11 +176,41 @@ impl Thread {
             );
             thread.replay(checkpoint);
         }
-        thread.store = Some(store);
+        thread.saved = thread.checkpoints.len();
         Ok(thread)
     }
 
-    pub fn on(&mut self, hook: impl FnMut(&mut Thread, &Event) -> Result<()> + Send + 'static) {
+    /// Checkpoints recorded since the last `mark_saved`, oldest first.
+    pub fn unsaved(&self) -> &[Checkpoint] {
+        &self.checkpoints[self.saved..]
+    }
+
+    /// Call once `unsaved()` is stored.
+    pub fn mark_saved(&mut self) {
+        self.saved = self.checkpoints.len();
+    }
+
+    pub fn savepoint(&self) -> Savepoint {
+        Savepoint {
+            len: self.checkpoints.len(),
+            saved: self.saved,
+            position: self.position,
+            context: self.context.clone(),
+        }
+    }
+
+    /// Undoes everything recorded since `savepoint`.
+    pub fn rollback(&mut self, savepoint: Savepoint) {
+        self.checkpoints.truncate(savepoint.len);
+        self.saved = savepoint.saved;
+        self.position = savepoint.position;
+        self.context = savepoint.context;
+    }
+
+    pub fn on(
+        &mut self,
+        hook: impl FnMut(&mut Thread, &Event) -> Result<()> + Send + Sync + 'static,
+    ) {
         self.hooks.push(Box::new(hook));
     }
 
@@ -232,6 +280,19 @@ impl Thread {
         })
     }
 
+    /// Records events as they are, without the checks the named methods make: for replaying
+    /// what was recorded on a copy (`snapshot`) onto the thread it was copied from.
+    pub fn append(&mut self, events: impl IntoIterator<Item = Event>) -> Result<()> {
+        events.into_iter().try_for_each(|event| self.record(event))
+    }
+
+    /// A copy with the same history, all of it saved and without hooks: for slow work done
+    /// outside a commit. Events it records since are `copy.checkpoints()[original_len..]`.
+    pub fn snapshot(&self) -> Thread {
+        Thread::from_checkpoints(self.id.clone(), self.checkpoints.clone())
+            .expect("a thread's own checkpoints have no gaps")
+    }
+
     /// Does nothing outside a turn.
     pub fn end_turn(&mut self) -> Result<()> {
         if self.position.in_turn {
@@ -270,19 +331,14 @@ impl Thread {
         self.position.in_turn
     }
 
-    /// A new thread holding this one's history up to and including checkpoint `id`, saved to
-    /// the same store. Hooks aren't copied.
-    pub fn fork(&self, id: usize, new_id: impl Into<String>) -> Result<Thread> {
+    /// A new thread holding this one's history up to and including checkpoint `id`, all of it
+    /// unsaved. Hooks aren't copied.
+    pub fn fork(&self, id: usize, new_id: impl Into<String>) -> Thread {
         let mut thread = Thread::new(new_id);
-        let history = &self.checkpoints[..=id];
-        if let Some(store) = &self.store {
-            store.save(&thread.id, history)?;
-            thread.store = Some(store.clone());
-        }
-        for checkpoint in history {
+        for checkpoint in &self.checkpoints[..=id] {
             thread.replay(checkpoint.clone());
         }
-        Ok(thread)
+        thread
     }
 
     /// Apply an already-saved checkpoint, without saving or hooks.
@@ -301,9 +357,6 @@ impl Thread {
             at: SystemTime::now(),
             event,
         };
-        if let Some(store) = &self.store {
-            store.save(&self.id, std::slice::from_ref(&checkpoint))?;
-        }
         let event = checkpoint.event.clone();
         self.replay(checkpoint);
 
@@ -456,7 +509,7 @@ pub(crate) mod tests {
         let after_first = thread.checkpoints().len() - 1;
         tool_turn(&mut thread, "And tomorrow?");
 
-        let mut branch = thread.fork(after_first, "t2").unwrap();
+        let mut branch = thread.fork(after_first, "t2");
         assert_eq!(branch.context(), &thread.context_at(after_first));
         assert_eq!(branch.turn(), 1);
         branch.start_turn(Message::user("And in Rome?")).unwrap();

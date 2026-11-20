@@ -1,15 +1,21 @@
-//! SQLite checkpointer: one row per checkpoint, keyed by (thread_id, id), event as JSON.
+//! SQLite store: one row per checkpoint, keyed by (thread_id, id), event as JSON. The engine
+//! adds its own tables to the same database and writes them in the same transactions
+//! (`transaction`), so a commit is one SQLite transaction whatever it touches.
+//!
+//! WAL with `synchronous = NORMAL`: commits survive a process crash; the newest may be lost if
+//! the whole machine loses power.
 
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
-use rusqlite::{Connection, params};
+pub use rusqlite;
+use rusqlite::{Connection, Transaction, params};
 
 use context::Message;
 
-use crate::{Checkpoint, Checkpointer, ThreadInfo};
+use crate::{Checkpoint, Checkpointer, Thread, ThreadInfo};
 
 pub struct Sqlite {
     conn: Mutex<Connection>,
@@ -27,9 +33,55 @@ impl Sqlite {
         Self::init(Connection::open_in_memory()?)
     }
 
+    /// Runs `f` in one SQLite transaction on the store's connection; committed when `f`
+    /// returns `Ok`, rolled back otherwise.
+    pub fn transaction<T>(&self, f: impl FnOnce(&Transaction) -> Result<T>) -> Result<T> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let value = f(&tx)?;
+        tx.commit()?;
+        Ok(value)
+    }
+
+    /// Reads through the store's connection.
+    pub fn read<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        f(&self.conn.lock().unwrap())
+    }
+
+    /// Appends checkpoints inside a transaction from `transaction`.
+    pub fn save_in(tx: &Transaction, thread_id: &str, checkpoints: &[Checkpoint]) -> Result<()> {
+        let mut insert = tx.prepare_cached(
+            "INSERT INTO checkpoints (thread_id, id, turn, step, at_ns, event)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )?;
+        for c in checkpoints {
+            let at_ns = c.at.duration_since(UNIX_EPOCH)?.as_nanos() as i64;
+            insert
+                .execute(params![
+                    thread_id,
+                    c.id as i64,
+                    c.turn,
+                    c.step,
+                    at_ns,
+                    serde_json::to_string(&c.event)?,
+                ])
+                .with_context(|| format!("saving {thread_id} checkpoint {}", c.id))?;
+        }
+        Ok(())
+    }
+
+    /// Saves one thread's unsaved checkpoints, for use outside the engine. On failure the
+    /// thread keeps them unsaved.
+    pub fn save_thread(&self, thread: &mut Thread) -> Result<()> {
+        self.save(&thread.id, thread.unsaved())?;
+        thread.mark_saved();
+        Ok(())
+    }
+
     fn init(conn: Connection) -> Result<Self> {
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
              CREATE TABLE IF NOT EXISTS checkpoints (
                  thread_id TEXT NOT NULL,
                  id INTEGER NOT NULL,
@@ -48,29 +100,7 @@ impl Sqlite {
 
 impl Checkpointer for Sqlite {
     fn save(&self, thread_id: &str, checkpoints: &[Checkpoint]) -> Result<()> {
-        let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction()?;
-        {
-            let mut insert = tx.prepare_cached(
-                "INSERT INTO checkpoints (thread_id, id, turn, step, at_ns, event)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            )?;
-            for c in checkpoints {
-                let at_ns = c.at.duration_since(UNIX_EPOCH)?.as_nanos() as i64;
-                insert
-                    .execute(params![
-                        thread_id,
-                        c.id as i64,
-                        c.turn,
-                        c.step,
-                        at_ns,
-                        serde_json::to_string(&c.event)?,
-                    ])
-                    .with_context(|| format!("saving {thread_id} checkpoint {}", c.id))?;
-            }
-        }
-        tx.commit()?;
-        Ok(())
+        self.transaction(|tx| Self::save_in(tx, thread_id, checkpoints))
     }
 
     fn load(&self, thread_id: &str) -> Result<Vec<Checkpoint>> {
@@ -178,10 +208,8 @@ fn title(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Thread;
     use crate::tests::{tool_turn, weather};
     use context::Message;
-    use std::sync::Arc;
 
     #[test]
     fn thread_survives_reopen() {
@@ -191,36 +219,43 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let saved = {
-            let store = Arc::new(Sqlite::open(&path).unwrap());
-            let mut thread = Thread::open("t1", store).unwrap();
+            let store = Sqlite::open(&path).unwrap();
+            let mut thread = Thread::new("t1");
             thread.set_system("Be terse.").unwrap();
             thread.register(weather()).unwrap();
             tool_turn(&mut thread, "Weather in Paris?");
             thread.start_turn(Message::user("And tomorrow?")).unwrap();
+            store.save_thread(&mut thread).unwrap();
+            assert!(thread.unsaved().is_empty());
             thread.checkpoints().to_vec()
         };
 
-        let store = Arc::new(Sqlite::open(&path).unwrap());
-        let mut thread = Thread::open("t1", store.clone()).unwrap();
+        let store = Sqlite::open(&path).unwrap();
+        let mut thread = Thread::load("t1", &store).unwrap();
         assert_eq!(thread.checkpoints(), saved);
         assert_eq!(thread.context().messages.len(), 5);
         assert_eq!(thread.turn(), 2);
         assert!(thread.in_turn());
+        assert!(thread.unsaved().is_empty());
 
         thread.start_step().unwrap();
+        assert_eq!(thread.unsaved().len(), 1);
+        store.save_thread(&mut thread).unwrap();
         assert_eq!(store.load("t1").unwrap().len(), saved.len() + 1);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn threads_are_listed_by_activity() {
-        let store = Arc::new(Sqlite::memory().unwrap());
-        let mut paris = Thread::open("paris", store.clone()).unwrap();
+        let store = Sqlite::memory().unwrap();
+        let mut paris = Thread::new("paris");
         tool_turn(&mut paris, "Weather in Paris?\nAnd a second line.");
-        let mut rome = Thread::open("rome", store.clone()).unwrap();
+        let mut rome = Thread::new("rome");
         rome.start_turn(Message::user("Weather in Rome?")).unwrap();
         // Not activity: routing and compaction leave `active_at` alone.
         paris.routed("rule", "test").unwrap();
+        store.save_thread(&mut paris).unwrap();
+        store.save_thread(&mut rome).unwrap();
 
         let threads = store.threads().unwrap();
         let ids: Vec<_> = threads.iter().map(|t| t.id.as_str()).collect();
@@ -242,32 +277,62 @@ mod tests {
 
     #[test]
     fn fork_is_saved_and_listed() {
-        let store = Arc::new(Sqlite::memory().unwrap());
-        let mut thread = Thread::open("t1", store.clone()).unwrap();
+        let store = Sqlite::memory().unwrap();
+        let mut thread = Thread::new("t1");
         tool_turn(&mut thread, "Weather in Paris?");
-        let mut branch = thread.fork(3, "t2").unwrap();
+        store.save_thread(&mut thread).unwrap();
+        let mut branch = thread.fork(3, "t2");
         branch.push(Message::assistant("Rome instead?")).unwrap();
+        assert_eq!(branch.unsaved().len(), 5);
+        store.save_thread(&mut branch).unwrap();
 
         let ids: Vec<_> = store.threads().unwrap().into_iter().map(|t| t.id).collect();
         assert_eq!(ids, ["t2", "t1"]);
-        let reopened = Thread::open("t2", store.clone()).unwrap();
+        let reopened = Thread::load("t2", &store).unwrap();
         assert_eq!(reopened.context(), branch.context());
 
-        // Same id twice is refused, and the thread is left unchanged.
-        assert!(thread.fork(3, "t2").is_err());
+        // Same id twice is refused.
+        assert!(store.save_thread(&mut thread.fork(3, "t2")).is_err());
     }
 
     #[test]
-    fn failed_save_leaves_thread_unchanged() {
-        let store = Arc::new(Sqlite::memory().unwrap());
-        let mut thread = Thread::open("t1", store.clone()).unwrap();
+    fn failed_save_keeps_changes_unsaved() {
+        let store = Sqlite::memory().unwrap();
+        let mut thread = Thread::new("t1");
         thread.set_system("Be terse.").unwrap();
-        // Another writer took the next id.
-        let mut other = Thread::open("t1", store.clone()).unwrap();
+        // Another writer took the first id.
+        let mut other = Thread::new("t1");
         other.register(weather()).unwrap();
+        store.save_thread(&mut other).unwrap();
 
-        assert!(thread.register(weather()).is_err());
-        assert_eq!(thread.checkpoints().len(), 1);
-        assert!(thread.context().tools.is_empty());
+        assert!(store.save_thread(&mut thread).is_err());
+        assert_eq!(thread.unsaved().len(), 1);
+        assert_eq!(store.load("t1").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn rollback_undoes_a_failed_commit() {
+        let mut thread = Thread::new("t1");
+        tool_turn(&mut thread, "Weather in Paris?");
+        thread.mark_saved();
+        let before = (
+            thread.checkpoints().to_vec(),
+            thread.context().clone(),
+            thread.turn(),
+        );
+
+        let savepoint = thread.savepoint();
+        thread.start_turn(Message::user("And Rome?")).unwrap();
+        thread.replace(0..2, vec![]).unwrap();
+        thread.rollback(savepoint);
+
+        let after = (
+            thread.checkpoints().to_vec(),
+            thread.context().clone(),
+            thread.turn(),
+        );
+        assert_eq!(after, before);
+        assert!(thread.unsaved().is_empty());
+        assert!(!thread.in_turn());
     }
 }

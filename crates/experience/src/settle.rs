@@ -89,15 +89,12 @@ mod tests {
     use super::*;
     use crate::tests::{experience, key, turn};
     use context::Role;
-    use state::Sqlite;
-    use std::sync::Arc;
 
     #[tokio::test]
     #[ignore = "calls Anthropic"]
     async fn settles_into_a_card() {
         let exp = experience(&key());
-        let store = Arc::new(Sqlite::memory().unwrap());
-        let mut thread = Thread::open("kyoto", store.clone()).unwrap();
+        let mut thread = Thread::new("kyoto");
         turn(
             &mut thread,
             "Plan a trip to Kyoto in April.",

@@ -1,0 +1,20 @@
+[package]
+name = "agent"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+context.workspace = true
+engine.workspace = true
+experience.workspace = true
+router.workspace = true
+inference.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+state.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+memory.workspace = true

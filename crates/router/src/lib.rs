@@ -6,7 +6,7 @@
 //!
 //! It reads thread cards, not threads: the cards and titles of the 10 most recently active
 //! threads, plus any older thread whose card matches a thread the user names. Only the chosen
-//! thread is then loaded in full (`Thread::open`); the one thread read directly is the hot one
+//! thread is then loaded in full (`Thread::load`); the one thread read directly is the hot one
 //! the user is in, which hasn't dreamed a card yet: its last few messages.
 //!
 //! A model call on every input would be expensive, so it decides in code first, in tiers, and
@@ -218,7 +218,7 @@ impl<A: Api> Router<A> {
             .collect()
     }
 
-    /// Where an input goes. Load the chosen thread with `Thread::open` and note the route in it
+    /// Where an input goes. Load the chosen thread with `Thread::load` and note the route in it
     /// with `thread.routed(route.by.as_str(), &route.reason)`.
     pub async fn route(
         &self,
@@ -491,10 +491,11 @@ mod tests {
     fn store_with(threads: &[(&str, &[(&str, &str)])]) -> Arc<Sqlite> {
         let store = Arc::new(Sqlite::memory().unwrap());
         for (id, turns) in threads {
-            let mut thread = Thread::open(*id, store.clone()).unwrap();
+            let mut thread = Thread::new(*id);
             for (user, reply) in *turns {
                 turn(&mut thread, user, reply);
             }
+            store.save_thread(&mut thread).unwrap();
         }
         store
     }
@@ -613,8 +614,9 @@ mod tests {
             .unwrap();
         assert_eq!(phase(Duration::ZERO), Phase::Settled);
         // A new turn makes it active again.
-        let mut thread = Thread::open("kyoto", store.clone()).unwrap();
+        let mut thread = Thread::load("kyoto", store.as_ref()).unwrap();
         turn(&mut thread, "Actually, make it May.", "Updated to May.");
+        store.save_thread(&mut thread).unwrap();
         assert_eq!(phase(Duration::ZERO), Phase::Hot);
     }
 
@@ -624,20 +626,23 @@ mod tests {
         let router = router("unused");
         let store = Arc::new(Sqlite::memory().unwrap());
         // Oldest, outside the 10. Its title mentions a ryokan, but its card is about Metabase.
-        let mut old = Thread::open("old", store.clone()).unwrap();
+        let mut old = Thread::new("old");
         turn(&mut old, "Find a ryokan near Gion.", "Try Gion Hatanaka.");
         turn(&mut old, "Now set up Metabase.", "Done, on Postgres.");
+        store.save_thread(&mut old).unwrap();
         router
             .memory
             .add_card("old", me(), "Metabase dashboards on Postgres.", 7)
             .unwrap();
         for i in 0..10 {
-            let mut filler = Thread::open(format!("filler-{i}"), store.clone()).unwrap();
+            let mut filler = Thread::new(format!("filler-{i}"));
             turn(&mut filler, &format!("Question {i}"), "Answer.");
+            store.save_thread(&mut filler).unwrap();
         }
         // Its title doesn't mention the ryokan; its card does.
-        let mut trip = Thread::open("trip", store.clone()).unwrap();
+        let mut trip = Thread::new("trip");
         turn(&mut trip, "Help me plan April.", "Sure.");
+        store.save_thread(&mut trip).unwrap();
         router
             .memory
             .add_card(
