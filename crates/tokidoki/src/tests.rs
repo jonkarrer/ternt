@@ -45,6 +45,7 @@ impl Model for Script {
             },
             input_tokens: 0,
             output_tokens: 0,
+            stop: inference::Stop::Done,
         })
     }
 }
@@ -78,20 +79,17 @@ fn start(replies: Vec<Reply>) -> (Tokidoki, Arc<Script>) {
     tools.add(Weather);
     let tokidoki = Tokidoki::build(Parts {
         store: Arc::new(Sqlite::memory().unwrap()),
-        memory,
         model: script.clone(),
         mind: None,
         router,
-        new_threads: NewThreads {
-            system: Some("Be brief.".into()),
-            tools: tools.specs(),
-        },
         tools,
+        system: Some("Be brief.".into()),
         settings: agent::Settings {
             backoff_ms: 10,
             ..agent::Settings::default()
         },
         speakers: vec!["owner".into()],
+        journal: None,
     })
     .unwrap();
     (tokidoki, script)
@@ -146,6 +144,17 @@ async fn an_input_is_routed_answered_and_followed() {
     };
     assert_eq!(submission.status, Status::Done);
     assert_eq!(submission.answer.as_deref(), Some("18C in Paris."));
+    // Each status as it was committed, in order: never a later one read early.
+    let statuses: Vec<Status> = seen
+        .iter()
+        .filter_map(|e| match e {
+            Event::Submission { submission } if submission.id == sent.submission => {
+                Some(submission.status)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(statuses, [Status::Placed, Status::Done]);
 
     // The thread's checkpoints arrive in order, without gaps, as history has them.
     let seqs: Vec<usize> = seen
@@ -177,8 +186,22 @@ async fn an_input_is_routed_answered_and_followed() {
 
     // What worked on it was reported as it went.
     assert!(seen.iter().any(
-        |e| matches!(e, Event::Activity { kind, phase, .. } if kind == "agent.tool" && phase == "call")
+        |e| matches!(e, Event::Activity { doing: interface::Doing::Tool { name }, .. } if name == "weather")
     ));
+    let thinking = |e: &Event| {
+        matches!(
+            e,
+            Event::Activity {
+                doing: interface::Doing::Thinking,
+                ..
+            }
+        )
+    };
+    assert_eq!(
+        seen.iter().filter(|e| thinking(e)).count(),
+        2,
+        "one per model request"
+    );
     // The model saw the thread's setup.
     assert_eq!(
         script.seen.lock().unwrap()[0].system.as_deref(),
@@ -269,4 +292,14 @@ async fn abort_stops_a_run_and_feedback_is_recorded() {
     assert_eq!(recorded[0].thread.as_deref(), Some("t1"));
     assert_eq!(recorded[0].fields["turn"], 1);
     assert_eq!(recorded[0].severity, telemetry::Severity::Warn);
+    // Kept with the thread too, whatever the journal records.
+    let kept: Vec<Feedback> = tokidoki
+        .inner
+        .agent
+        .engine()
+        .doc(&feedback_key("t1"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].turn, Some(1));
 }

@@ -72,7 +72,7 @@ impl<M: Model> Task for Generation<M> {
             &State::Consider { round } => {
                 let mind = self.mind.as_deref().expect("Consider only with a mind");
                 let next = Next::Continue(State::Request { round, attempt: 1 });
-                think(&rt, mind, ("consider", Mind::consider), next).await
+                think(&rt, mind, Mind::consider, next).await
             }
             &State::Request { round, attempt } => self.request(&rt, round, attempt).await,
             State::Tools {

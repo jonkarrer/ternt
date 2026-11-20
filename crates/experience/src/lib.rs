@@ -67,7 +67,7 @@ pub enum Decision {
     Forget {
         id: i64,
     },
-    /// Considered and chose not to act, or the action failed.
+    /// Considered and chose not to act.
     Ignore {
         reason: String,
     },
@@ -80,6 +80,8 @@ pub struct Outcome {
     /// Brought into the thread's context.
     pub recalled: Vec<Item>,
     pub written: Vec<Item>,
+    /// What went wrong: deciding (the model call), or carrying out a decision.
+    pub failed: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -96,8 +98,12 @@ pub struct Dream {
 }
 
 impl Dream {
-    fn fail(&mut self, part: &'static str, error: anyhow::Error) {
-        self.failed.push((part, format!("{error:#}")));
+    /// A part's result, or its default with the failure noted.
+    fn keep<T: Default>(&mut self, part: &'static str, result: Result<T>) -> T {
+        result.unwrap_or_else(|error| {
+            self.failed.push((part, format!("{error:#}")));
+            T::default()
+        })
     }
 }
 
@@ -161,25 +167,20 @@ impl<A: Api> Experience<A> {
                 planned.push(recall);
             }
         }
+        let mut outcome = Outcome::default();
         if !judged.is_empty() {
             match self.decide(&judged, &thread.id).await {
                 Ok(decisions) => planned.extend(decisions),
-                Err(error) => planned.push(Decision::Ignore {
-                    reason: format!("deciding failed: {error:#}"),
-                }),
+                Err(error) => outcome.failed.push(format!("deciding: {error:#}")),
             }
         }
 
-        let mut outcome = Outcome::default();
         let mut in_context = recalled_in_context(thread);
         for decision in planned {
-            let decision = match self.execute(&decision, &mut in_context, &mut outcome) {
-                Ok(()) => decision,
-                Err(error) => Decision::Ignore {
-                    reason: format!("{decision:?} failed: {error:#}"),
-                },
-            };
-            outcome.decisions.push(decision);
+            match self.execute(&decision, &mut in_context, &mut outcome) {
+                Ok(()) => outcome.decisions.push(decision),
+                Err(error) => outcome.failed.push(format!("{decision:?}: {error:#}")),
+            }
         }
         let recalled = outcome
             .recalled
@@ -202,22 +203,12 @@ impl<A: Api> Experience<A> {
     pub async fn dream(&self, thread: &mut Thread) -> Result<Dream> {
         ensure!(!thread.in_turn(), "can't dream during a turn");
         let mut dream = Dream::default();
-        match self.summarize(thread).await {
-            Ok(episode) => dream.episode = episode,
-            Err(error) => dream.fail("summarize", error),
-        }
-        match self.card(thread).await {
-            Ok(card) => dream.card = card,
-            Err(error) => dream.fail("card", error),
-        }
-        match self.refine().await {
-            Ok(refined) => dream.refined = refined,
-            Err(error) => dream.fail("refine", error),
-        }
-        match self.compact(thread).await {
-            Ok(compacted) => dream.compacted = compacted,
-            Err(error) => dream.fail("compact", error),
-        }
+        // Each reads the thread and asks the model on its own: together.
+        let (episode, card) = tokio::join!(self.summarize(thread), self.card(thread));
+        dream.episode = dream.keep("summarize", episode);
+        dream.card = dream.keep("card", card);
+        dream.refined = dream.keep("refine", self.refine().await);
+        dream.compacted = dream.keep("compact", self.compact(thread).await);
         for (part, error) in &dream.failed {
             tracing::warn!(part, error, "dream part failed");
         }
@@ -419,30 +410,20 @@ impl<A: Api> Experience<A> {
     }
 }
 
-/// Memories recalled into messages still in the context, so they aren't recalled twice. Follows
-/// the context as State builds it: per message, its role and the memories recalled into it.
-/// What attention noticed and what came of it; a decision that failed is a warning.
+/// What attention noticed and what came of it; each failure is a warning.
 fn trace_outcome(outcome: &Outcome) {
-    let signals: Vec<String> = outcome
-        .signals
-        .iter()
-        .map(|s| {
-            let intent = format!("{:?}", s.intent).to_lowercase();
-            format!(
-                "{intent} {:.2} #{} {}: {}",
-                s.salience, s.checkpoint, s.detector, s.text
-            )
-        })
-        .collect();
-    for decision in &outcome.decisions {
-        if let Decision::Ignore { reason } = decision
-            && reason.contains("failed")
-        {
-            tracing::warn!(reason, "consider decision failed");
-        }
+    let signal = |s: &Signal| {
+        let intent = format!("{:?}", s.intent).to_lowercase();
+        format!(
+            "{intent} {:.2} #{} {}: {}",
+            s.salience, s.checkpoint, s.detector, s.text
+        )
+    };
+    for failure in &outcome.failed {
+        tracing::warn!(failure, "consider failed");
     }
     tracing::info!(
-        signals = ?signals,
+        signals = ?outcome.signals.iter().map(signal).collect::<Vec<_>>(),
         decisions = ?outcome.decisions,
         recalled = ?outcome.recalled.iter().map(|i| (i.id, i.body.text())).collect::<Vec<_>>(),
         written = ?outcome.written.iter().map(|i| (i.id, i.body.text())).collect::<Vec<_>>(),
@@ -450,6 +431,8 @@ fn trace_outcome(outcome: &Outcome) {
     );
 }
 
+/// Memories recalled into messages still in the context, so they aren't recalled twice. Follows
+/// the context as State builds it: per message, its role and the memories recalled into it.
 fn recalled_in_context(thread: &Thread) -> HashSet<i64> {
     let mut messages: Vec<(Role, Vec<i64>)> = Vec::new();
     for checkpoint in thread.checkpoints() {
@@ -705,16 +688,31 @@ pub(crate) mod tests {
     }
 
     pub fn experience(key: &str) -> Experience<Anthropic> {
+        experience_with(Provider::anthropic(key))
+    }
+
+    pub fn experience_with(provider: Provider<Anthropic>) -> Experience<Anthropic> {
         let scopes = Scopes {
             read: vec![me(), Scope::global()],
             write: me(),
         };
+        let request = Request::new(MODEL).effort(Effort::Low);
         Experience::new(
-            Provider::anthropic(key),
-            Request::new(MODEL).effort(Effort::Low),
+            provider,
+            request,
             Arc::new(Memory::in_memory().unwrap()),
             scopes,
         )
+    }
+
+    /// Experience over a model nobody answers.
+    fn unreachable() -> Experience<Anthropic> {
+        experience_with(Provider::new(
+            Anthropic,
+            "Nowhere",
+            "http://127.0.0.1:9/",
+            vec![],
+        ))
     }
 
     pub fn turn(thread: &mut Thread, user: &str, reply: &str) {
@@ -727,13 +725,7 @@ pub(crate) mod tests {
     /// The model is unreachable: the parts that need it fail, the code-only cleanup still runs.
     #[tokio::test]
     async fn a_failing_dream_part_doesnt_stop_the_others() {
-        let unreachable = Provider::new(Anthropic, "Nowhere", "http://127.0.0.1:9/", vec![]);
-        let scopes = Scopes {
-            read: vec![me()],
-            write: me(),
-        };
-        let memory = Arc::new(Memory::in_memory().unwrap());
-        let exp = Experience::new(unreachable, Request::new(MODEL), memory, scopes);
+        let exp = unreachable();
         exp.memory()
             .write(Write::fact(me(), "The user's name is Jon."))
             .unwrap();
@@ -751,6 +743,22 @@ pub(crate) mod tests {
         // The duplicate was dropped in code, without the model.
         assert_eq!(dream.refined.len(), 1);
         assert_eq!(exp.memory().list(&[me()], 10).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_decision_that_cant_be_made_is_a_failure_not_a_choice() {
+        let exp = unreachable();
+        let mut thread = Thread::new("t1");
+        thread
+            .start_turn(Message::user("Remember that I always use pnpm, not npm."))
+            .unwrap();
+        thread.start_step().unwrap();
+
+        let outcome = exp.consider(&mut thread).await.unwrap();
+        assert!(!outcome.signals.is_empty());
+        assert_eq!(outcome.failed.len(), 1, "{outcome:#?}");
+        assert!(outcome.failed[0].starts_with("deciding:"), "{outcome:#?}");
+        assert!(outcome.written.is_empty());
     }
 
     /// Recall is decided in code, so this makes no model call.

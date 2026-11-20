@@ -4,9 +4,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Bumped when a change would break code built against an older one.
-pub const VERSION: u32 = 1;
-
 /// Who an input came from. Their memory scope follows from it, so the core decides who may
 /// speak. The ID is whatever the code passing inputs in uses to tell people apart.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -250,18 +247,22 @@ pub enum Event {
     },
     /// An input's status changed.
     Submission { submission: Submission },
-    /// Work on a thread moved on: `kind` is what works (`agent.generation`, `agent.tool`,
-    /// `agent.idle`), `phase` what it is doing (`request`, `consider`, `call`, `dream`, …),
-    /// `state` whether it runs, waits, sleeps or has ended (`terminal`).
-    Activity {
-        thread: String,
-        task: i64,
-        kind: String,
-        phase: String,
-        state: String,
-    },
+    /// Work started on a thread.
+    Activity { thread: String, doing: Doing },
     /// Events were missed (the client fell behind): re-read what it shows.
     Lagged,
+}
+
+/// What tokidoki started doing on a thread.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Doing {
+    /// Recalling and retaining memories before answering.
+    Remembering,
+    /// Waiting on the model.
+    Thinking,
+    /// Running a tool the model asked for.
+    Tool { name: String },
 }
 
 /// "That was wrong": recorded with the thread (and turn), for investigating later.

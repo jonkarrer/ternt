@@ -5,6 +5,7 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+tokio.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
 attention.workspace = true
@@ -14,5 +15,3 @@ memory.workspace = true
 serde_json.workspace = true
 state.workspace = true
 
-[dev-dependencies]
-tokio.workspace = true

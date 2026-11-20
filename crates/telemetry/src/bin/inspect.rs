@@ -3,9 +3,10 @@
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result, bail};
-use telemetry::inspect::{Inspector, duration, now};
+use telemetry::inspect::Inspector;
+use telemetry::time::{duration, now};
 
-const USAGE: &str = "usage: inspect [--db PATH] [--memory PATH] [--json] <command>
+const USAGE: &str = "usage: inspect [--data DIR] [--json] <command>
 
   recent [N]                   the latest N turns (default 10), with their warnings and errors
   problems [--since 2h]        warnings and errors
@@ -19,8 +20,8 @@ const USAGE: &str = "usage: inspect [--db PATH] [--memory PATH] [--json] <comman
   replay <entry> [--body F]    re-send a recorded model call (or the request body in file F)
   prune <age>                  delete journal entries older than age (e.g. 30d)
 
---db defaults to $TOKIDOKI_DB or data/tokidoki.db; its journal sits beside it.
---memory defaults to $TOKIDOKI_MEMORY or data/memory.db. Times are UTC.";
+--data is the data directory: $TOKIDOKI_DATA, or data (what `just chat --keep` prints).
+Times are UTC.";
 
 #[tokio::main]
 async fn main() {
@@ -31,12 +32,9 @@ async fn main() {
 }
 
 async fn run(mut args: Vec<String>) -> Result<()> {
-    let db = option(&mut args, "--db")?
-        .or_else(|| std::env::var("TOKIDOKI_DB").ok())
-        .unwrap_or_else(|| "data/tokidoki.db".into());
-    let memory = option(&mut args, "--memory")?
-        .or_else(|| std::env::var("TOKIDOKI_MEMORY").ok())
-        .unwrap_or_else(|| "data/memory.db".into());
+    let data = option(&mut args, "--data")?
+        .map(PathBuf::from)
+        .unwrap_or_else(telemetry::data_dir);
     let json = flag(&mut args, "--json");
     let since = option(&mut args, "--since")?;
     let turn = option(&mut args, "--turn")?;
@@ -52,9 +50,12 @@ async fn run(mut args: Vec<String>) -> Result<()> {
             .with_context(|| format!("missing argument\n\n{USAGE}"))
     };
 
-    let (db, memory) = (PathBuf::from(db), PathBuf::from(memory));
+    let (db, memory) = (
+        data.join(telemetry::STATE_FILE),
+        data.join(telemetry::MEMORY_FILE),
+    );
     if !db.exists() {
-        bail!("no state database at {} (pass --db)", db.display());
+        bail!("no state database in {} (pass --data)", data.display());
     }
     let inspector = Inspector::open(&db, Some(&memory))?;
     let output = match command.as_str() {
@@ -70,21 +71,14 @@ async fn run(mut args: Vec<String>) -> Result<()> {
         "context" => inspector.context(arg(0)?, arg(1)?.parse()?)?,
         "memory" => inspector.memory(&words, 30)?,
         "replay" => {
-            let id: i64 = arg(0)?.parse()?;
-            let entry = inspector
-                .journal()
-                .entry(id)?
-                .with_context(|| format!("no entry {id}"))?;
             let body = match body {
                 Some(path) => Some(serde_json::from_str(&std::fs::read_to_string(&path)?)?),
                 None => None,
             };
-            telemetry::replay::resend(&entry, body).await?
+            inspector.replay(arg(0)?.parse()?, body).await?
         }
         "prune" => {
-            let pruned = inspector
-                .journal()
-                .prune(now().saturating_sub(duration(arg(0)?)?))?;
+            let pruned = inspector.prune(now().saturating_sub(duration(arg(0)?)?))?;
             println!("pruned {pruned} entries");
             return Ok(());
         }

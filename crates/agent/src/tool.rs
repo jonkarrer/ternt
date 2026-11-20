@@ -114,7 +114,7 @@ async fn execute(rt: &Runtime<ToolCall>, tool: &dyn crate::Tool) -> Result<ToolO
         arguments = %call.arguments,
         ms = started.elapsed().as_millis() as u64,
         is_error = output.is_error,
-        result = %output.content,
+        output = %output.content,
         "tool call"
     );
     Ok(output)

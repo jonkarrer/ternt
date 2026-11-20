@@ -64,7 +64,7 @@ pub(crate) fn save(tx: &Transaction, task: &TaskRecord) -> Result<()> {
         task.abort_reason,
         task.restarts,
         serde_json::to_string(&task.memos)?,
-        task.state.name(),
+        task.state.status().as_str(),
         serde_json::to_string(&task.state)?,
         task.created_at as i64,
         task.ended_at.map(|t| t as i64),

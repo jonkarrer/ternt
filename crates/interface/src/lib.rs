@@ -3,7 +3,7 @@
 //! `tokidoki::Tokidoki` takes and returns these. Whatever sits upstream or downstream of it
 //! depends on this crate alone to read and write them; how they travel is up to it.
 
-pub mod protocol;
+mod protocol;
 
 pub use protocol::*;
 

@@ -23,8 +23,10 @@ pub(crate) struct Inbox {
     pub idle: Option<TaskId>,
 }
 
+pub(crate) const SUBMISSION_PREFIX: &str = "agent/submission/";
+
 pub(crate) fn submission_key(id: &str) -> String {
-    format!("agent/submission/{id}")
+    format!("{SUBMISSION_PREFIX}{id}")
 }
 
 pub(crate) fn inbox_key(thread: &str) -> String {
@@ -35,7 +37,7 @@ pub(crate) fn request_key(request_id: &str) -> String {
     format!("agent/request/{request_id}")
 }
 
-fn load(tx: &mut Tx, thread: &str) -> Result<Inbox> {
+pub(crate) fn load(tx: &mut Tx, thread: &str) -> Result<Inbox> {
     Ok(tx.doc(&inbox_key(thread))?.unwrap_or_default())
 }
 
@@ -62,10 +64,8 @@ pub(crate) fn existing(tx: &mut Tx, input: &Draft) -> Result<Option<String>> {
     }
 }
 
+/// Admits an input to the thread. The caller has checked its request ID (`existing`).
 pub(crate) fn submit(tx: &mut Tx, thread: &str, input: Draft) -> Result<String> {
-    if let Some(id) = existing(tx, &input)? {
-        return Ok(id);
-    }
     let n: u64 = tx.doc("agent/next-submission")?.unwrap_or(1);
     tx.put_doc("agent/next-submission", &(n + 1))?;
     let id = format!("s{n}");
@@ -83,7 +83,6 @@ pub(crate) fn submit(tx: &mut Tx, thread: &str, input: Draft) -> Result<String> 
                 answer: None,
                 reason: None,
             },
-            request_id: input.request_id,
             when_busy: input.when_busy,
             run: None,
         },
@@ -110,7 +109,8 @@ pub(crate) fn recover(tx: &mut Tx, thread: &str, reason: &str) -> Result<()> {
 /// they're settled unanswered with `reason`, and the queue moves on. Nothing while it's live.
 fn recover_in(tx: &mut Tx, thread: &str, inbox: &mut Inbox, reason: &str) -> Result<()> {
     match inbox.run {
-        Some(run) if tx.task(run).is_none() => {
+        // Ended, or ending in this very commit (`Task::on_fault`).
+        Some(run) if !tx.is_live(run) => {
             finish(tx, thread, inbox, Settled::unanswered(reason), false)
         }
         _ => Ok(()),
@@ -193,13 +193,12 @@ fn finish(
         ended.append(&mut inbox.queue);
     }
     for id in ended {
-        settle(tx, &id, settled.clone())?;
+        settle(tx, thread, &id, settled.clone())?;
     }
     start_next(tx, thread, inbox)
 }
 
-fn settle(tx: &mut Tx, id: &str, settled: Settled) -> Result<()> {
-    let thread = submission(tx, id)?.shown.thread;
+fn settle(tx: &mut Tx, thread: &str, id: &str, settled: Settled) -> Result<()> {
     match &settled {
         Settled::Done { answer } => {
             tracing::info!(thread, submission = id, answer, "input answered")

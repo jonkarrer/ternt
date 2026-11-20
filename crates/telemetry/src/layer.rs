@@ -2,8 +2,8 @@
 //! happened in: an event inside a task's phase carries that phase's `thread` and `task`.
 
 use std::fmt;
-use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde_json::value::RawValue;
 use serde_json::{Map, Value};
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
@@ -12,7 +12,7 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 
-use crate::journal::{Entry, Journal, Severity};
+use crate::journal::{BODIES, Entry, Journal, Severity, as_text};
 
 pub struct JournalLayer {
     /// `None`: the journal `capture` set for the current thread, if any.
@@ -35,17 +35,14 @@ impl JournalLayer {
         Self { journal: None }
     }
 
-    fn append(&self, entry: &Entry) -> anyhow::Result<()> {
+    fn record(&self, entry: Entry, bodies: Vec<(String, String)>) {
         match &self.journal {
-            Some(journal) => journal.append(entry).map(drop),
-            None => match CAPTURE
-                .try_with(|slot| slot.borrow().clone())
-                .ok()
-                .flatten()
-            {
-                Some(journal) => journal.append(entry).map(drop),
-                None => Ok(()),
-            },
+            Some(journal) => journal.record_with(entry, bodies),
+            None => {
+                if let Ok(Some(journal)) = CAPTURE.try_with(|slot| slot.borrow().clone()) {
+                    journal.record_with(entry, bodies);
+                }
+            }
         }
     }
 }
@@ -63,7 +60,7 @@ where
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
         let Some(span) = ctx.span(id) else { return };
         let mut fields = Map::new();
-        attrs.record(&mut Fields(&mut fields));
+        attrs.record(&mut Fields::new(&mut fields));
         span.extensions_mut().insert(SpanFields {
             name: attrs.metadata().name(),
             fields,
@@ -73,40 +70,42 @@ where
     fn on_record(&self, id: &Id, values: &Record<'_>, ctx: Context<'_, S>) {
         let Some(span) = ctx.span(id) else { return };
         if let Some(data) = span.extensions_mut().get_mut::<SpanFields>() {
-            values.record(&mut Fields(&mut data.fields));
+            values.record(&mut Fields::new(&mut data.fields));
         }
     }
 
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+        // The event's own fields, then each span's, innermost first: the nearest wins, and each
+        // field is copied once.
         let mut fields = Map::new();
+        let mut bodies = Vec::new();
+        event.record(&mut Fields {
+            map: &mut fields,
+            bodies: Some(&mut bodies),
+        });
+        let message = fields
+            .remove("message")
+            .as_ref()
+            .map(as_text)
+            .unwrap_or_default();
         let mut spans = Vec::new();
-        if let Some(scope) = ctx.event_scope(event) {
-            for span in scope.from_root() {
-                if let Some(data) = span.extensions().get::<SpanFields>() {
-                    spans.push(data.name);
-                    fields.extend(data.fields.clone());
+        for span in ctx.event_scope(event).into_iter().flatten() {
+            if let Some(data) = span.extensions().get::<SpanFields>() {
+                spans.push(data.name);
+                for (key, value) in &data.fields {
+                    fields.entry(key.as_str()).or_insert_with(|| value.clone());
                 }
             }
         }
-        let mut own = Map::new();
-        event.record(&mut Fields(&mut own));
-        let message = match own.remove("message") {
-            Some(Value::String(message)) => message,
-            Some(other) => other.to_string(),
-            None => String::new(),
-        };
-        fields.extend(own);
+        spans.reverse();
         let thread = fields
             .get("thread")
             .and_then(Value::as_str)
             .map(String::from);
         let task = fields.get("task").and_then(Value::as_i64);
-        let at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_micros() as u64);
         let entry = Entry {
             id: 0,
-            at,
+            at: crate::time::now(),
             severity: Severity::of(event.metadata().level()),
             target: event.metadata().target().to_string(),
             spans: spans.join(" > "),
@@ -115,24 +114,44 @@ where
             message,
             fields,
         };
-        // Tracing must never take the program down: a journal that can't write is reported
-        // and skipped.
-        if let Err(error) = self.append(&entry) {
-            eprintln!("telemetry: journal write failed: {error:#}");
-        }
+        // Written on the journal's own thread; one that can't write reports it there.
+        self.record(entry, bodies);
     }
 }
 
-/// Records fields as JSON. Text that is itself JSON (a request body, say) is kept as JSON.
-struct Fields<'a>(&'a mut Map<String, Value>);
+/// Fields that hold JSON (a model request and reply, tool arguments, a task's result): kept as
+/// JSON. Anything else is kept as the text it is, even text that looks like JSON.
+fn is_json(field: &str) -> bool {
+    BODIES.contains(&field) || matches!(field, "arguments" | "result")
+}
 
-impl Fields<'_> {
+/// Records fields as JSON values; an event's bodies (`BODIES`), JSON text already, are set
+/// aside as text instead, to be written as they are.
+struct Fields<'a> {
+    map: &'a mut Map<String, Value>,
+    bodies: Option<&'a mut Vec<(String, String)>>,
+}
+
+impl<'a> Fields<'a> {
+    fn new(map: &'a mut Map<String, Value>) -> Self {
+        Self { map, bodies: None }
+    }
+
     fn text(&mut self, field: &Field, text: String) {
-        let value = match text.starts_with(['{', '[']) {
+        let name = field.name();
+        // Checked to be JSON without building it.
+        if let Some(bodies) = &mut self.bodies
+            && BODIES.contains(&name)
+            && serde_json::from_str::<&RawValue>(&text).is_ok()
+        {
+            bodies.push((name.to_string(), text));
+            return;
+        }
+        let value = match is_json(name) {
             true => serde_json::from_str(&text).unwrap_or(Value::String(text)),
             false => Value::String(text),
         };
-        self.0.insert(field.name().to_string(), value);
+        self.map.insert(name.to_string(), value);
     }
 }
 
@@ -146,19 +165,19 @@ impl Visit for Fields<'_> {
     }
 
     fn record_i64(&mut self, field: &Field, value: i64) {
-        self.0.insert(field.name().to_string(), value.into());
+        self.map.insert(field.name().to_string(), value.into());
     }
 
     fn record_u64(&mut self, field: &Field, value: u64) {
-        self.0.insert(field.name().to_string(), value.into());
+        self.map.insert(field.name().to_string(), value.into());
     }
 
     fn record_bool(&mut self, field: &Field, value: bool) {
-        self.0.insert(field.name().to_string(), value.into());
+        self.map.insert(field.name().to_string(), value.into());
     }
 
     fn record_f64(&mut self, field: &Field, value: f64) {
-        self.0.insert(field.name().to_string(), value.into());
+        self.map.insert(field.name().to_string(), value.into());
     }
 
     fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {

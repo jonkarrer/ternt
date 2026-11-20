@@ -1,7 +1,7 @@
 //! Anthropic Messages API: system prompt is its own field, `max_tokens` is required,
 //! and the reply is a list of content blocks.
 
-use super::{Api, Provider, Request, Response};
+use super::{Api, Provider, Request, Response, Stop};
 use context::{Block, Context, Message, Role};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -51,6 +51,12 @@ impl Api for Anthropic {
     }
 
     fn response(&self, reply: MessageReply) -> Option<Response> {
+        let stop = match reply.stop_reason.as_deref() {
+            Some("tool_use") => Stop::ToolUse,
+            Some("max_tokens") => Stop::Cutoff,
+            Some("refusal") => Stop::Refused,
+            _ => Stop::Done,
+        };
         let content = reply
             .content
             .into_iter()
@@ -78,6 +84,7 @@ impl Api for Anthropic {
             },
             input_tokens: reply.usage.input_tokens,
             output_tokens: reply.usage.output_tokens,
+            stop,
         })
     }
 }

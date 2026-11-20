@@ -115,6 +115,25 @@ impl TaskState {
         }
     }
 
+    /// Not ended, nor ending: it still has a checkpoint to run from.
+    pub fn is_live(&self) -> bool {
+        self.checkpoint().is_some()
+    }
+
+    /// The checkpoint as the task's own state type (`Task::State`): to tell its phase apart by
+    /// variant. `None` once ended, or for another type.
+    pub fn checkpoint_as<S: DeserializeOwned>(&self) -> Option<S> {
+        S::deserialize(self.checkpoint()?).ok()
+    }
+
+    /// The checkpoint's `phase` tag (task states are tagged enums), for display; "" once
+    /// ended. To act on a phase, read the checkpoint as its type (`checkpoint_as`).
+    pub fn phase(&self) -> &str {
+        self.checkpoint()
+            .and_then(|c| c["phase"].as_str())
+            .unwrap_or("")
+    }
+
     pub fn is_terminal(&self) -> bool {
         matches!(self, TaskState::Terminal { .. })
     }
@@ -127,14 +146,39 @@ impl TaskState {
         }
     }
 
-    pub fn name(&self) -> &'static str {
+    pub fn status(&self) -> Status {
         match self {
-            TaskState::Pending { .. } => "pending",
-            TaskState::Running { .. } => "running",
-            TaskState::Waiting { .. } => "waiting",
-            TaskState::Sleeping { .. } => "sleeping",
-            TaskState::Completing { .. } => "completing",
-            TaskState::Terminal { .. } => "terminal",
+            TaskState::Pending { .. } => Status::Pending,
+            TaskState::Running { .. } => Status::Running,
+            TaskState::Waiting { .. } => Status::Waiting,
+            TaskState::Sleeping { .. } => Status::Sleeping,
+            TaskState::Completing { .. } => Status::Completing,
+            TaskState::Terminal { .. } => Status::Terminal,
+        }
+    }
+}
+
+/// Where a task is in its life, without its data: what `TaskState` is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Status {
+    Pending,
+    Running,
+    Waiting,
+    Sleeping,
+    Completing,
+    Terminal,
+}
+
+impl Status {
+    /// As stored (the tasks table's `status` column) and traced.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::Pending => "pending",
+            Status::Running => "running",
+            Status::Waiting => "waiting",
+            Status::Sleeping => "sleeping",
+            Status::Completing => "completing",
+            Status::Terminal => "terminal",
         }
     }
 }
@@ -241,8 +285,9 @@ pub trait Task: Send + Sync + 'static {
 
     /// Called after the engine itself ended the task: faulted (it broke the contract, or kept
     /// crashing) or orphaned. Its own code never ran to the end, so this is where to clean up
-    /// what it was in the middle of. Runs in a commit of its own; best effort, an error is
-    /// ignored. By default: nothing.
+    /// what it was in the middle of. Runs in the commit that ends the task (`task` is as it
+    /// ends), so no crash comes between the two. If it fails or panics, what it changed is
+    /// undone and traced, and the task still ends. By default: nothing.
     fn on_fault(&self, tx: &mut Tx, task: &TaskRecord) -> Result<()> {
         let _ = (tx, task);
         Ok(())

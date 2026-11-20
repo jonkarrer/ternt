@@ -15,7 +15,6 @@ mod events;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use agent::{Agent, Mind, Model, NewThreads, ProviderModel, Tools};
 use anyhow::{Context as _, Result};
@@ -70,7 +69,7 @@ impl Config {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
         let required = |name: &str| var(name).with_context(|| format!("{name} is not set"));
         Ok(Self {
-            data: var("TOKIDOKI_DATA").unwrap_or_else(|| "data".into()).into(),
+            data: telemetry::data_dir(),
             user: var("TOKIDOKI_USER").unwrap_or_else(|| "owner".into()),
             speakers: var("TOKIDOKI_SPEAKERS")
                 .unwrap_or_else(|| "owner".into())
@@ -90,25 +89,27 @@ impl Config {
     }
 
     pub fn state_path(&self) -> PathBuf {
-        self.data.join("tokidoki.db")
+        self.data.join(telemetry::STATE_FILE)
     }
 
     pub fn memory_path(&self) -> PathBuf {
-        self.data.join("memory.db")
+        self.data.join(telemetry::MEMORY_FILE)
     }
 }
 
 /// The pieces `Tokidoki::build` puts together; `open` makes them from a `Config`.
 pub struct Parts<M> {
     pub store: Arc<Sqlite>,
-    pub memory: Arc<Memory>,
     pub model: Arc<M>,
     pub mind: Option<Arc<dyn Mind>>,
     pub router: Router<OpenAi>,
     pub tools: Tools,
-    pub new_threads: NewThreads,
+    /// What every new thread starts with (with `tools` registered).
+    pub system: Option<String>,
     pub settings: agent::Settings,
     pub speakers: Vec<String>,
+    /// The journal `telemetry::init` opened, flushed on `close`.
+    pub journal: Option<telemetry::Journal>,
 }
 
 /// The running system; cheap to clone.
@@ -121,8 +122,8 @@ struct Inner {
     agent: Agent,
     router: Router<OpenAi>,
     store: Arc<Sqlite>,
-    memory: Arc<Memory>,
     speakers: Vec<String>,
+    journal: Option<telemetry::Journal>,
 }
 
 impl Tokidoki {
@@ -131,13 +132,16 @@ impl Tokidoki {
     pub fn open(config: Config, tools: Tools) -> Result<Self> {
         std::fs::create_dir_all(&config.data)
             .with_context(|| format!("data directory {}", config.data.display()))?;
-        if config.journal {
-            let journal = telemetry::Journal::beside(config.state_path());
+        let journal = match config.journal {
             // Fails if the program installed its own subscriber, which then gets the events.
-            if let Err(error) = telemetry::init(Some(&journal)) {
-                eprintln!("tokidoki: not recording the journal: {error:#}");
-            }
-        }
+            true => telemetry::init(&telemetry::Journal::beside(config.state_path()))
+                .map(Some)
+                .unwrap_or_else(|error| {
+                    eprintln!("tokidoki: not recording the journal: {error:#}");
+                    None
+                }),
+            false => None,
+        };
         let store = Arc::new(Sqlite::open(config.state_path())?);
         let memory = Arc::new(Memory::open(config.memory_path())?);
         let scope = Scope::user(&config.user);
@@ -162,25 +166,25 @@ impl Tokidoki {
             provider: anthropic(),
             request: claude(),
         });
-        let new_threads = NewThreads {
-            system: config.system.clone(),
-            tools: tools.specs(),
-        };
         Self::build(Parts {
             store,
-            memory,
             model,
             mind: Some(Arc::new(experience)),
             router,
             tools,
-            new_threads,
+            system: config.system,
             settings: config.agent,
             speakers: config.speakers,
+            journal,
         })
     }
 
     /// Puts given parts together (another model, a test double), and resumes.
     pub fn build<M: Model>(parts: Parts<M>) -> Result<Self> {
+        let new_threads = NewThreads {
+            system: parts.system,
+            tools: parts.tools.specs(),
+        };
         let mut registry = Registry::new();
         agent::register(
             &mut registry,
@@ -193,26 +197,23 @@ impl Tokidoki {
         engine.resume();
         Ok(Self {
             inner: Arc::new(Inner {
-                agent: Agent::with_new_threads(engine, parts.new_threads),
+                agent: Agent::new(engine, new_threads),
                 router: parts.router,
                 store: parts.store,
-                memory: parts.memory,
                 speakers: parts.speakers,
+                journal: parts.journal,
             }),
         })
     }
 
-    pub fn agent(&self) -> &Agent {
-        &self.inner.agent
-    }
-
-    pub fn memory(&self) -> &Arc<Memory> {
-        &self.inner.memory
-    }
-
-    /// Stops running work; it resumes when the system is opened again.
+    /// Stops running work (it resumes when the system is opened again) and finishes writing
+    /// the journal.
     pub fn close(&self) -> Result<()> {
-        self.inner.agent.engine().close()
+        let closed = self.inner.agent.engine().close();
+        if let Some(journal) = &self.inner.journal {
+            journal.flush();
+        }
+        closed
     }
 
     fn admit(&self, speaker: &interface::Speaker) -> Result<()> {
@@ -254,8 +255,8 @@ impl Tokidoki {
                 id: info.id,
                 title: info.title,
                 turns: info.turns,
-                created_at: ms(info.created_at),
-                active_at: ms(info.active_at),
+                created_at: telemetry::time::ms(info.created_at),
+                active_at: telemetry::time::ms(info.active_at),
             })
             .collect())
     }
@@ -263,20 +264,13 @@ impl Tokidoki {
     /// A thread's checkpoints from `since` on, as events: to load a thread, or catch up after
     /// missing some (`Event::Checkpoint::seq` has no gaps).
     pub fn history(&self, thread: &str, since: usize) -> Result<Vec<interface::Event>> {
-        let checkpoints = self.inner.agent.engine().thread(thread, |t| {
-            let all = t.checkpoints();
-            all[since.min(all.len())..].to_vec()
-        })?;
-        Ok(checkpoints
-            .iter()
-            .map(|c| events::checkpoint(thread, c))
-            .collect())
+        events::checkpoints(self.inner.agent.engine(), thread, since..usize::MAX)
     }
 
     /// What happens from now on, across threads, until the receiver is dropped. Subscribe
     /// before `send` to miss nothing about the input. Call inside a Tokio runtime.
     pub fn events(&self) -> Events {
-        events::follow(self.inner.agent.clone())
+        events::follow(self.inner.agent.engine())
     }
 
     /// Resolves once the submission is answered or can't be.
@@ -289,16 +283,25 @@ impl Tokidoki {
         self.inner.agent.abort(thread)
     }
 
-    /// "That was wrong": recorded in the journal as a warning on the thread's turn, so
-    /// `just inspect recent` and `problems` show it there.
+    /// "That was wrong", about a turn of a thread: kept with the thread in the state database,
+    /// and traced as a warning so `just inspect recent` and `problems` show it on that turn.
     pub fn feedback(&self, feedback: Feedback) -> Result<()> {
         self.admit(&feedback.from)?;
         let thread = &feedback.thread;
-        let turn = match feedback.turn {
-            Some(turn) => turn,
-            None => self.inner.agent.engine().thread(thread, |t| t.turn())?,
-        };
-        // A warning, so `inspect recent` and `inspect problems` show it with the turn.
+        let turn = self.inner.agent.engine().commit(|tx| {
+            let turn = match feedback.turn {
+                Some(turn) => turn,
+                None => tx.thread(thread)?.turn(),
+            };
+            let key = feedback_key(thread);
+            let mut all: Vec<Feedback> = tx.doc(&key)?.unwrap_or_default();
+            all.push(Feedback {
+                turn: Some(turn),
+                ..feedback.clone()
+            });
+            tx.put_doc(&key, &all)?;
+            Ok(turn)
+        })?;
         tracing::warn!(
             thread = %thread,
             turn,
@@ -310,9 +313,9 @@ impl Tokidoki {
     }
 }
 
-fn ms(at: SystemTime) -> u64 {
-    at.duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
+/// Where a thread's feedback is kept, in the state database.
+fn feedback_key(thread: &str) -> String {
+    format!("feedback/{thread}")
 }
 
 #[cfg(test)]

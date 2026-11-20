@@ -1,9 +1,6 @@
 //! The core's state, as `interface` events: thread checkpoints, submissions, task activity,
-//! read from what each engine commit changed.
+//! built from what each engine commit stored.
 
-use std::time::UNIX_EPOCH;
-
-use agent::Agent;
 use context::Block;
 use interface::{Change, Content, Event, Role};
 
@@ -12,13 +9,18 @@ use state::Checkpoint;
 use tokio::sync::{broadcast, mpsc};
 
 /// Events from every commit from now on, until the receiver is dropped.
-pub(crate) fn follow(agent: Agent) -> Events {
-    let mut changes = agent.engine().subscribe();
+pub(crate) fn follow(engine: &engine::Engine) -> Events {
+    let mut changes = engine.subscribe();
     let (tx, rx) = mpsc::channel(256);
     tokio::spawn(async move {
         loop {
-            let events = match changes.recv().await {
-                Ok(committed) => read(&agent, &committed),
+            // Stops as soon as nobody listens, rather than after reading one more commit.
+            let change = tokio::select! {
+                change = changes.recv() => change,
+                _ = tx.closed() => return,
+            };
+            let events = match change {
+                Ok(committed) => read(&committed),
                 Err(broadcast::error::RecvError::Lagged(_)) => vec![Event::Lagged],
                 Err(broadcast::error::RecvError::Closed) => return,
             };
@@ -34,40 +36,43 @@ pub(crate) fn follow(agent: Agent) -> Events {
 
 /// A commit's events: new checkpoints first, then task activity, then submissions (an answer
 /// is reported after the message that holds it).
-fn read(agent: &Agent, committed: &engine::Committed) -> Vec<Event> {
+fn read(committed: &engine::Committed) -> Vec<Event> {
     let mut events = Vec::new();
-    for (thread, range) in &committed.threads {
-        let checkpoints = agent
-            .engine()
-            .thread(thread, |t| t.checkpoints()[range.clone()].to_vec())
-            .unwrap_or_default();
+    for (thread, checkpoints) in &committed.threads {
         events.extend(checkpoints.iter().map(|c| checkpoint(thread, c)));
     }
-    events.extend(committed.tasks.iter().map(|task| Event::Activity {
-        thread: task.thread.clone(),
-        task: task.id,
-        kind: task.kind.clone(),
-        phase: task.phase.clone(),
-        state: task.state.to_string(),
+    events.extend(committed.tasks.iter().filter_map(|task| {
+        Some(Event::Activity {
+            thread: task.thread.clone(),
+            doing: agent::doing(task)?,
+        })
     }));
-    for key in &committed.docs {
-        if let Some(id) = agent::submission_in(key)
-            && let Ok(Some(found)) = agent.submission(id)
-        {
-            events.push(Event::Submission { submission: found });
+    for (key, value) in &committed.docs {
+        if let Some(submission) = agent::submission_in(key, value.as_ref()) {
+            events.push(Event::Submission { submission });
         }
     }
     events
+}
+
+/// A thread's checkpoints in `range` (clamped to what it has), as events.
+pub(crate) fn checkpoints(
+    engine: &engine::Engine,
+    thread: &str,
+    range: std::ops::Range<usize>,
+) -> anyhow::Result<Vec<Event>> {
+    engine.thread(thread, |t| {
+        let all = t.checkpoints();
+        let range = range.start.min(all.len())..range.end.min(all.len());
+        all[range].iter().map(|c| checkpoint(thread, c)).collect()
+    })
 }
 
 pub(crate) fn checkpoint(thread: &str, checkpoint: &Checkpoint) -> Event {
     Event::Checkpoint {
         thread: thread.to_string(),
         seq: checkpoint.id,
-        at: checkpoint
-            .at
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as u64),
+        at: telemetry::time::ms(checkpoint.at),
         turn: checkpoint.turn,
         change: change(&checkpoint.event),
     }

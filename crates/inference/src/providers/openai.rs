@@ -1,6 +1,6 @@
 //! OpenAI-style chat completions: OpenAI, Baseten, Fireworks.
 
-use super::{Api, Provider, Request, Response};
+use super::{Api, Provider, Request, Response, Stop};
 use context::{Block, Context, Message, Role};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -85,7 +85,15 @@ impl Api for OpenAi {
     }
 
     fn response(&self, reply: ChatCompletion) -> Option<Response> {
-        let choice = reply.choices.into_iter().next()?.message;
+        let choice = reply.choices.into_iter().next()?;
+        let stop = match choice.finish_reason.as_deref() {
+            Some("tool_calls") => Stop::ToolUse,
+            Some("length") => Stop::Cutoff,
+            Some("content_filter") => Stop::Refused,
+            _ if choice.message.refusal.is_some() => Stop::Refused,
+            _ => Stop::Done,
+        };
+        let choice = choice.message;
         let mut content = Vec::new();
         if let Some(text) = choice.reasoning_content {
             content.push(Block::Thinking {
@@ -112,6 +120,7 @@ impl Api for OpenAi {
             },
             input_tokens: reply.usage.prompt_tokens,
             output_tokens: reply.usage.completion_tokens,
+            stop,
         })
     }
 }

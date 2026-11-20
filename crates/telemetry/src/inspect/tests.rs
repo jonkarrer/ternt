@@ -1,5 +1,6 @@
 use super::*;
 use crate::capture;
+use crate::time::duration;
 use context::Role;
 
 /// A thread with two turns, and traced events inside the second.

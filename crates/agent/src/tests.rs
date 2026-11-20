@@ -52,6 +52,7 @@ fn response(content: Vec<Block>) -> Response {
         },
         input_tokens: 0,
         output_tokens: 0,
+        stop: inference::Stop::Done,
     }
 }
 
@@ -160,7 +161,7 @@ fn start_with(
     register(&mut registry, script.clone(), tools, mind, settings);
     let engine = Engine::open(store.clone(), registry, EngineSettings::default()).unwrap();
     engine.resume();
-    Agent::new(engine)
+    Agent::new(engine, NewThreads::default())
 }
 
 async fn settled(agent: &Agent, id: &str) -> Settled {
@@ -215,10 +216,8 @@ fn live_tools(agent: &Agent) -> Vec<engine::TaskRecord> {
 async fn tool_executing(agent: &Agent) {
     eventually(|| {
         live_tools(agent).iter().any(|t| {
-            matches!(t.state, TaskState::Running { .. })
-                && t.state
-                    .checkpoint()
-                    .is_some_and(|c| c["phase"] == "execute")
+            t.state.status() == engine::Status::Running
+                && matches!(t.state.checkpoint_as(), Some(tool::State::Execute { .. }))
         })
     })
     .await;
@@ -561,7 +560,7 @@ async fn live_tool_loop() {
             thread.register(spec)
         })
         .unwrap();
-    let agent = Agent::new(engine);
+    let agent = Agent::new(engine, NewThreads::default());
 
     let id = agent
         .submit("t1", input("What's the weather in Paris?"))
@@ -727,15 +726,7 @@ async fn experience_recalls_before_the_request() {
 /// `send` routes in code (no model call here) and notes each route in its thread.
 #[tokio::test]
 async fn send_routes_each_input() {
-    use inference::providers::OpenAi;
-    use memory::Memory;
-
-    let router = router::Router::new(
-        Provider::<OpenAi>::baseten("unused"),
-        Request::new("unused"),
-        Arc::new(Memory::in_memory().unwrap()),
-        vec![memory::Scope::user("jon")],
-    );
+    let router = offline_router();
     let script = Script::new(vec![
         Reply::Text("Kyoto in April, then."),
         Reply::Text("Booked."),
@@ -801,7 +792,14 @@ async fn a_request_id_routed_twice_submits_once() {
     let route = router::Route::new(router::By::Rule, "no earlier threads");
     let again = agent
         .engine()
-        .commit(|tx| admit(tx, &NewThreads::default(), route, Draft::of(&input)?))
+        .commit(|tx| {
+            admit(
+                tx,
+                &NewThreads::default(),
+                Place::Routed(route),
+                Draft::of(&input)?,
+            )
+        })
         .unwrap();
     assert_eq!(
         again,
@@ -811,7 +809,15 @@ async fn a_request_id_routed_twice_submits_once() {
             route: None
         }
     );
-    assert_eq!(agent.engine().doc::<String>(LAST_THREAD).unwrap(), None);
+    // Still the first submission's thread: the duplicate changed nothing.
+    assert_eq!(
+        agent
+            .engine()
+            .doc::<String>(LAST_THREAD)
+            .unwrap()
+            .as_deref(),
+        Some("t1")
+    );
     let created = agent.engine().thread("thread-1", |t| t.checkpoints().len());
     assert_eq!(created.unwrap(), 0);
     assert_eq!(settled(&agent, &first).await, done("hello"));
@@ -860,7 +866,7 @@ async fn live_remembers_across_threads() {
     );
     let engine = Engine::open(store(), registry, EngineSettings::default()).unwrap();
     engine.resume();
-    let agent = Agent::new(engine);
+    let agent = Agent::new(engine, NewThreads::default());
     let wait = |id: String| {
         let agent = agent.clone();
         async move {
@@ -1068,7 +1074,7 @@ async fn a_run_that_ends_abnormally_leaves_the_thread_valid() {
         .register(Idle::new(None, fast()));
     let engine = Engine::open(store, registry, EngineSettings::default()).unwrap();
     engine.resume();
-    let agent = Agent::new(engine);
+    let agent = Agent::new(engine, NewThreads::default());
     assert!(matches!(
         settled(&agent, &id).await,
         Settled::Unanswered { .. }
@@ -1109,7 +1115,7 @@ async fn a_turn_can_be_traced_back_step_by_step() {
     assert_eq!(failed.fields["error"], "overloaded");
     let call = find("tool call");
     assert_eq!(call.fields["kind"], "agent.tool");
-    assert_eq!(call.fields["result"], "18C");
+    assert_eq!(call.fields["output"], "18C");
     assert_eq!(call.fields["arguments"]["city"], "Paris");
     assert_ne!(call.task, failed.task);
     assert_eq!(find("input answered").fields["answer"], "18C and sunny");
@@ -1144,7 +1150,7 @@ async fn new_threads_start_with_the_system_prompt_and_tools() {
         system: Some("Be brief.".into()),
         tools: specs,
     };
-    let agent = Agent::with_new_threads(engine, new_threads);
+    let agent = Agent::new(engine, new_threads);
     let id = agent.submit("t1", input("Hello")).unwrap();
     settled(&agent, &id).await;
     let id = agent.submit("t1", input("Hello again")).unwrap();
@@ -1192,5 +1198,129 @@ fn stored_submissions_keep_their_shape() {
     assert_eq!(record.shown.status, Status::Done);
     assert_eq!(record.when_busy, WhenBusy::Steer);
     assert_eq!(record.run, Some(4));
-    assert_eq!(serde_json::to_value(&record).unwrap(), stored);
+    // Written the same, but for the request ID, no longer kept on the submission.
+    let mut written = stored;
+    written.as_object_mut().unwrap().remove("request_id");
+    assert_eq!(serde_json::to_value(&record).unwrap(), written);
+}
+
+#[tokio::test]
+async fn named_threads_keep_out_of_the_routers_way() {
+    let script = Script::new(vec![Reply::Text("a"), Reply::Text("b"), Reply::Text("c")]);
+    let agent = start(&store(), &script, Tools::new());
+    let router = offline_router();
+
+    // A thread named like the router's own: the router's next new thread skips the name.
+    let named = agent
+        .send(&router, input("hi").to("thread-1"))
+        .await
+        .unwrap();
+    settled(&agent, &named.submission).await;
+    let routed = agent.send(&router, input("New topic: tea")).await.unwrap();
+    assert_eq!(routed.route.as_ref().map(|r| r.new), Some(true));
+    assert_eq!(routed.thread, "thread-2");
+    settled(&agent, &routed.submission).await;
+
+    // A retried request finds its submission where it went, whatever thread the retry names.
+    let first = Input {
+        request_id: Some("r1".into()),
+        ..input("once")
+    };
+    let sent = agent
+        .send(&router, first.clone().to("thread-1"))
+        .await
+        .unwrap();
+    let again = agent.send(&router, first.to("elsewhere")).await.unwrap();
+    assert_eq!(
+        (again.thread.as_str(), again.submission),
+        ("thread-1", sent.submission)
+    );
+    assert!(
+        agent
+            .engine()
+            .thread("elsewhere", |t| t.checkpoints().is_empty())
+            .unwrap()
+    );
+
+    // A named thread is the last one used, for the router's continuity.
+    let last: Option<String> = agent.engine().doc(LAST_THREAD).unwrap();
+    assert_eq!(last.as_deref(), Some("thread-1"));
+}
+
+/// A router whose model nobody answers: it must decide in code.
+fn offline_router() -> router::Router<inference::providers::OpenAi> {
+    let nowhere = Provider::new(
+        inference::providers::OpenAi,
+        "Nowhere",
+        "http://127.0.0.1:9/",
+        vec![],
+    );
+    router::Router::new(
+        nowhere,
+        Request::new("unused"),
+        Arc::new(memory::Memory::in_memory().unwrap()),
+        vec![memory::Scope::user("jon")],
+    )
+}
+
+#[test]
+fn activity_follows_the_tasks_own_states() {
+    use engine::TaskRecord;
+    use interface::Doing;
+    // A task of `kind`, running from `state` (its own typed state, as the engine stores it).
+    fn running(kind: &str, state: impl Serialize, input: Value) -> TaskRecord {
+        TaskRecord {
+            id: 1,
+            thread: "t1".into(),
+            kind: kind.into(),
+            version: 1,
+            input,
+            owner: None,
+            background: false,
+            abandon_on_restart: false,
+            abort_requested: false,
+            abort_reason: None,
+            aborting: false,
+            restarts: 0,
+            memos: Default::default(),
+            state: TaskState::Running {
+                checkpoint: serde_json::to_value(state).unwrap(),
+            },
+            created_at: 0,
+            ended_at: None,
+        }
+    }
+    let generation = |state| running(generation::NAME, state, Value::Null);
+    let call = ToolCallInput {
+        call_id: "c1".into(),
+        name: "weather".into(),
+        arguments: json!({}),
+    };
+    let tool = |state| running(ToolCall::NAME, state, serde_json::to_value(&call).unwrap());
+
+    use generation::State;
+    assert_eq!(
+        doing(&generation(State::Consider { round: 1 })),
+        Some(Doing::Remembering)
+    );
+    let request = State::Request {
+        round: 1,
+        attempt: 1,
+    };
+    assert_eq!(doing(&generation(request)), Some(Doing::Thinking));
+    assert_eq!(doing(&generation(State::Prepare { round: 1 })), None);
+    let weather = Some(Doing::Tool {
+        name: "weather".into(),
+    });
+    assert_eq!(doing(&tool(tool::State::Call)), weather);
+    let execute = tool::State::Execute {
+        replay: Replay::Safe,
+    };
+    assert_eq!(doing(&tool(execute)), None);
+    // Only while it runs.
+    let mut waiting = generation(State::Prepare { round: 1 });
+    waiting.state = TaskState::Pending {
+        checkpoint: json!({ "phase": "request", "round": 1, "attempt": 1 }),
+    };
+    assert_eq!(doing(&waiting), None);
 }

@@ -3,16 +3,20 @@
 //! Every run starts empty: its databases (state, memory, journal) live in a temporary directory
 //! that is deleted when the process ends, by `/quit`, end of input, Ctrl-C at the prompt, a
 //! hangup or termination signal, an error or a panic. `--keep` keeps it and prints where, for
-//! `just inspect --db <dir>/tokidoki.db --memory <dir>/memory.db`. Ctrl-C during an answer
+//! `just inspect --data <dir>`. Ctrl-C during an answer
 //! stops the answer.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use tokidoki::interface::{Change, Content, Event, Feedback, Input, Role, Sent, Speaker, Status};
+use telemetry::inspect::clip;
+use tokidoki::interface::{
+    Change, Content, Doing, Event, Feedback, Input, Role, Sent, Speaker, Status,
+};
 use tokidoki::{Config, Events, Tokidoki};
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::signal::unix::{Signal, SignalKind, signal};
 
 const HELP: &str = "/threads          list threads
 /thread <id>      send to this thread from now on
@@ -41,6 +45,7 @@ async fn run() -> Result<()> {
         "tokidoki: a fresh one, in {}; /help for commands",
         scratch.path().display()
     );
+    let mut signals = Signals::new()?;
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut pinned: Option<String> = None;
     let mut last: Option<String> = None;
@@ -49,8 +54,9 @@ async fn run() -> Result<()> {
         std::io::stdout().flush()?;
         let line = tokio::select! {
             line = lines.next_line() => line?,
-            _ = tokio::signal::ctrl_c() => None,
-            _ = stop_signal() => None,
+            _ = signals.interrupt.recv() => None,
+            _ = signals.hangup.recv() => None,
+            _ = signals.terminate.recv() => None,
         };
         let Some(line) = line else {
             println!();
@@ -110,7 +116,7 @@ async fn run() -> Result<()> {
                     println!("  [{} · {new}{}: {}]", sent.thread, route.by, route.reason);
                 }
                 last = Some(sent.thread.clone());
-                if follow(&tokidoki, &mut events, &sent).await? == Followed::Stopped {
+                if follow(&tokidoki, &mut events, &sent, &mut signals).await? == Followed::Stopped {
                     break;
                 }
             }
@@ -127,14 +133,20 @@ enum Followed {
 }
 
 /// Shows what happens on the thread until the input is settled.
-async fn follow(tokidoki: &Tokidoki, events: &mut Events, sent: &Sent) -> Result<Followed> {
+async fn follow(
+    tokidoki: &Tokidoki,
+    events: &mut Events,
+    sent: &Sent,
+    signals: &mut Signals,
+) -> Result<Followed> {
     let mut status = String::new();
     let mut stopping = false;
     loop {
         let event = tokio::select! {
             event = events.recv() => event,
-            _ = stop_signal() => return Ok(Followed::Stopped),
-            _ = tokio::signal::ctrl_c(), if !stopping => {
+            _ = signals.hangup.recv() => return Ok(Followed::Stopped),
+            _ = signals.terminate.recv() => return Ok(Followed::Stopped),
+            _ = signals.interrupt.recv(), if !stopping => {
                 stopping = true;
                 if tokidoki.abort(&sent.thread)? {
                     println!("  · stopping");
@@ -143,27 +155,24 @@ async fn follow(tokidoki: &Tokidoki, events: &mut Events, sent: &Sent) -> Result
             }
         };
         let event = match event {
-            Some(Event::Lagged) | None => {
-                // Fell behind: ask directly.
-                match tokidoki.submission(&sent.submission)? {
-                    Some(s) if s.is_settled() => Event::Submission { submission: s },
-                    _ => continue,
-                }
-            }
+            // Fell behind: ask directly.
+            Some(Event::Lagged) => match tokidoki.submission(&sent.submission)? {
+                Some(s) if s.is_settled() => Event::Submission { submission: s },
+                _ => continue,
+            },
+            // No more events: just wait for the answer.
+            None => Event::Submission {
+                submission: tokidoki.wait(&sent.submission).await?,
+            },
             Some(event) => event,
         };
         match event {
-            Event::Activity {
-                thread,
-                kind,
-                phase,
-                state,
-                ..
-            } if thread == sent.thread && state == "running" => {
-                let now = match (kind.as_str(), phase.as_str()) {
-                    ("agent.generation", "consider") => "remembering",
-                    ("agent.generation", "request") => "thinking",
-                    _ => continue,
+            // Tool calls show as they are made, below.
+            Event::Activity { thread, doing } if thread == sent.thread => {
+                let now = match doing {
+                    Doing::Remembering => "remembering",
+                    Doing::Thinking => "thinking",
+                    Doing::Tool { .. } => continue,
                 };
                 if status != now {
                     println!("  · {now}");
@@ -187,7 +196,7 @@ async fn follow(tokidoki: &Tokidoki, events: &mut Events, sent: &Sent) -> Result
                         }
                     }
                 }
-                Change::Recalled { memories } if !memories.is_empty() => {
+                Change::Recalled { memories } => {
                     for memory in memories {
                         println!("  ◦ {}", clip(&memory, 100));
                     }
@@ -237,26 +246,23 @@ async fn show_history(tokidoki: &Tokidoki, thread: &str) -> Result<()> {
     Ok(())
 }
 
-fn clip(text: &str, max: usize) -> String {
-    let flat = text.replace('\n', " ");
-    match flat.chars().count() > max {
-        true => format!("{}…", flat.chars().take(max).collect::<String>()),
-        false => flat,
-    }
+/// The signals this program handles, listened to from startup: one arriving while nothing is
+/// waiting on it is kept until something is, not lost.
+struct Signals {
+    /// Ctrl-C: stops the answer, or leaves at the prompt.
+    interrupt: Signal,
+    /// The terminal closed, or termination: leave.
+    hangup: Signal,
+    terminate: Signal,
 }
 
-/// Resolves when the process is told to end: hangup (the terminal closed) or termination.
-async fn stop_signal() {
-    use tokio::signal::unix::{SignalKind, signal};
-    let (Ok(mut hangup), Ok(mut terminate)) = (
-        signal(SignalKind::hangup()),
-        signal(SignalKind::terminate()),
-    ) else {
-        return std::future::pending().await;
-    };
-    tokio::select! {
-        _ = hangup.recv() => {}
-        _ = terminate.recv() => {}
+impl Signals {
+    fn new() -> Result<Self> {
+        Ok(Self {
+            interrupt: signal(SignalKind::interrupt())?,
+            hangup: signal(SignalKind::hangup())?,
+            terminate: signal(SignalKind::terminate())?,
+        })
     }
 }
 
@@ -283,7 +289,7 @@ impl Scratch {
 impl Drop for Scratch {
     fn drop(&mut self) {
         if self.keep {
-            eprintln!("kept {}", self.path.display());
+            eprintln!("kept: just inspect --data {}", self.path.display());
         } else if let Err(error) = std::fs::remove_dir_all(&self.path) {
             eprintln!("couldn't delete {}: {error}", self.path.display());
         }

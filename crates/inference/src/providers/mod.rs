@@ -66,6 +66,27 @@ pub struct Response {
     pub message: Message,
     pub input_tokens: u32,
     pub output_tokens: u32,
+    pub stop: Stop,
+}
+
+/// Why the model stopped, the same for every API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    /// It finished its answer.
+    Done,
+    /// It wants tools run.
+    ToolUse,
+    /// It hit the output limit: the answer is cut off.
+    Cutoff,
+    /// It refused, or a content filter stopped it.
+    Refused,
+}
+
+impl Stop {
+    /// The reply is likely not what was wanted.
+    pub fn is_suspect(self) -> bool {
+        matches!(self, Stop::Cutoff | Stop::Refused)
+    }
 }
 
 /// How a format builds the request body and reads the reply.
@@ -113,61 +134,54 @@ impl<A: Api> Provider<A> {
         self
     }
 
-    pub fn name(&self) -> &'static str {
-        self.name
+    /// Reads a raw reply (as `post` returns it) into a `Response`.
+    pub fn read(&self, raw: &str) -> Result<Response> {
+        let reply: A::Reply = serde_json::from_str(raw).context(self.name)?;
+        self.api
+            .response(reply)
+            .with_context(|| format!("{} returned no reply", self.name))
     }
 
     /// Sends the request and reads the reply. Every call is traced (`model call`), with the
     /// body sent and the raw reply, so it can be inspected or replayed later.
     pub async fn chat(&self, req: &Request, ctx: &Context) -> Result<Response> {
         let body = self.api.body(req, ctx);
+        // Serialized once: what is sent is what is traced (and hashed, for replay).
+        let request = serde_json::to_string(&body)?;
         let started = Instant::now();
         let taped = self.tape.as_ref().and_then(|t| t.reply(self.name, &body));
         let replayed = taped.is_some();
         let raw = match taped {
-            Some(raw) => Ok(raw),
-            None => self.send(&body).await,
+            Some(raw) => Ok(raw.to_string()),
+            None => self.post(request.clone()).await,
         };
         let ms = started.elapsed().as_millis() as u64;
-        let read = |raw: Value| -> Result<(Value, Response)> {
-            let reply = serde_json::from_value(raw.clone()).context(self.name)?;
-            let response = self
-                .api
-                .response(reply)
-                .with_context(|| format!("{} returned no reply", self.name))?;
-            Ok((raw, response))
-        };
-        match raw.and_then(read) {
-            Ok((raw, res)) => {
+        match raw.and_then(|raw| Ok((self.read(&raw)?, raw))) {
+            Ok((res, raw)) => {
                 let calls: Vec<&str> = res.message.tool_calls().map(|(_, name, _)| name).collect();
-                let stop = raw["stop_reason"]
-                    .as_str()
-                    .or(raw["choices"][0]["finish_reason"].as_str())
-                    .unwrap_or("");
+                let stop = res.stop;
+                let text = res.message.text();
                 // Cut off, refused, or nothing at all: still a reply, but likely a bad one.
-                let suspect =
-                    matches!(stop, "max_tokens" | "length" | "refusal" | "content_filter")
-                        || (calls.is_empty() && res.message.text().trim().is_empty());
-                if suspect {
+                if stop.is_suspect() || (calls.is_empty() && text.trim().is_empty()) {
                     tracing::warn!(
                         provider = self.name,
                         model = %req.model,
-                        stop,
+                        stop = ?stop,
                         "model reply was cut off, refused or empty"
                     );
                 }
                 tracing::info!(
-                    stop,
+                    stop = ?stop,
                     provider = self.name,
                     model = %req.model,
                     ms,
                     replayed,
                     input_tokens = res.input_tokens,
                     output_tokens = res.output_tokens,
-                    text = %res.message.text(),
+                    text = %text,
                     calls = ?calls,
-                    request = %body,
-                    response = %raw,
+                    request = request.as_str(),
+                    response = raw.as_str(),
                     "model call"
                 );
                 Ok(res)
@@ -179,7 +193,7 @@ impl<A: Api> Provider<A> {
                     ms,
                     replayed,
                     error = %format!("{error:#}"),
-                    request = %body,
+                    request = request.as_str(),
                     "model call failed"
                 );
                 Err(error)
@@ -187,10 +201,14 @@ impl<A: Api> Provider<A> {
         }
     }
 
-    /// Posts a request body as-is and returns the raw reply: for replaying a recorded call,
-    /// edited or not.
-    pub async fn send(&self, body: &Value) -> Result<Value> {
-        let mut builder = self.http.post(self.url).json(body);
+    /// Posts a serialized request body as-is and returns the reply's text, unparsed: what
+    /// `chat` sends, and how a recorded call is replayed, edited or not.
+    pub async fn post(&self, body: String) -> Result<String> {
+        let mut builder = self
+            .http
+            .post(self.url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body);
         for (key, value) in &self.headers {
             builder = builder.header(*key, value);
         }
@@ -201,7 +219,7 @@ impl<A: Api> Provider<A> {
             let body = res.text().await.unwrap_or_default();
             bail!("{} returned {status}: {}", self.name, error_message(&body));
         }
-        res.json().await.context(self.name)
+        res.text().await.context(self.name)
     }
 }
 

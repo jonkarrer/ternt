@@ -23,7 +23,9 @@ mod store;
 pub mod task;
 
 pub use runtime::Runtime;
-pub use task::{Next, Outcome, Policy, Registry, Task, TaskId, TaskOptions, TaskRecord, TaskState};
+pub use task::{
+    Next, Outcome, Policy, Registry, Status, Task, TaskId, TaskOptions, TaskRecord, TaskState,
+};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::panic::{self, AssertUnwindSafe};
@@ -34,7 +36,7 @@ use anyhow::{Context as _, Result, bail, ensure};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use state::{Savepoint, Sqlite, Thread};
+use state::{Checkpoint, Savepoint, Sqlite, Thread};
 use tokio::sync::{broadcast, watch};
 use tokio::task::AbortHandle;
 use tracing::Instrument;
@@ -71,26 +73,22 @@ pub(crate) struct Shared {
     changes: broadcast::Sender<Arc<Committed>>,
 }
 
-/// What one commit changed, as `Engine::subscribe` reports it.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// What one commit stored, as `Engine::subscribe` reports it: the values themselves, so a
+/// subscriber sees each commit as it was, not whatever a later read would find.
+#[derive(Debug, Clone, Default)]
 pub struct Committed {
-    /// Threads with new checkpoints, and which (their positions).
-    pub threads: Vec<(String, std::ops::Range<usize>)>,
-    /// Documents written or deleted.
-    pub docs: Vec<String>,
+    /// Threads with new checkpoints, and those checkpoints.
+    pub threads: Vec<(String, Vec<Checkpoint>)>,
+    /// Documents written (`Some`) or deleted (`None`).
+    pub docs: Vec<(String, Option<Value>)>,
     /// Tasks written, as they now are.
-    pub tasks: Vec<TaskChange>,
+    pub tasks: Vec<TaskRecord>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct TaskChange {
-    pub id: TaskId,
-    pub thread: String,
-    pub kind: String,
-    /// `TaskState::name`.
-    pub state: &'static str,
-    /// The checkpoint's `phase` tag; "" once ended.
-    pub phase: String,
+impl Committed {
+    pub fn is_empty(&self) -> bool {
+        self.threads.is_empty() && self.docs.is_empty() && self.tasks.is_empty()
+    }
 }
 
 /// How many commits a subscriber may fall behind before it misses some (and is told so).
@@ -205,7 +203,8 @@ impl Engine {
     /// Marks the task, and everything it owns, for abort. Wait for it with `wait`.
     pub fn abort_task(&self, id: TaskId) -> Result<()> {
         self.commit(|tx| {
-            ensure!(tx.task(id).is_some(), "task {id} is not live");
+            // A completing task too: what it owns is aborted.
+            ensure!(tx.task(id).is_some(), "task {id} has ended");
             tx.mark_abort(id, Some("requested".into()))
         })
     }
@@ -213,6 +212,15 @@ impl Engine {
     /// The task as last committed.
     pub fn task(&self, id: TaskId) -> Result<Option<TaskRecord>> {
         self.shared.task(id)
+    }
+
+    /// Whether the task hasn't ended (nor is ending, its outcome decided).
+    pub fn is_live(&self, id: TaskId) -> bool {
+        self.shared
+            .lock()
+            .tasks
+            .get(&id)
+            .is_some_and(|t| t.state.is_live())
     }
 
     /// Every task that hasn't ended.
@@ -388,36 +396,50 @@ impl Shared {
             return Err(error);
         }
 
+        // What changed, for subscribers, only when there are any.
+        let listening = self.changes.receiver_count() > 0;
         let mut committed = Committed::default();
         for id in savepoints.keys() {
             let thread = inner.threads.get_mut(id).expect("touched");
-            if let (Some(first), Some(last)) = (thread.unsaved().first(), thread.unsaved().last()) {
-                committed.threads.push((id.clone(), first.id..last.id + 1));
+            if listening && !thread.unsaved().is_empty() {
+                committed
+                    .threads
+                    .push((id.clone(), thread.unsaved().to_vec()));
             }
             thread.mark_saved();
         }
         for id in advanced {
             *inner.progress.entry(id).or_default() += 1;
         }
+        // Traced once the lock is released: tracing may format and write. An ended task is
+        // moved there (it leaves the live set anyway); a live one is copied only if traced.
+        let tracing_states = tracing::enabled!(tracing::Level::DEBUG);
+        let mut befores = HashMap::new();
         for (id, task) in &tasks {
-            let before = inner.tasks.get(id).map(|t| t.state.name());
-            if before != Some(task.state.name()) {
-                trace_change(task, before);
+            let before = inner.tasks.get(id).map(|t| t.state.status());
+            if before != Some(task.state.status()) {
+                befores.insert(*id, before);
             }
-            committed.tasks.push(TaskChange {
-                id: *id,
-                thread: task.thread.clone(),
-                kind: task.kind.clone(),
-                state: task.state.name(),
-                phase: task.state.checkpoint().map_or("", phase_name).to_string(),
-            });
+            if listening {
+                committed.tasks.push(task.clone());
+            }
         }
-        committed.docs = docs.keys().cloned().collect();
+        if listening {
+            committed.docs = docs.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        }
+        let mut changed = Vec::new();
         for (id, task) in tasks {
+            let before = befores.remove(&id);
             if task.state.is_terminal() {
                 inner.tasks.remove(&id);
                 inner.progress.remove(&id);
+                if let Some(before) = before {
+                    changed.push((task, before));
+                }
             } else {
+                if let Some(before) = before.filter(|_| tracing_states) {
+                    changed.push((task.clone(), before));
+                }
                 inner.tasks.insert(id, task);
             }
         }
@@ -428,9 +450,12 @@ impl Shared {
             }
         }
         drop(guard);
+        for (task, before) in &changed {
+            trace_change(task, *before);
+        }
         self.version.send_modify(|v| *v += 1);
-        if committed != Committed::default() {
-            // No subscribers is fine: nobody is listening.
+        if !committed.is_empty() {
+            // Subscribers that left since are fine to miss it.
             let _ = self.changes.send(Arc::new(committed));
         }
         Ok(value)
@@ -456,23 +481,9 @@ impl Shared {
         self.lock().progress.get(&id).copied().unwrap_or(0)
     }
 
-    /// Lets each task's definition clean up after the engine itself ended it (`Task::on_fault`),
-    /// one commit each. Best effort: errors are ignored.
-    fn after_faults(&self, ids: &[TaskId]) {
-        for &id in ids {
-            let Ok(Some(task)) = self.task(id) else {
-                continue;
-            };
-            if let Some(kind) = self.registry.get(&task.kind) {
-                let _ = self.commit(|tx| kind.on_fault(tx, &task));
-            }
-        }
-    }
-
     /// What a crash or an earlier process left: running tasks were cut off.
     fn recover(&self) -> Result<()> {
         let limit = self.settings.restart_limit;
-        let mut faulted = Vec::new();
         self.commit(|tx| {
             let ids: Vec<TaskId> = tx.inner.tasks.keys().copied().collect();
             for &id in &ids {
@@ -485,7 +496,7 @@ impl Shared {
                     task = id,
                     thread = %task.thread,
                     kind = %task.kind,
-                    phase = phase_name(&checkpoint),
+                    phase = task.state.phase(),
                     restarts,
                     "task was cut off by a crash; it runs its phase again"
                 );
@@ -495,8 +506,7 @@ impl Shared {
                 })?;
                 if restarts >= limit {
                     let error = format!("restart_limit: cut off by {restarts} crashes in a row");
-                    tx.end(id, Outcome::Faulted { error })?;
-                    faulted.push(id);
+                    tx.fault(id, Outcome::Faulted { error })?;
                 }
             }
             for id in ids {
@@ -508,9 +518,7 @@ impl Shared {
                 }
             }
             Ok(())
-        })?;
-        self.after_faults(&faulted);
-        Ok(())
+        })
     }
 
     /// Stops the scheduler and every invocation, and refuses further commits.
@@ -625,16 +633,15 @@ impl Shared {
                 for (id, outcome) in finals {
                     tx.end(id, outcome)?;
                 }
-                for &id in &orphans {
+                for id in orphans {
                     let reason = "task_too_old: stored by another version".to_string();
-                    tx.end(id, Outcome::Orphaned { reason })?;
+                    tx.fault(id, Outcome::Orphaned { reason })?;
                 }
                 for id in aborts {
                     tx.mark_abort(id, Some("a task waited on with it failed".into()))?;
                 }
                 Ok(())
             })?;
-            self.after_faults(&orphans);
         }
         for (id, mode) in starts {
             self.start(id, mode)?;
@@ -759,7 +766,7 @@ async fn supervise(
             task = id,
             thread = %record.thread,
             kind = %record.kind,
-            phase = record.state.checkpoint().map_or("", phase_name),
+            phase = record.state.phase(),
             aborting = mode == Mode::Abort,
             restarts = record.restarts,
         );
@@ -798,27 +805,21 @@ async fn supervise(
             error.or_else(|| stuck.then(|| "phase returned without durable progress".into()));
         if let Some(error) = error {
             if shared
-                .commit(|tx| tx.end(id, Outcome::Faulted { error }))
+                .commit(|tx| tx.fault(id, Outcome::Faulted { error }))
                 .is_err()
             {
                 return;
             }
-            shared.after_faults(&[id]);
             break;
         }
     }
     shared.release(id, generation);
 }
 
-/// The `phase` tag of a task's checkpoint (states are tagged enums), or "".
-fn phase_name(checkpoint: &Value) -> &str {
-    checkpoint["phase"].as_str().unwrap_or("")
-}
-
 /// Traces a task's change of state, as committed: how serious depends on how it ended.
-fn trace_change(task: &TaskRecord, before: Option<&str>) {
+fn trace_change(task: &TaskRecord, before: Option<Status>) {
     let (id, thread, kind) = (task.id, task.thread.as_str(), task.kind.as_str());
-    let from = before.unwrap_or("new");
+    let from = before.map_or("new", Status::as_str);
     match &task.state {
         TaskState::Terminal { outcome } => match outcome {
             Outcome::Completed { result } => {
@@ -842,8 +843,8 @@ fn trace_change(task: &TaskRecord, before: Option<&str>) {
             thread,
             kind,
             from,
-            to = state.name(),
-            phase = state.checkpoint().map_or("", phase_name),
+            to = state.status().as_str(),
+            phase = state.phase(),
             restarts = task.restarts,
             abort = task.abort_requested,
             "task state"
@@ -852,13 +853,27 @@ fn trace_change(task: &TaskRecord, before: Option<&str>) {
 }
 
 fn panic_message(join: tokio::task::JoinError) -> String {
-    let panic = join.into_panic();
-    let text = panic
+    format!("panicked: {}", panic_text(&*join.into_panic()))
+}
+
+/// A panic's message, if it has one.
+fn panic_text(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
         .downcast_ref::<&str>()
         .map(|s| s.to_string())
         .or_else(|| panic.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "unknown".to_string());
-    format!("panicked: {text}")
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Where a nested savepoint (`Tx::attempt`) returns to.
+struct Mark {
+    /// Threads already touched in the commit, as they were.
+    threads: HashMap<String, Savepoint>,
+    tasks: BTreeMap<TaskId, TaskRecord>,
+    docs: BTreeMap<String, Option<Value>>,
+    advanced: HashSet<TaskId>,
+    aborted: HashSet<TaskId>,
+    next_id: TaskId,
 }
 
 /// One commit in progress: what it changes is applied only once it is stored.
@@ -915,6 +930,12 @@ impl Tx<'_> {
     /// A task that hasn't ended before this commit, as this commit leaves it so far.
     pub fn task(&self, id: TaskId) -> Option<&TaskRecord> {
         self.tasks.get(&id).or_else(|| self.inner.tasks.get(&id))
+    }
+
+    /// Whether the task hasn't ended (nor is ending), as this commit leaves it so far: a task
+    /// this very commit ends is no longer live.
+    pub fn is_live(&self, id: TaskId) -> bool {
+        self.task(id).is_some_and(|t| t.state.is_live())
     }
 
     pub fn create_task<T: Task>(
@@ -1040,6 +1061,78 @@ impl Tx<'_> {
         let now = self.now;
         self.update(id, |task| task.ended_at = Some(now))?;
         self.advance(id, TaskState::Terminal { outcome })
+    }
+
+    /// Ends a task the engine gave up on (faulted, orphaned) and lets its definition clean up
+    /// (`Task::on_fault`) in this same commit, so no crash comes between the two. A cleanup
+    /// that fails or panics is undone on its own (a nested savepoint), and traced: the task
+    /// still ends, and the rest of the commit stands.
+    pub(crate) fn fault(&mut self, id: TaskId, outcome: Outcome) -> Result<()> {
+        self.end(id, outcome)?;
+        let task = self.task(id).cloned().context("ended")?;
+        let Some(kind) = self.shared.registry.get(&task.kind) else {
+            return Ok(());
+        };
+        if let Err(error) = self.attempt(|tx| kind.on_fault(tx, &task)) {
+            tracing::error!(
+                task = id,
+                thread = %task.thread,
+                kind = %task.kind,
+                error = %format!("{error:#}"),
+                "fault cleanup failed; the task ends without it"
+            );
+        }
+        Ok(())
+    }
+
+    /// Runs `change` under a nested savepoint: if it fails or panics, what it changed in this
+    /// commit is undone, and what came before stays.
+    fn attempt<R>(&mut self, change: impl FnOnce(&mut Self) -> Result<R>) -> Result<R> {
+        let mark = Mark {
+            threads: self
+                .savepoints
+                .keys()
+                .map(|id| (id.clone(), self.inner.threads[id].savepoint()))
+                .collect(),
+            tasks: self.tasks.clone(),
+            docs: self.docs.clone(),
+            advanced: self.advanced.clone(),
+            aborted: self.aborted.clone(),
+            next_id: self.inner.next_id,
+        };
+        let result = panic::catch_unwind(AssertUnwindSafe(|| change(self)))
+            .unwrap_or_else(|panic| Err(anyhow::anyhow!("panicked: {}", panic_text(&*panic))));
+        if result.is_err() {
+            // Threads first touched after the mark go back to how they were then, and are
+            // left out of the commit; the others go back to the mark.
+            let later: Vec<String> = self
+                .savepoints
+                .keys()
+                .filter(|id| !mark.threads.contains_key(*id))
+                .cloned()
+                .collect();
+            for id in later {
+                let first = self.savepoints.remove(&id).expect("touched");
+                self.inner
+                    .threads
+                    .get_mut(&id)
+                    .expect("loaded")
+                    .rollback(first);
+            }
+            for (id, savepoint) in mark.threads {
+                self.inner
+                    .threads
+                    .get_mut(&id)
+                    .expect("loaded")
+                    .rollback(savepoint);
+            }
+            self.tasks = mark.tasks;
+            self.docs = mark.docs;
+            self.advanced = mark.advanced;
+            self.aborted = mark.aborted;
+            self.inner.next_id = mark.next_id;
+        }
+        result
     }
 
     /// Aborts a task, and the work it owns, with this commit. Nothing for one that has ended.

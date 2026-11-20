@@ -2,7 +2,7 @@
 //! (its own file, so writing it never waits on, or holds up, the engine's commits).
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
 
 use anyhow::Result;
 use rusqlite::{Connection, Row, params, params_from_iter};
@@ -83,8 +83,18 @@ impl Entry {
     }
 }
 
-/// Fields too large and repetitive to search: every request repeats the whole conversation.
-const UNSEARCHED: &[&str] = &["request", "response"];
+/// A model call's request and reply: kept as JSON, but too large and repetitive to search or
+/// show inline (every request repeats the whole conversation).
+pub(crate) const BODIES: &[&str] = &["request", "response"];
+
+/// A field's value as text: a string as itself, anything else as JSON, nothing as "".
+pub(crate) fn as_text(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
 
 /// Which entries `Journal::entries` returns, oldest first.
 #[derive(Debug, Clone, Default)]
@@ -101,9 +111,21 @@ pub struct Filter {
     pub limit: Option<usize>,
 }
 
+/// An entry on its way to the writer, with its bodies as JSON text.
+struct Written {
+    entry: Entry,
+    bodies: Vec<(String, String)>,
+}
+
+/// Cheap to clone; clones share the file and its writer.
 #[derive(Clone)]
 pub struct Journal {
     conn: Arc<Mutex<Connection>>,
+    /// To the writer thread: `record` hands entries to it, so tracing never waits on the disk
+    /// (it often happens inside the engine's commits).
+    writer: mpsc::Sender<Written>,
+    /// Entries recorded but not yet written; reads wait for them, so they see what was traced.
+    pending: Arc<(Mutex<usize>, Condvar)>,
 }
 
 impl Journal {
@@ -147,36 +169,86 @@ impl Journal {
              CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts
                  USING fts5(text, content = '', contentless_delete = 1);",
         )?;
+        // Added after the first release: model calls are found by their request's hash.
+        if conn
+            .prepare("SELECT request_hash FROM entries LIMIT 0")
+            .is_err()
+        {
+            conn.execute_batch("ALTER TABLE entries ADD COLUMN request_hash INTEGER;")?;
+        }
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS entries_request ON entries (request_hash)
+                 WHERE request_hash IS NOT NULL;",
+        )?;
+        let conn = Arc::new(Mutex::new(conn));
+        let pending = Arc::new((Mutex::new(0usize), Condvar::new()));
+        let (writer, queue) = mpsc::channel::<Written>();
+        let (shared, counted) = (conn.clone(), pending.clone());
+        // Ends once every clone of this journal is dropped.
+        std::thread::Builder::new()
+            .name("journal".into())
+            .spawn(move || {
+                // One transaction for whatever has queued up: a burst of events is one write.
+                while let Ok(first) = queue.recv() {
+                    let batch: Vec<Written> =
+                        std::iter::once(first).chain(queue.try_iter()).collect();
+                    let written = (|| -> Result<()> {
+                        let mut conn = lock(&shared);
+                        let tx = conn.transaction()?;
+                        for entry in &batch {
+                            insert(&tx, &entry.entry, &entry.bodies)?;
+                        }
+                        Ok(tx.commit()?)
+                    })();
+                    if let Err(error) = written {
+                        eprintln!("telemetry: journal write failed: {error:#}");
+                    }
+                    let (count, drained) = &*counted;
+                    *lock(count) -= batch.len();
+                    drained.notify_all();
+                }
+            })?;
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            conn,
+            writer,
+            pending,
         })
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap_or_else(|e| e.into_inner())
+    /// Hands an entry to the writer thread, without waiting for it to be written.
+    pub fn record(&self, entry: Entry) {
+        self.record_with(entry, Vec::new());
     }
 
-    /// Adds an entry; its `id` is ignored. Returns the new ID.
+    /// `record`, with bodies (`BODIES`) as JSON text, written into the fields as they are:
+    /// never parsed into values and serialized again.
+    pub(crate) fn record_with(&self, entry: Entry, bodies: Vec<(String, String)>) {
+        let (count, _) = &*self.pending;
+        *lock(count) += 1;
+        if self.writer.send(Written { entry, bodies }).is_err() {
+            *lock(count) -= 1;
+        }
+    }
+
+    /// Waits until every recorded entry is written.
+    pub fn flush(&self) {
+        let (count, drained) = &*self.pending;
+        let mut pending = lock(count);
+        while *pending > 0 {
+            pending = drained.wait(pending).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    /// The connection, once what was recorded is written.
+    fn lock(&self) -> MutexGuard<'_, Connection> {
+        self.flush();
+        lock(&self.conn)
+    }
+
+    /// Writes an entry now (after what was recorded before it); its `id` is ignored. Returns
+    /// the new ID.
     pub fn append(&self, entry: &Entry) -> Result<i64> {
-        let conn = self.lock();
-        conn.prepare_cached(
-            "INSERT INTO entries (at_us, severity, target, spans, thread, task, message, fields)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        )?
-        .execute(params![
-            entry.at as i64,
-            entry.severity as i64,
-            entry.target,
-            entry.spans,
-            entry.thread,
-            entry.task,
-            entry.message,
-            Value::Object(entry.fields.clone()).to_string(),
-        ])?;
-        let id = conn.last_insert_rowid();
-        conn.prepare_cached("INSERT INTO entries_fts (rowid, text) VALUES (?1, ?2)")?
-            .execute(params![id, searchable(entry)])?;
-        Ok(id)
+        insert(&self.lock(), entry, &[])
     }
 
     pub fn entry(&self, id: i64) -> Result<Option<Entry>> {
@@ -236,18 +308,17 @@ impl Journal {
         let Some(query) = fts_query(text) else {
             return Ok(Vec::new());
         };
-        let ids: Vec<i64> = {
-            let conn = self.lock();
-            let mut select = conn.prepare_cached(
-                "SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?1 ORDER BY rank LIMIT ?2",
-            )?;
-            select
-                .query_map(params![query, limit as i64], |row| row.get(0))?
-                .collect::<Result<_, _>>()?
-        };
-        ids.into_iter()
-            .filter_map(|id| self.entry(id).transpose())
-            .collect()
+        let conn = self.lock();
+        let mut select = conn.prepare_cached(&format!(
+            "SELECT {COLUMNS} FROM entries_fts JOIN entries ON entries.id = entries_fts.rowid
+             WHERE entries_fts MATCH ?1 ORDER BY rank LIMIT ?2"
+        ))?;
+        let mut rows = select.query(params![query, limit as i64])?;
+        let mut entries = Vec::new();
+        while let Some(row) = rows.next()? {
+            entries.push(parse(row)?);
+        }
+        Ok(entries)
     }
 
     /// Deletes entries older than `before` (µs since the epoch). Returns how many.
@@ -264,27 +335,87 @@ impl Journal {
 /// Replays recorded model calls: the newest successful call with exactly this body.
 impl inference::Tape for Journal {
     fn reply(&self, provider: &str, body: &Value) -> Option<Value> {
-        let wanted = body.to_string();
         let conn = self.lock();
         let mut select = conn
             .prepare_cached(
                 "SELECT fields FROM entries
-                 WHERE message = 'model call' AND json_extract(fields, '$.provider') = ?1
+                 WHERE request_hash = ?1 AND message = 'model call'
+                   AND json_extract(fields, '$.provider') = ?2
                  ORDER BY id DESC",
             )
             .ok()?;
-        let mut rows = select.query([provider]).ok()?;
+        let mut rows = select
+            .query(params![hash(&body.to_string()), provider])
+            .ok()?;
         while let Ok(Some(row)) = rows.next() {
             let fields: String = row.get(0).ok()?;
             let Ok(Value::Object(mut fields)) = serde_json::from_str(&fields) else {
                 continue;
             };
-            if fields.get("request").map(Value::to_string).as_deref() == Some(&wanted) {
+            // The hash narrows it down; the request itself decides.
+            if fields.get("request") == Some(body) {
                 return fields.remove("response");
             }
         }
         None
     }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn insert(conn: &Connection, entry: &Entry, bodies: &[(String, String)]) -> Result<i64> {
+    let request = match bodies.iter().find(|(key, _)| key == "request") {
+        Some((_, raw)) => Some(hash(raw)),
+        None => entry.fields.get("request").map(|r| hash(&r.to_string())),
+    };
+    conn.prepare_cached(
+        "INSERT INTO entries (at_us, severity, target, spans, thread, task, message, fields,
+             request_hash)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    )?
+    .execute(params![
+        entry.at as i64,
+        entry.severity as i64,
+        entry.target,
+        entry.spans,
+        entry.thread,
+        entry.task,
+        entry.message,
+        fields_text(&entry.fields, bodies)?,
+        request,
+    ])?;
+    let id = conn.last_insert_rowid();
+    conn.prepare_cached("INSERT INTO entries_fts (rowid, text) VALUES (?1, ?2)")?
+        .execute(params![id, searchable(entry)])?;
+    Ok(id)
+}
+
+/// The stored fields: `fields` as JSON, with each body's JSON text added as it is.
+fn fields_text(fields: &Map<String, Value>, bodies: &[(String, String)]) -> Result<String> {
+    let mut text = serde_json::to_string(fields)?;
+    for (key, raw) in bodies {
+        text.pop(); // the closing brace
+        if text.len() > 1 {
+            text.push(',');
+        }
+        text += &serde_json::to_string(key)?;
+        text.push(':');
+        text += raw;
+        text.push('}');
+    }
+    Ok(text)
+}
+
+/// A request body's hash (FNV-1a over its compact JSON, as `serde_json` writes it), stable
+/// across runs and builds: how a recorded model call is found again.
+fn hash(request: &str) -> i64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in request.bytes() {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+    }
+    hash as i64
 }
 
 const COLUMNS: &str = "id, at_us, severity, target, spans, thread, task, message, fields";
@@ -312,14 +443,11 @@ fn parse(row: &Row) -> Result<Entry> {
 fn searchable(entry: &Entry) -> String {
     let mut text = entry.message.clone();
     for (key, value) in &entry.fields {
-        if UNSEARCHED.contains(&key.as_str()) {
+        if BODIES.contains(&key.as_str()) {
             continue;
         }
         text.push('\n');
-        match value {
-            Value::String(s) => text.push_str(s),
-            other => text.push_str(&other.to_string()),
-        }
+        text.push_str(&as_text(value));
     }
     text
 }
@@ -524,7 +652,53 @@ mod replay_tests {
         let messages: Vec<&str> = entries.iter().map(|e| e.message.as_str()).collect();
         assert_eq!(messages, ["model call", "model call failed"]);
         assert_eq!(entries[0].fields["replayed"], true);
-        assert_eq!(entries[0].fields["stop"], "end_turn");
+        assert_eq!(entries[0].fields["stop"], "Done");
         assert_eq!(entries[1].fields["replayed"], false);
+
+        // Recorded through the real path (request text from `chat`, not a value): replayable.
+        let again = nowhere(traced.clone());
+        let mut ctx = Context::new("Be brief.");
+        ctx.push(Message::user("Hi"));
+        assert_eq!(
+            again.chat(&req, &ctx).await.unwrap().message.text(),
+            "Hello."
+        );
+    }
+}
+
+#[cfg(test)]
+mod body_tests {
+    use super::*;
+    use crate::capture;
+
+    /// The stored fields column, as written.
+    fn stored(journal: &Journal, id: i64) -> String {
+        journal
+            .lock()
+            .query_row("SELECT fields FROM entries WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn bodies_are_stored_as_they_were_sent() {
+        let (journal, _guard) = capture();
+        let request = r#"{"z":1,"a":[1,2]}"#;
+        let response = "{\"b\": 1,\n \"a\": \"x\"}";
+        tracing::info!(request, response, ms = 3, "model call");
+        tracing::info!(request = "not json", "model call");
+
+        let entries = journal.entries(&Filter::default()).unwrap();
+        // Byte for byte: key order and spacing kept, never parsed and written again.
+        let first = stored(&journal, entries[0].id);
+        assert!(
+            first.contains(request) && first.contains(response),
+            "{first}"
+        );
+        assert_eq!(entries[0].fields["request"]["a"][1], 2);
+        assert_eq!(entries[0].fields["ms"], 3);
+        // Text that isn't JSON stays text.
+        assert_eq!(entries[1].fields["request"], "not json");
     }
 }

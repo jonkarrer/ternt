@@ -21,7 +21,9 @@ fn registry() -> Registry {
         .register(Stubborn)
         .register(Holder)
         .register(Panics)
-        .register(Tidy);
+        .register(Tidy)
+        .register(Breaks)
+        .register(BreaksBadly);
     registry
 }
 
@@ -353,10 +355,8 @@ async fn a_crash_resumes_from_the_last_checkpoint() {
         .create_task::<Hang>("t1", false, TaskOptions::default())
         .unwrap();
     until(&engine, id, |t| {
-        t.state
-            == TaskState::Running {
-                checkpoint: serde_json::json!({ "phase": "Hang" }),
-            }
+        t.state.status() == Status::Running
+            && matches!(t.state.checkpoint_as(), Some(HangState::Hang))
     })
     .await;
     engine.crash();
@@ -400,8 +400,8 @@ async fn work_that_keeps_crashing_is_faulted() {
             break;
         }
         until(&engine, id, |t| {
-            t.state.checkpoint() == Some(&serde_json::json!({ "phase": "Hang" }))
-                && matches!(t.state, TaskState::Running { .. })
+            t.state.status() == Status::Running
+                && matches!(t.state.checkpoint_as(), Some(HangState::Hang))
         })
         .await;
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -862,8 +862,8 @@ async fn a_close_counts_no_restart_for_an_owner_waiting_to_abort() {
         .create_task::<Holder>("t1", (), TaskOptions::default())
         .unwrap();
     until(&engine, id, |t| {
-        t.state.checkpoint() == Some(&serde_json::json!({ "phase": "Hold" }))
-            && matches!(t.state, TaskState::Running { .. })
+        t.state.status() == Status::Running
+            && matches!(t.state.checkpoint_as(), Some(HolderState::Hold))
     })
     .await;
     engine.abort_task(id).unwrap();
@@ -1018,17 +1018,143 @@ async fn subscribers_hear_what_each_commit_changed() {
         .create_task::<Steps>("t1", "three".into(), TaskOptions::default())
         .unwrap();
 
+    // Each commit as it was stored: the checkpoints, documents and tasks themselves.
     let first = changes.recv().await.unwrap();
-    assert_eq!(first.threads, [("t1".to_string(), 0..2)]);
-    assert_eq!(first.docs, ["greeting"]);
+    let (thread, checkpoints) = &first.threads[0];
+    assert_eq!(thread, "t1");
+    let ids: Vec<usize> = checkpoints.iter().map(|c| c.id).collect();
+    assert_eq!(ids, [0, 1]);
+    assert_eq!(
+        first.docs,
+        [("greeting".to_string(), Some(serde_json::json!("hi")))]
+    );
     assert!(first.tasks.is_empty());
     let created = changes.recv().await.unwrap();
     assert_eq!(created.tasks[0].id, id);
-    assert_eq!(created.tasks[0].state, "pending");
+    assert!(matches!(created.tasks[0].state, TaskState::Pending { .. }));
     assert_eq!(created.tasks[0].kind, "test.steps");
     wait(&engine, id).await;
     while changes.try_recv().is_ok() {}
     // A commit that only reads changes nothing, and says nothing.
     engine.commit(|tx| tx.thread("t1").map(drop)).unwrap();
     assert!(changes.try_recv().is_err());
+}
+
+/// Fails its phase; when the engine faults it, its cleanup notes that in a document.
+struct Breaks;
+
+impl Task for Breaks {
+    type Input = ();
+    type State = ();
+    type Output = ();
+    const NAME: &'static str = "test.breaks";
+
+    fn initial(&self, _: &()) {}
+
+    async fn run(&self, _: Runtime<Self>) -> Result<()> {
+        Err(anyhow!("broken"))
+    }
+
+    fn on_fault(&self, tx: &mut Tx, task: &TaskRecord) -> Result<()> {
+        assert!(
+            task.state.outcome().is_some(),
+            "cleanup sees the task ended"
+        );
+        tx.put_doc(&format!("cleaned/{}", task.id), &true)
+    }
+}
+
+#[tokio::test]
+async fn a_fault_and_its_cleanup_commit_together() {
+    let store = store();
+    let engine = engine(&store);
+    let id = engine
+        .create_task::<Breaks>("t1", (), TaskOptions::default())
+        .unwrap();
+    assert!(matches!(wait(&engine, id).await, Outcome::Faulted { .. }));
+    assert_eq!(
+        engine.doc::<bool>(&format!("cleaned/{id}")).unwrap(),
+        Some(true)
+    );
+}
+
+#[tokio::test]
+async fn the_last_restart_faults_the_task_with_its_cleanup_in_recovery() {
+    // Cut off mid-phase one restart short of the limit: recovery counts the last restart and
+    // faults it, cleanup included, in its one commit.
+    let store = store();
+    let first = Engine::open(store.clone(), registry(), Settings::default()).unwrap();
+    let id = first
+        .create_task::<Breaks>("t1", (), TaskOptions::default())
+        .unwrap();
+    first.close().unwrap();
+    let mut task = store.read(|conn| store::get(conn, id)).unwrap().unwrap();
+    task.state = TaskState::Running {
+        checkpoint: serde_json::Value::Null,
+    };
+    task.restarts = Settings::default().restart_limit - 1;
+    store.transaction(|tx| store::save(tx, &task)).unwrap();
+
+    let engine = Engine::open(store.clone(), registry(), Settings::default()).unwrap();
+    let ended = engine.task(id).unwrap().unwrap().state.outcome().cloned();
+    let Some(Outcome::Faulted { error }) = ended else {
+        panic!("expected faulted, got {ended:?}");
+    };
+    assert!(error.starts_with("restart_limit"), "{error}");
+    assert_eq!(
+        engine.doc::<bool>(&format!("cleaned/{id}")).unwrap(),
+        Some(true)
+    );
+}
+
+/// Fails its phase; its cleanup writes, then fails (or panics, with `true`).
+struct BreaksBadly;
+
+impl Task for BreaksBadly {
+    type Input = bool;
+    type State = ();
+    type Output = ();
+    const NAME: &'static str = "test.breaks-badly";
+
+    fn initial(&self, _: &bool) {}
+
+    async fn run(&self, _: Runtime<Self>) -> Result<()> {
+        Err(anyhow!("broken"))
+    }
+
+    fn on_fault(&self, tx: &mut Tx, task: &TaskRecord) -> Result<()> {
+        tx.put_doc("cleanup", &true)?;
+        tx.thread(&task.thread)?.push(Message::user("cleaning"))?;
+        tx.thread("elsewhere")?.push(Message::user("cleaning"))?;
+        tx.create_task::<Steps>(&task.thread, "never".into(), TaskOptions::default())?;
+        if task.input == true {
+            panic!("cleanup panicked");
+        }
+        Err(anyhow!("cleanup failed"))
+    }
+}
+
+#[tokio::test]
+async fn a_failing_cleanup_is_undone_alone() {
+    for panics in [false, true] {
+        let store = store();
+        let engine = engine(&store);
+        engine
+            .commit(|tx| tx.thread("t1")?.push(Message::user("before")))
+            .unwrap();
+        let id = engine
+            .create_task::<BreaksBadly>("t1", panics, TaskOptions::default())
+            .unwrap();
+        // The task still faults; nothing its cleanup did stays.
+        assert!(matches!(wait(&engine, id).await, Outcome::Faulted { .. }));
+        assert_eq!(engine.doc::<bool>("cleanup").unwrap(), None);
+        assert_eq!(messages(&engine, "t1"), ["before"]);
+        assert!(messages(&engine, "elsewhere").is_empty());
+        assert!(engine.task(id + 1).unwrap().is_none(), "no task created");
+        // And it stays so once stored.
+        engine.close().unwrap();
+        let reopened = engine_with(&store, Settings::default());
+        assert_eq!(messages(&reopened, "t1"), ["before"]);
+        assert!(reopened.live_tasks().is_empty());
+    }
 }

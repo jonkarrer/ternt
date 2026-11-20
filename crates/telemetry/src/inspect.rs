@@ -1,10 +1,10 @@
 //! Reading what happened: the state database (threads, tasks), the memory database, and the
 //! journal, laid side by side. Every command renders plain text, or JSON with `json`.
 
+use crate::time::{clock, us};
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, bail};
 use context::{Block, Message};
@@ -12,7 +12,7 @@ use rusqlite::{Connection, OpenFlags};
 use serde_json::{Value, json};
 use state::{Checkpoint, Checkpointer, Event, Sqlite, Thread};
 
-use crate::journal::{Entry, Filter, Journal, Severity, words};
+use crate::journal::{BODIES, Entry, Filter, Journal, Severity, as_text, words};
 
 /// What a command found: text for a person, JSON for a program.
 pub struct Output {
@@ -70,8 +70,18 @@ impl Inspector {
         Ok(Self::new(Arc::new(store), journal, memory))
     }
 
-    pub fn journal(&self) -> &Journal {
-        &self.journal
+    /// Re-sends a recorded model call (`replay::resend`), as it was or with `body` instead.
+    pub async fn replay(&self, id: i64, body: Option<Value>) -> Result<Output> {
+        let entry = self
+            .journal
+            .entry(id)?
+            .with_context(|| format!("no entry {id}"))?;
+        crate::replay::resend(&entry, body).await
+    }
+
+    /// Deletes journal entries older than `before` (µs since the epoch). Returns how many.
+    pub fn prune(&self, before: u64) -> Result<usize> {
+        self.journal.prune(before)
     }
 
     /// The latest `n` turns across threads, newest first, with their warnings and errors.
@@ -110,7 +120,7 @@ impl Inspector {
                 "checkpoint": turn.first,
                 "input": turn.input,
                 "answer": turn.answer,
-                "problems": problems.iter().map(Entry::to_json).collect::<Vec<_>>(),
+                "problems": entries_json(&problems),
             }));
         }
         if turns.is_empty() {
@@ -130,12 +140,19 @@ impl Inspector {
             limit: Some(200),
             ..Filter::default()
         })?;
-        Ok(entries_output(&entries, "no warnings or errors"))
+        let mut text: String = entries.iter().map(|e| format!("{}\n", line(e))).collect();
+        if entries.is_empty() {
+            text = "no warnings or errors\n".into();
+        }
+        Ok(Output {
+            text,
+            json: entries_json(&entries),
+        })
     }
 
     /// Where the conversation, the journal and memory mention these words.
     pub fn search(&self, text: &str, limit: usize) -> Result<Output> {
-        let wanted: BTreeSet<String> = words(text).filter(|w| w.len() > 2).collect();
+        let wanted = query_words(text);
         let mut said = Vec::new();
         for info in self.store.threads()? {
             for checkpoint in self.store.load(&info.id)? {
@@ -143,8 +160,7 @@ impl Inspector {
                     continue;
                 };
                 let content = message_text(message);
-                let found: BTreeSet<String> = words(&content).collect();
-                let score = wanted.intersection(&found).count();
+                let score = score(&wanted, &content);
                 if score > 0 {
                     said.push((score, info.id.clone(), checkpoint, content));
                 }
@@ -182,7 +198,7 @@ impl Inspector {
                     "score": score, "thread": thread, "checkpoint": c.id, "turn": c.turn,
                     "at": us(c.at), "text": content,
                 })).collect::<Vec<_>>(),
-                "journal": traced.iter().map(Entry::to_json).collect::<Vec<_>>(),
+                "journal": entries_json(&traced),
                 "memory": remembered,
             }),
         })
@@ -241,20 +257,12 @@ impl Inspector {
     /// A task as stored, the tasks it owns, and its journal entries.
     pub fn task(&self, id: i64) -> Result<Output> {
         let (task, owned) = self.store.read(|conn| {
-            let row = |sql: &str| -> Result<Vec<Value>> {
-                let mut select = conn.prepare(sql)?;
-                let names: Vec<String> = select.column_names().map(String::from).collect();
-                let rows = select.query_map([id], |row| {
-                    let mut object = serde_json::Map::new();
-                    for (i, name) in names.iter().enumerate() {
-                        object.insert(name.clone(), column(row, i));
-                    }
-                    Ok(Value::Object(object))
-                })?;
-                Ok(rows.collect::<Result<_, _>>()?)
-            };
-            let task = row("SELECT * FROM tasks WHERE id = ?1")?;
-            let owned = row("SELECT id, kind, status FROM tasks WHERE owner = ?1 ORDER BY id")?;
+            let task = rows(conn, "SELECT * FROM tasks WHERE id = ?1", [id])?;
+            let owned = rows(
+                conn,
+                "SELECT id, kind, status FROM tasks WHERE owner = ?1 ORDER BY id",
+                [id],
+            )?;
             Ok((task.into_iter().next(), owned))
         })?;
         let Some(task) = task else {
@@ -278,7 +286,7 @@ impl Inspector {
             json: json!({
                 "task": task,
                 "owns": owned,
-                "journal": entries.iter().map(Entry::to_json).collect::<Vec<_>>(),
+                "journal": entries_json(&entries),
             }),
         })
     }
@@ -325,7 +333,7 @@ impl Inspector {
         if self.memory.is_none() {
             bail!("no memory database (pass --memory <path>)");
         }
-        let wanted: BTreeSet<String> = words(text).filter(|w| w.len() > 2).collect();
+        let wanted = query_words(text);
         let rows = self.memory_matching(&wanted, limit)?;
         let mut out = String::new();
         for row in &rows {
@@ -362,21 +370,10 @@ impl Inspector {
         ];
         let mut found = Vec::new();
         for (kind, sql) in sources {
-            let mut select = conn.prepare(sql)?;
-            let names: Vec<String> = select.column_names().map(String::from).collect();
-            let rows = select.query_map([], |row| {
-                let mut object = serde_json::Map::new();
-                object.insert("kind_of".into(), kind.into());
-                for (i, name) in names.iter().enumerate() {
-                    object.insert(name.clone(), column(row, i));
-                }
-                Ok(Value::Object(object))
-            })?;
-            for row in rows {
-                let row = row?;
+            for mut row in rows(conn, sql, [])? {
+                row["kind_of"] = kind.into();
                 let content = row.to_string();
-                let found_words: BTreeSet<String> = words(&content).collect();
-                let score = wanted.intersection(&found_words).count();
+                let score = score(wanted, &content);
                 if score > 0 {
                     found.push((score, row));
                 }
@@ -460,40 +457,36 @@ fn window(checkpoints: &[Checkpoint], turn: u32) -> Result<(Option<u64>, Option<
     Ok((Some(since), until))
 }
 
-fn entries_output(entries: &[Entry], empty: &str) -> Output {
-    let mut text: String = entries.iter().map(|e| format!("{}\n", line(e))).collect();
-    if entries.is_empty() {
-        text = format!("{empty}\n");
-    }
-    Output {
-        text,
-        json: entries
-            .iter()
-            .map(Entry::to_json)
-            .collect::<Vec<_>>()
-            .into(),
-    }
+fn entries_json(entries: &[Entry]) -> Value {
+    entries.iter().map(Entry::to_json).collect()
+}
+
+/// The words of a question worth matching on.
+fn query_words(text: &str) -> BTreeSet<String> {
+    words(text).filter(|w| w.len() > 2).collect()
+}
+
+/// How many of the wanted words `text` has.
+fn score(wanted: &BTreeSet<String>, text: &str) -> usize {
+    let found: BTreeSet<String> = words(text).collect();
+    wanted.intersection(&found).count()
 }
 
 /// Task bookkeeping a timeline leaves out unless asked: every phase commits one.
 const ROUTINE: &[&str] = &["task state", "task completed"];
 
 /// A journal entry on one line: when, its ID, level, message, and its small fields.
-pub fn line(entry: &Entry) -> String {
-    const CONTEXTUAL: &[&str] = &["thread", "request", "response"];
+fn line(entry: &Entry) -> String {
     // Flags and counters that are almost always off: shown only when set.
     const USUALLY_OFF: &[&str] = &["aborting", "abort", "restarts", "replayed"];
     let mut fields = String::new();
     for (key, value) in &entry.fields {
         let off = matches!(value, Value::Bool(false)) || value == 0;
-        if CONTEXTUAL.contains(&key.as_str()) || (off && USUALLY_OFF.contains(&key.as_str())) {
+        let key = key.as_str();
+        if key == "thread" || BODIES.contains(&key) || (off && USUALLY_OFF.contains(&key)) {
             continue;
         }
-        let value = match value {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        fields += &format!(" {key}={}", clip(&value, 120));
+        fields += &format!(" {key}={}", clip(&as_text(value), 120));
     }
     let mut text = format!(
         "{}  [e{}] {:<5} {}{}",
@@ -503,10 +496,8 @@ pub fn line(entry: &Entry) -> String {
         entry.message,
         fields
     );
-    if entry.fields.contains_key("request") {
-        text += "  (full call: entry ";
-        text += &entry.id.to_string();
-        text += ")";
+    if BODIES.iter().any(|body| entry.fields.contains_key(*body)) {
+        text += &format!("  (full call: entry {})", entry.id);
     }
     text
 }
@@ -560,10 +551,7 @@ fn memory_line(row: &Value) -> String {
     let text = row
         .get("body")
         .or(row.get("text"))
-        .map(|v| match v {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
-        })
+        .map(as_text)
         .unwrap_or_default();
     let mut label = format!("{kind} {}", row["id"]);
     if kind == "item" {
@@ -605,6 +593,20 @@ fn message_text(message: &Message) -> String {
     parts.join(" ")
 }
 
+/// The rows `sql` selects, each as a JSON object of its columns.
+fn rows(conn: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<Vec<Value>> {
+    let mut select = conn.prepare(sql)?;
+    let names: Vec<String> = select.column_names().map(String::from).collect();
+    let rows = select.query_map(params, |row| {
+        let object = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), column(row, i)));
+        Ok(Value::Object(object.collect()))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 fn column(row: &rusqlite::Row, i: usize) -> Value {
     use rusqlite::types::ValueRef;
     match row.get_ref(i) {
@@ -622,64 +624,12 @@ fn column(row: &rusqlite::Row, i: usize) -> Value {
 }
 
 /// At most `max` characters, on one line.
-fn clip(text: &str, max: usize) -> String {
+pub fn clip(text: &str, max: usize) -> String {
     let flat = text.replace('\n', " ⏎ ");
     match flat.chars().count() > max {
         true => format!("{}…", flat.chars().take(max).collect::<String>()),
         false => flat,
     }
-}
-
-/// µs since the epoch: checkpoints and journal entries are both timed to the microsecond, so
-/// a timeline can put them in the order they happened.
-fn us(at: SystemTime) -> u64 {
-    at.duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_micros() as u64)
-}
-
-/// `2026-11-20 14:03:12.120Z` from µs since the epoch: UTC, to the millisecond.
-pub fn clock(us: u64) -> String {
-    let ms = us / 1000;
-    let secs = ms / 1000;
-    let (days, rem) = (secs / 86_400, secs % 86_400);
-    // Days since the epoch to a civil date (Howard Hinnant's algorithm).
-    let z = days as i64 + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!(
-        "{year}-{month:02}-{day:02} {:02}:{:02}:{:02}.{:03}Z",
-        rem / 3600,
-        rem % 3600 / 60,
-        rem % 60,
-        ms % 1000
-    )
-}
-
-/// `90s`, `30m`, `2h`, `7d` → µs.
-pub fn duration(text: &str) -> Result<u64> {
-    let (number, unit) = text.split_at(text.len().saturating_sub(1));
-    let n: u64 = number
-        .parse()
-        .with_context(|| format!("not a duration: {text}"))?;
-    let seconds = match unit {
-        "s" => 1,
-        "m" => 60,
-        "h" => 3_600,
-        "d" => 86_400,
-        _ => bail!("not a duration: {text} (use s, m, h or d)"),
-    };
-    Ok(n * seconds * 1_000_000)
-}
-
-/// µs since the epoch, now.
-pub fn now() -> u64 {
-    us(SystemTime::now())
 }
 
 #[cfg(test)]

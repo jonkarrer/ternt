@@ -4,7 +4,7 @@
 use std::time::Instant;
 
 use anyhow::{Context as _, Result, bail, ensure};
-use inference::providers::{Anthropic, Api, OpenAi};
+use inference::providers::Api;
 use inference::{Provider, Response};
 use serde_json::{Value, json};
 
@@ -28,24 +28,10 @@ pub async fn resend(entry: &Entry, body: Option<Value>) -> Result<Output> {
     let key = |var: &str| std::env::var(var).with_context(|| format!("{var} is not set"));
     let started = Instant::now();
     let (raw, response) = match provider {
-        "Anthropic" => {
-            send(
-                Provider::anthropic(&key("ANTHROPIC_API_KEY")?),
-                Anthropic,
-                &body,
-            )
-            .await?
-        }
-        "Baseten" => send(Provider::baseten(&key("BASETEN_API_KEY")?), OpenAi, &body).await?,
-        "OpenAI" => send(Provider::openai(&key("OPENAI_API_KEY")?), OpenAi, &body).await?,
-        "Fireworks" => {
-            send(
-                Provider::fireworks(&key("FIREWORKS_API_KEY")?),
-                OpenAi,
-                &body,
-            )
-            .await?
-        }
+        "Anthropic" => send(Provider::anthropic(&key("ANTHROPIC_API_KEY")?), &body).await?,
+        "Baseten" => send(Provider::baseten(&key("BASETEN_API_KEY")?), &body).await?,
+        "OpenAI" => send(Provider::openai(&key("OPENAI_API_KEY")?), &body).await?,
+        "Fireworks" => send(Provider::fireworks(&key("FIREWORKS_API_KEY")?), &body).await?,
         other => bail!("can't replay calls to {other}"),
     };
     let ms = started.elapsed().as_millis() as u64;
@@ -53,7 +39,7 @@ pub async fn resend(entry: &Entry, body: Option<Value>) -> Result<Output> {
     let field = |name: &str| entry.fields.get(name).cloned().unwrap_or(Value::Null);
     let before = match entry.fields.get("error") {
         Some(error) => format!("failed: {error}"),
-        None => text_of(&field("text")),
+        None => crate::journal::as_text(&field("text")),
     };
     let after = response.as_ref().map(|r| r.message.text());
     let calls: Vec<String> = response
@@ -83,22 +69,9 @@ pub async fn resend(entry: &Entry, body: Option<Value>) -> Result<Output> {
     })
 }
 
-async fn send<A: Api>(
-    provider: Provider<A>,
-    api: A,
-    body: &Value,
-) -> Result<(Value, Option<Response>)> {
-    let raw = provider.send(body).await?;
-    let response = serde_json::from_value(raw.clone())
-        .ok()
-        .and_then(|reply| api.response(reply));
+async fn send<A: Api>(provider: Provider<A>, body: &Value) -> Result<(Value, Option<Response>)> {
+    let text = provider.post(serde_json::to_string(body)?).await?;
+    let response = provider.read(&text).ok();
+    let raw = serde_json::from_str(&text).unwrap_or(Value::String(text));
     Ok((raw, response))
-}
-
-fn text_of(value: &Value) -> String {
-    match value {
-        Value::String(s) => s.clone(),
-        Value::Null => String::new(),
-        other => other.to_string(),
-    }
 }

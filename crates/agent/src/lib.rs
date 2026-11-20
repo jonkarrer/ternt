@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use state::{Event, Thread};
 
-use interface::{Input, Rejected, Sent, Status, Submission, WhenBusy};
+use interface::{Doing, Input, Rejected, Sent, Status, Submission, WhenBusy};
 
 /// What the agent loop calls for each request.
 pub trait Model: Send + Sync + 'static {
@@ -135,9 +135,34 @@ impl NewThreads {
     }
 }
 
-/// The submission a document key holds, if it holds one: for reading `Engine::subscribe`.
-pub fn submission_in(key: &str) -> Option<&str> {
-    key.strip_prefix("agent/submission/")
+/// The submission a written document holds, if it is one: for reading `Engine::subscribe`.
+pub fn submission_in(key: &str, value: Option<&Value>) -> Option<Submission> {
+    key.strip_prefix(inbox::SUBMISSION_PREFIX)?;
+    let record: Record = serde_json::from_value(value?.clone()).ok()?;
+    Some(record.shown)
+}
+
+/// What a task, as a commit left it (`Engine::subscribe`), shows someone watching: work that
+/// started on a thread. `None` for the rest of the agent's bookkeeping.
+pub fn doing(task: &engine::TaskRecord) -> Option<Doing> {
+    if task.state.status() != engine::Status::Running {
+        return None;
+    }
+    match task.kind.as_str() {
+        generation::NAME => match task.state.checkpoint_as()? {
+            generation::State::Consider { .. } => Some(Doing::Remembering),
+            generation::State::Request { .. } => Some(Doing::Thinking),
+            _ => None,
+        },
+        ToolCall::NAME => match task.state.checkpoint_as()? {
+            tool::State::Call => {
+                let call: ToolCallInput = serde_json::from_value(task.input.clone()).ok()?;
+                Some(Doing::Tool { name: call.name })
+            }
+            tool::State::Execute { .. } => None,
+        },
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -217,7 +242,7 @@ pub(crate) type Work = for<'a> fn(&'a dyn Mind, &'a mut Thread) -> MindFuture<'a
 pub(crate) async fn think<T: Task>(
     rt: &Runtime<T>,
     mind: &dyn Mind,
-    (name, work): (&'static str, Work),
+    work: Work,
     next: Next<T::State, T::Output>,
 ) -> Result<()> {
     let mut copy = rt.thread(|t| t.snapshot())?;
@@ -227,7 +252,8 @@ pub(crate) async fn think<T: Task>(
         _ = rt.cancelled() => anyhow::bail!("cancelled"),
     };
     if let Err(error) = &result {
-        tracing::warn!(work = name, error = %format!("{error:#}"), "mind work failed; skipped");
+        // The phase (consider, dream, settle) is on the span it runs in.
+        tracing::warn!(error = %format!("{error:#}"), "mind work failed; skipped");
     }
     let events: Vec<Event> = copy.checkpoints()[base..]
         .iter()
@@ -239,7 +265,6 @@ pub(crate) async fn think<T: Task>(
             thread.append(events)?;
         } else if result.is_ok() && !events.is_empty() {
             tracing::warn!(
-                work = name,
                 lost = events.len(),
                 "mind work discarded: the thread changed meanwhile"
             );
@@ -286,7 +311,6 @@ impl Draft {
 pub(crate) struct Record {
     #[serde(flatten)]
     pub shown: Submission,
-    pub request_id: Option<String>,
     pub when_busy: WhenBusy,
     /// The run it was placed in.
     pub run: Option<TaskId>,
@@ -317,12 +341,8 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn new(engine: Engine) -> Self {
-        Self::with_new_threads(engine, NewThreads::default())
-    }
-
     /// Threads this agent starts get `new_threads`' system prompt and tools.
-    pub fn with_new_threads(engine: Engine, new_threads: NewThreads) -> Self {
+    pub fn new(engine: Engine, new_threads: NewThreads) -> Self {
         Self {
             engine,
             new_threads: Arc::new(new_threads),
@@ -336,16 +356,15 @@ impl Agent {
     /// Stops the thread's run, if one is running: its inputs, and those queued behind it, are
     /// settled unanswered. Returns whether there was one.
     pub fn abort(&self, thread: &str) -> Result<bool> {
-        self.engine.commit(|tx| {
-            let inbox: inbox::Inbox = tx.doc(&inbox::inbox_key(thread))?.unwrap_or_default();
-            match inbox.run.filter(|&run| tx.task(run).is_some()) {
+        self.engine.commit(
+            |tx| match inbox::load(tx, thread)?.run.filter(|&run| tx.is_live(run)) {
                 Some(run) => {
                     tx.abort_task(run, "stopped by the user")?;
                     Ok(true)
                 }
                 None => Ok(false),
-            }
-        })
+            },
+        )
     }
 
     /// Admits an input: to the thread it names, or else routed to a thread (an existing one,
@@ -353,14 +372,7 @@ impl Agent {
     /// Fails with an `interface::Rejected` for an input it can't take (no text, say).
     pub async fn send<A: Api>(&self, router: &router::Router<A>, input: Input) -> Result<Sent> {
         let draft = Draft::of(&input)?;
-        if let Some(thread) = input.thread {
-            let submission = self.submit_draft(&thread, draft)?;
-            return Ok(Sent {
-                thread,
-                submission,
-                route: None,
-            });
-        }
+        // A request ID already submitted finds that submission, wherever it went.
         if let Some(request_id) = &draft.request_id
             && let Some(id) = self.engine.doc::<String>(&inbox::request_key(request_id))?
             && let Some(submission) = self.submission(&id)?
@@ -371,47 +383,51 @@ impl Agent {
                 route: None,
             });
         }
-        let now = std::time::SystemTime::now();
-        let store = self.engine.store().as_ref();
-        let threads = router.threads(store, now)?;
-        let routing = router::Input {
-            text: draft.text.clone(),
-            now,
-            last: self.engine.doc(LAST_THREAD)?,
+        let place = match input.thread {
+            Some(thread) => Place::Named(thread),
+            None => {
+                let now = std::time::SystemTime::now();
+                let store = self.engine.store().as_ref();
+                let threads = router.threads(store, now)?;
+                let routing = router::Input {
+                    text: draft.text.clone(),
+                    now,
+                    last: self.engine.doc(LAST_THREAD)?,
+                };
+                Place::Routed(router.route(store, &routing, &threads).await?)
+            }
         };
-        let route = router.route(store, &routing, &threads).await?;
+        self.admit(place, draft)
+    }
+
+    /// Admits an input to `thread` and returns its submission ID: `send` without a router.
+    #[cfg(test)]
+    pub(crate) fn submit(&self, thread: &str, input: Input) -> Result<String> {
+        let sent = self.admit(Place::Named(thread.to_string()), Draft::of(&input)?)?;
+        Ok(sent.submission)
+    }
+
+    fn admit(&self, place: Place, draft: Draft) -> Result<Sent> {
         let text = draft.text.clone();
         let sent = self
             .engine
-            .commit(|tx| admit(tx, &self.new_threads, route, draft))?;
-        if let Some(route) = &sent.route {
-            tracing::info!(
+            .commit(|tx| admit(tx, &self.new_threads, place, draft))?;
+        match &sent.route {
+            // The router traced its decision, with the text.
+            Some(route) => tracing::info!(
                 thread = %sent.thread,
                 submission = %sent.submission,
-                by = %route.by,
-                reason = %route.reason,
                 new = route.new,
-                text = %text,
                 "input routed"
-            );
+            ),
+            None => tracing::info!(
+                thread = %sent.thread,
+                submission = %sent.submission,
+                text = %text,
+                "input submitted"
+            ),
         }
         Ok(sent)
-    }
-
-    /// Admits an input to `thread` durably and returns its submission ID; the thread it names,
-    /// if any, is ignored.
-    pub fn submit(&self, thread: &str, input: Input) -> Result<String> {
-        self.submit_draft(thread, Draft::of(&input)?)
-    }
-
-    fn submit_draft(&self, thread: &str, draft: Draft) -> Result<String> {
-        let (text, when_busy) = (draft.text.clone(), draft.when_busy);
-        let id = self.engine.commit(|tx| {
-            self.new_threads.set_up(tx, thread)?;
-            inbox::submit(tx, thread, draft)
-        })?;
-        tracing::info!(thread, submission = %id, when_busy = ?when_busy, text = %text, "input submitted");
-        Ok(id)
     }
 
     pub fn submission(&self, id: &str) -> Result<Option<Submission>> {
@@ -429,12 +445,13 @@ impl Agent {
                 if record.shown.is_settled() {
                     return Ok(Some(record.shown));
                 }
-                // A run that ended without settling its inputs (it faulted, say) never will:
-                // nothing else notices until the next submission, so recover from it here.
+                // A run that ended without settling its inputs never will: a version of the
+                // task without `on_fault` orphaned it, say. Recover from it here.
                 let thread = &record.shown.thread;
                 let inbox: inbox::Inbox =
                     engine.doc(&inbox::inbox_key(thread))?.unwrap_or_default();
                 if let Some(run) = inbox.run
+                    && !engine.is_live(run)
                     && let Some(ended) = engine.task(run)?.filter(|t| t.state.is_terminal())
                 {
                     let reason = format!("run ended: {:?}", ended.state.outcome());
@@ -446,14 +463,15 @@ impl Agent {
     }
 }
 
-/// Submits a routed input to its thread (an existing one, or a new one) and notes the route
-/// there. A request ID submitted since `send` checked (by another `send`) changes nothing.
-fn admit(
-    tx: &mut Tx,
-    new_threads: &NewThreads,
-    route: router::Route,
-    draft: Draft,
-) -> Result<Sent> {
+/// Where an input goes: the thread it names, or where the router sent it.
+enum Place {
+    Named(String),
+    Routed(router::Route),
+}
+
+/// Admits an input to its thread (named, routed to, or new), noting a route there. A request
+/// ID already submitted (by a `send` since the caller checked) changes nothing.
+fn admit(tx: &mut Tx, new_threads: &NewThreads, place: Place, draft: Draft) -> Result<Sent> {
     if let Some(submission) = inbox::existing(tx, &draft)? {
         return Ok(Sent {
             thread: inbox::submission(tx, &submission)?.shown.thread,
@@ -461,28 +479,42 @@ fn admit(
             route: None,
         });
     }
-    let thread = match &route.target {
-        router::Target::Continue(id) => id.clone(),
-        router::Target::New => {
-            let n: u64 = tx.doc("agent/next-thread")?.unwrap_or(1);
-            tx.put_doc("agent/next-thread", &(n + 1))?;
-            format!("thread-{n}")
-        }
+    let (thread, route) = match place {
+        Place::Named(thread) => (thread, None),
+        Place::Routed(route) => match &route.target {
+            router::Target::Continue(id) => (id.clone(), Some(route)),
+            router::Target::New => (new_thread(tx)?, Some(route)),
+        },
     };
     new_threads.set_up(tx, &thread)?;
-    tx.thread(&thread)?
-        .routed(route.by.as_str(), &route.reason)?;
+    if let Some(route) = &route {
+        tx.thread(&thread)?
+            .routed(route.by.as_str(), &route.reason)?;
+    }
     let submission = inbox::submit(tx, &thread, draft)?;
     tx.put_doc(LAST_THREAD, &thread)?;
     Ok(Sent {
         thread,
         submission,
-        route: Some(interface::Route {
+        route: route.map(|route| interface::Route {
             by: route.by.as_str().to_string(),
             new: matches!(route.target, router::Target::New),
             reason: route.reason,
         }),
     })
+}
+
+/// The next free `thread-N`: a name an input took explicitly is skipped.
+fn new_thread(tx: &mut Tx) -> Result<String> {
+    let mut n: u64 = tx.doc("agent/next-thread")?.unwrap_or(1);
+    loop {
+        let id = format!("thread-{n}");
+        n += 1;
+        if tx.thread(&id)?.checkpoints().is_empty() {
+            tx.put_doc("agent/next-thread", &n)?;
+            return Ok(id);
+        }
+    }
 }
 
 #[cfg(test)]
