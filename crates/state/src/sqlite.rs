@@ -7,7 +7,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context as _, Result};
 use rusqlite::{Connection, params};
 
-use crate::{Checkpoint, Checkpointer};
+use context::Message;
+
+use crate::{Checkpoint, Checkpointer, ThreadInfo};
 
 pub struct Sqlite {
     conn: Mutex<Connection>,
@@ -92,7 +94,7 @@ impl Checkpointer for Sqlite {
                 id: id as usize,
                 turn,
                 step,
-                at: SystemTime::UNIX_EPOCH + Duration::from_nanos(at_ns as u64),
+                at: from_nanos(at_ns),
                 event: serde_json::from_str(&event)
                     .with_context(|| format!("{thread_id} checkpoint {id}"))?,
             })
@@ -100,12 +102,76 @@ impl Checkpointer for Sqlite {
         .collect()
     }
 
-    fn threads(&self) -> Result<Vec<String>> {
+    fn recent_messages(&self, thread_id: &str, n: usize) -> Result<Vec<Message>> {
+        self.recent(thread_id, n)
+    }
+
+    fn threads(&self) -> Result<Vec<ThreadInfo>> {
         let conn = self.conn.lock().unwrap();
-        let mut select =
-            conn.prepare_cached("SELECT DISTINCT thread_id FROM checkpoints ORDER BY thread_id")?;
-        let ids = select.query_map([], |row| row.get(0))?;
-        Ok(ids.collect::<Result<_, _>>()?)
+        let mut select = conn.prepare_cached(
+            "SELECT thread_id, MAX(turn), COUNT(*), MIN(at_ns), MAX(at_ns),
+                 COALESCE(MAX(CASE WHEN json_extract(event, '$.type') = 'message' THEN at_ns END), MIN(at_ns)) AS active,
+                 (SELECT json_extract(first.event, '$.data') FROM checkpoints first
+                  WHERE first.thread_id = c.thread_id AND json_extract(first.event, '$.type') = 'message'
+                  ORDER BY first.id LIMIT 1)
+             FROM checkpoints c GROUP BY thread_id ORDER BY active DESC, thread_id",
+        )?;
+        let rows = select.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, u32>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, Option<String>>(6)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (id, turns, checkpoints, created, updated, active, first) = row?;
+            let first: Option<Message> = first.map(|m| serde_json::from_str(&m)).transpose()?;
+            Ok(ThreadInfo {
+                id,
+                title: first.map(|m| title(&m.text())).unwrap_or_default(),
+                turns,
+                checkpoints: checkpoints as usize,
+                created_at: from_nanos(created),
+                updated_at: from_nanos(updated),
+                active_at: from_nanos(active),
+            })
+        })
+        .collect()
+    }
+}
+
+impl Sqlite {
+    fn recent(&self, thread_id: &str, n: usize) -> Result<Vec<Message>> {
+        let conn = self.conn.lock().unwrap();
+        // Walks the thread's rows backwards on the primary key and stops after `n` messages.
+        let mut select = conn.prepare_cached(
+            "SELECT json_extract(event, '$.data') FROM checkpoints
+             WHERE thread_id = ?1 AND json_extract(event, '$.type') = 'message'
+             ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = select.query_map(params![thread_id, n as i64], |row| row.get::<_, String>(0))?;
+        let mut messages = rows
+            .map(|json| Ok(serde_json::from_str(&json?)?))
+            .collect::<Result<Vec<Message>>>()?;
+        messages.reverse();
+        Ok(messages)
+    }
+}
+
+fn from_nanos(ns: i64) -> SystemTime {
+    UNIX_EPOCH + Duration::from_nanos(ns as u64)
+}
+
+/// The first line, cut to 60 characters.
+fn title(text: &str) -> String {
+    let line = text.lines().next().unwrap_or_default().trim();
+    match line.char_indices().nth(60) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line.to_string(),
     }
 }
 
@@ -147,6 +213,34 @@ mod tests {
     }
 
     #[test]
+    fn threads_are_listed_by_activity() {
+        let store = Arc::new(Sqlite::memory().unwrap());
+        let mut paris = Thread::open("paris", store.clone()).unwrap();
+        tool_turn(&mut paris, "Weather in Paris?\nAnd a second line.");
+        let mut rome = Thread::open("rome", store.clone()).unwrap();
+        rome.start_turn(Message::user("Weather in Rome?")).unwrap();
+        // Not activity: routing and compaction leave `active_at` alone.
+        paris.routed("rule", "test").unwrap();
+
+        let threads = store.threads().unwrap();
+        let ids: Vec<_> = threads.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["rome", "paris"]);
+        let paris = &threads[1];
+        assert_eq!(
+            (paris.title.as_str(), paris.turns),
+            ("Weather in Paris?", 1)
+        );
+        assert!(paris.updated_at > paris.active_at);
+        assert_eq!(paris.checkpoints, 9);
+
+        let recent = store.recent_messages("paris", 2).unwrap();
+        let texts: Vec<_> = recent.iter().map(|m| m.text()).collect();
+        // The tool result, then the reply.
+        assert_eq!(texts, ["", "18C and sunny."]);
+        assert!(store.recent_messages("nobody", 2).unwrap().is_empty());
+    }
+
+    #[test]
     fn fork_is_saved_and_listed() {
         let store = Arc::new(Sqlite::memory().unwrap());
         let mut thread = Thread::open("t1", store.clone()).unwrap();
@@ -154,7 +248,8 @@ mod tests {
         let mut branch = thread.fork(3, "t2").unwrap();
         branch.push(Message::assistant("Rome instead?")).unwrap();
 
-        assert_eq!(store.threads().unwrap(), ["t1", "t2"]);
+        let ids: Vec<_> = store.threads().unwrap().into_iter().map(|t| t.id).collect();
+        assert_eq!(ids, ["t2", "t1"]);
         let reopened = Thread::open("t2", store.clone()).unwrap();
         assert_eq!(reopened.context(), branch.context());
 

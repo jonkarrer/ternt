@@ -1,0 +1,13 @@
+[package]
+name = "attention"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+context.workspace = true
+regex.workspace = true
+state.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

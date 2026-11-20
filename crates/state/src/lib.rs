@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::{Result, ensure};
-use context::{Context, Message, Tool};
+use context::{Block, Context, Message, Role, Tool};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -38,6 +38,39 @@ pub enum Event {
         with: Vec<Message>,
     },
     TurnEnded,
+    /// Experience looked at every checkpoint before `upto` and brought `recalled` into the
+    /// context, shown as a text block where it happened (never by editing earlier messages).
+    Considered {
+        upto: usize,
+        recalled: Vec<Recalled>,
+    },
+    /// An incoming message was placed in this thread: by what (rule, search, model) and why.
+    /// Kept as training data for a learned router; the model never sees it.
+    Routed {
+        by: String,
+        reason: String,
+    },
+}
+
+/// What a thread list shows, without loading every checkpoint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThreadInfo {
+    pub id: String,
+    /// The start of the first message.
+    pub title: String,
+    pub turns: u32,
+    pub checkpoints: usize,
+    pub created_at: SystemTime,
+    pub updated_at: SystemTime,
+    /// The last message, from anyone. Unlike `updated_at`, not moved by compaction or routing.
+    pub active_at: SystemTime,
+}
+
+/// A memory brought into the context.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Recalled {
+    pub id: i64,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,7 +90,10 @@ pub trait Checkpointer: Send + Sync {
     fn save(&self, thread_id: &str, checkpoints: &[Checkpoint]) -> Result<()>;
     /// A thread's checkpoints in order; empty if it doesn't exist.
     fn load(&self, thread_id: &str) -> Result<Vec<Checkpoint>>;
-    fn threads(&self) -> Result<Vec<String>>;
+    /// Every thread, most recently active first.
+    fn threads(&self) -> Result<Vec<ThreadInfo>>;
+    /// A thread's last `n` messages, oldest first, without loading the rest of it.
+    fn recent_messages(&self, thread_id: &str, n: usize) -> Result<Vec<Message>>;
 }
 
 /// Runs after every recorded event and may record more. Events recorded from inside a hook
@@ -171,6 +207,31 @@ impl Thread {
         self.record(Event::Replaced { range, with })
     }
 
+    /// Records how far Experience has looked, and what it recalled.
+    pub fn considered(&mut self, upto: usize, recalled: Vec<Recalled>) -> Result<()> {
+        self.record(Event::Considered { upto, recalled })
+    }
+
+    /// Where Experience should look from next: just past the last `Considered`.
+    pub fn considered_upto(&self) -> usize {
+        self.checkpoints
+            .iter()
+            .rev()
+            .find_map(|c| match c.event {
+                Event::Considered { upto, .. } => Some(upto),
+                _ => None,
+            })
+            .unwrap_or(0)
+    }
+
+    /// Notes where an incoming message was placed, and why.
+    pub fn routed(&mut self, by: impl Into<String>, reason: impl Into<String>) -> Result<()> {
+        self.record(Event::Routed {
+            by: by.into(),
+            reason: reason.into(),
+        })
+    }
+
     /// Does nothing outside a turn.
     pub fn end_turn(&mut self) -> Result<()> {
         if self.position.in_turn {
@@ -267,7 +328,25 @@ fn apply(ctx: &mut Context, event: &Event) {
         Event::Replaced { range, with } => {
             ctx.messages.splice(range.clone(), with.iter().cloned());
         }
-        Event::TurnStarted | Event::StepStarted | Event::TurnEnded => {}
+        Event::Considered { recalled, .. } if !recalled.is_empty() => {
+            let lines: Vec<String> = recalled.iter().map(|r| format!("- {}", r.text)).collect();
+            let block = Block::Text {
+                text: format!("<recalled>\n{}\n</recalled>", lines.join("\n")),
+            };
+            // Joins the user's message (or tool results) it answers; adds one if there is none.
+            match ctx.messages.last_mut() {
+                Some(last) if last.role == Role::User => last.content.push(block),
+                _ => ctx.messages.push(Message {
+                    role: Role::User,
+                    content: vec![block],
+                }),
+            }
+        }
+        Event::TurnStarted
+        | Event::StepStarted
+        | Event::TurnEnded
+        | Event::Considered { .. }
+        | Event::Routed { .. } => {}
     }
 }
 
@@ -384,6 +463,27 @@ pub(crate) mod tests {
         assert_eq!(branch.turn(), 2);
         assert_eq!(thread.context().messages.len(), 8);
         assert_eq!(branch.context().messages.len(), 5);
+    }
+
+    #[test]
+    fn recalled_joins_the_users_message() {
+        let mut thread = Thread::new("t1");
+        thread.start_turn(Message::user("What's my name?")).unwrap();
+        assert_eq!(thread.considered_upto(), 0);
+        let upto = thread.checkpoints().len();
+        let recalled = vec![Recalled {
+            id: 7,
+            text: "The user's name is Jon.".into(),
+        }];
+        thread.considered(upto, recalled).unwrap();
+        assert_eq!(thread.considered_upto(), upto);
+
+        let messages = &thread.context().messages;
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].text(),
+            "What's my name?<recalled>\n- The user's name is Jon.\n</recalled>"
+        );
     }
 
     /// A hook that compacts before each step once the context passes 4 messages.
