@@ -7,43 +7,60 @@ pub use anthropic::Anthropic;
 pub use anyhow::Result;
 pub use openai::OpenAi;
 
-use anyhow::{Context, bail};
+use anyhow::{Context as _, bail};
+use context::{Context, Message};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    System,
-    User,
-    Assistant,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Message {
-    pub role: Role,
-    pub content: String,
-}
-
-impl Message {
-    pub fn new(role: Role, content: impl Into<String>) -> Self {
-        Self {
-            role,
-            content: content.into(),
-        }
-    }
-}
-
+/// Per-call settings. What the model sees lives in `Context`.
+/// `None` leaves a setting at the model's default.
 #[derive(Debug, Clone)]
 pub struct Request {
     pub model: String,
-    pub messages: Vec<Message>,
     pub max_tokens: Option<u32>,
+    /// `true` turns thinking on and asks for its text back; `false` turns it off.
+    /// Some models reject one or the other (Opus 5.5 always thinks).
+    pub thinking: Option<bool>,
+    /// How hard the model works: depth of thinking, length of answers, number of tool calls.
+    pub effort: Option<Effort>,
 }
 
+impl Request {
+    pub fn new(model: impl Into<String>) -> Self {
+        Self {
+            model: model.into(),
+            max_tokens: None,
+            thinking: None,
+            effort: None,
+        }
+    }
+
+    pub fn thinking(mut self, on: bool) -> Self {
+        self.thinking = Some(on);
+        self
+    }
+
+    pub fn effort(mut self, effort: Effort) -> Self {
+        self.effort = Some(effort);
+        self
+    }
+}
+
+/// Sent as-is; a model that lacks a level returns an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Effort {
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+/// The model's turn, ready to `ctx.push(res.message)`.
 #[derive(Debug, Clone)]
 pub struct Response {
-    pub text: String,
+    pub message: Message,
     pub input_tokens: u32,
     pub output_tokens: u32,
 }
@@ -51,7 +68,7 @@ pub struct Response {
 /// How a format builds the request body and reads the reply.
 pub trait Api {
     type Reply: DeserializeOwned;
-    fn body(&self, req: &Request) -> Value;
+    fn body(&self, req: &Request, ctx: &Context) -> Value;
     fn response(&self, reply: Self::Reply) -> Option<Response>;
 }
 
@@ -79,8 +96,8 @@ impl<A: Api> Provider<A> {
         }
     }
 
-    pub async fn chat(&self, req: &Request) -> Result<Response> {
-        let mut builder = self.http.post(self.url).json(&self.api.body(req));
+    pub async fn chat(&self, req: &Request, ctx: &Context) -> Result<Response> {
+        let mut builder = self.http.post(self.url).json(&self.api.body(req, ctx));
         for (key, value) in &self.headers {
             builder = builder.header(*key, value);
         }
@@ -94,7 +111,7 @@ impl<A: Api> Provider<A> {
 
         self.api
             .response(res.json().await.context(self.name)?)
-            .with_context(|| format!("{} returned no reply text", self.name))
+            .with_context(|| format!("{} returned no reply", self.name))
     }
 }
 

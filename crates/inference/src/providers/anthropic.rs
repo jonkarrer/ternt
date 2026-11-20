@@ -1,7 +1,8 @@
 //! Anthropic Messages API: system prompt is its own field, `max_tokens` is required,
 //! and the reply is a list of content blocks.
 
-use super::{Api, Provider, Request, Response, Role};
+use super::{Api, Provider, Request, Response};
+use context::{Block, Context, Message, Role};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -25,32 +26,95 @@ impl Provider<Anthropic> {
 impl Api for Anthropic {
     type Reply = MessageReply;
 
-    fn body(&self, req: &Request) -> Value {
-        let (system, messages): (Vec<_>, Vec<_>) =
-            req.messages.iter().partition(|m| m.role == Role::System);
+    fn body(&self, req: &Request, ctx: &Context) -> Value {
         let mut body = json!({
             "model": req.model,
             "max_tokens": req.max_tokens.unwrap_or(16_000),
-            "messages": messages,
+            "messages": ctx.messages.iter().map(message).collect::<Vec<_>>(),
         });
-        if !system.is_empty() {
-            let system: Vec<&str> = system.iter().map(|m| m.content.as_str()).collect();
-            body["system"] = system.join("\n\n").into();
+        match req.thinking {
+            Some(true) => body["thinking"] = json!({ "type": "adaptive", "display": "summarized" }),
+            Some(false) => body["thinking"] = json!({ "type": "disabled" }),
+            None => {}
+        }
+        if let Some(effort) = req.effort {
+            body["output_config"] = json!({ "effort": effort });
+        }
+        if let Some(system) = &ctx.system {
+            body["system"] = system.as_str().into();
+        }
+        if !ctx.tools.is_empty() {
+            // Anthropic's tool shape is exactly `Tool`: name, description, input_schema.
+            body["tools"] = json!(ctx.tools);
         }
         body
     }
 
     fn response(&self, reply: MessageReply) -> Option<Response> {
+        let content = reply
+            .content
+            .into_iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text, .. } => Some(Block::Text { text }),
+                ContentBlock::Thinking {
+                    thinking,
+                    signature,
+                } => Some(Block::Thinking {
+                    text: thinking,
+                    signature: Some(signature),
+                }),
+                ContentBlock::RedactedThinking { data } => Some(Block::RedactedThinking { data }),
+                ContentBlock::ToolUse {
+                    id, name, input, ..
+                } => Some(Block::ToolCall { id, name, input }),
+                // Server-tool blocks have no neutral form yet.
+                ContentBlock::Other(_) => None,
+            })
+            .collect();
         Some(Response {
-            text: reply
-                .content
-                .into_iter()
-                .filter_map(ContentBlock::text)
-                .collect(),
+            message: Message {
+                role: Role::Assistant,
+                content,
+            },
             input_tokens: reply.usage.input_tokens,
             output_tokens: reply.usage.output_tokens,
         })
     }
+}
+
+/// Unsigned thinking came from another vendor; Anthropic would reject it, so it's dropped.
+fn message(message: &Message) -> Value {
+    let content: Vec<Value> = message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            Block::Text { text } => Some(json!({ "type": "text", "text": text })),
+            Block::ToolCall { id, name, input } => {
+                Some(json!({ "type": "tool_use", "id": id, "name": name, "input": input }))
+            }
+            Block::ToolResult {
+                call_id,
+                content,
+                is_error,
+            } => Some(json!({
+                "type": "tool_result",
+                "tool_use_id": call_id,
+                "content": content,
+                "is_error": is_error,
+            })),
+            Block::Thinking {
+                text,
+                signature: Some(signature),
+            } => Some(json!({ "type": "thinking", "thinking": text, "signature": signature })),
+            Block::Thinking {
+                signature: None, ..
+            } => None,
+            Block::RedactedThinking { data } => {
+                Some(json!({ "type": "redacted_thinking", "data": data }))
+            }
+        })
+        .collect();
+    json!({ "role": message.role, "content": content })
 }
 
 /// Full Messages API reply.
@@ -69,6 +133,9 @@ pub struct MessageReply {
     pub stop_sequence: Option<String>,
     /// Set only when `stop_reason` is "refusal".
     pub stop_details: Option<Value>,
+    /// Code-execution container, when one was used.
+    pub container: Option<Value>,
+    pub diagnostics: Option<Value>,
     pub usage: Usage,
 }
 
@@ -90,25 +157,19 @@ pub enum ContentBlock {
         id: String,
         name: String,
         input: Value,
+        /// Who invoked the tool, e.g. `{"type": "direct"}`.
+        caller: Option<Value>,
     },
     /// Server tools, web search results, etc. Kept as raw JSON.
     #[serde(untagged)]
     Other(Value),
 }
 
-impl ContentBlock {
-    pub fn text(self) -> Option<String> {
-        match self {
-            ContentBlock::Text { text, .. } => Some(text),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Deserialize)]
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    pub output_tokens_details: Option<OutputTokensDetails>,
     pub cache_creation_input_tokens: Option<u32>,
     pub cache_read_input_tokens: Option<u32>,
     pub cache_creation: Option<Value>,
@@ -118,29 +179,100 @@ pub struct Usage {
     pub speed: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct OutputTokensDetails {
+    pub thinking_tokens: Option<u32>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::Message;
+    use crate::providers::Effort;
+    use context::Tool;
 
-    fn pong() -> Request {
-        Request {
-            model: "claude-opus-5-5".into(),
-            messages: vec![
-                Message::new(Role::System, "Be terse."),
-                Message::new(Role::User, "Reply with: pong"),
-            ],
-            max_tokens: None,
-        }
+    const MODEL: &str = "claude-opus-5-5";
+
+    fn pong_context() -> Context {
+        let mut ctx = Context::new("Be terse.");
+        ctx.push(Message::user("Reply with: pong"));
+        ctx
     }
 
     #[test]
-    fn system_moves_out_of_messages() {
-        let body = Anthropic.body(&pong());
+    fn system_and_tools_are_top_level() {
+        let mut ctx = pong_context();
+        ctx.register(Tool {
+            name: "weather".into(),
+            description: "Current weather".into(),
+            input_schema: json!({ "type": "object" }),
+        });
+        let body = Anthropic.body(&Request::new(MODEL), &ctx);
         assert_eq!(body["system"], "Be terse.");
         assert_eq!(
             body["messages"],
-            json!([{ "role": "user", "content": "Reply with: pong" }])
+            json!([{ "role": "user", "content": [{ "type": "text", "text": "Reply with: pong" }] }])
+        );
+        assert_eq!(
+            body["tools"],
+            json!([{ "name": "weather", "description": "Current weather", "input_schema": { "type": "object" } }])
+        );
+    }
+
+    #[test]
+    fn thinking_and_effort() {
+        let ctx = pong_context();
+        let body = Anthropic.body(
+            &Request::new(MODEL).thinking(true).effort(Effort::XHigh),
+            &ctx,
+        );
+        assert_eq!(
+            body["thinking"],
+            json!({ "type": "adaptive", "display": "summarized" })
+        );
+        assert_eq!(body["output_config"], json!({ "effort": "xhigh" }));
+
+        let body = Anthropic.body(&Request::new(MODEL).thinking(false), &ctx);
+        assert_eq!(body["thinking"], json!({ "type": "disabled" }));
+        assert!(body.get("output_config").is_none());
+
+        let body = Anthropic.body(&Request::new(MODEL), &ctx);
+        assert!(body.get("thinking").is_none());
+    }
+
+    #[test]
+    fn tool_round_trip_shapes() {
+        let mut ctx = Context::default();
+        ctx.push(Message {
+            role: Role::Assistant,
+            content: vec![
+                Block::Thinking {
+                    text: "signed".into(),
+                    signature: Some("sig".into()),
+                },
+                Block::Thinking {
+                    text: "from another vendor".into(),
+                    signature: None,
+                },
+                Block::ToolCall {
+                    id: "c1".into(),
+                    name: "weather".into(),
+                    input: json!({ "city": "Paris" }),
+                },
+            ],
+        });
+        ctx.push(Message::tool_result("c1", "18C"));
+        let body = Anthropic.body(&Request::new(MODEL), &ctx);
+        assert_eq!(
+            body["messages"],
+            json!([
+                { "role": "assistant", "content": [
+                    { "type": "thinking", "thinking": "signed", "signature": "sig" },
+                    { "type": "tool_use", "id": "c1", "name": "weather", "input": { "city": "Paris" } },
+                ]},
+                { "role": "user", "content": [
+                    { "type": "tool_result", "tool_use_id": "c1", "content": "18C", "is_error": false },
+                ]},
+            ])
         );
     }
 
@@ -159,17 +291,62 @@ mod tests {
         }))
         .unwrap();
         assert!(matches!(reply.content[2], ContentBlock::Other(_)));
-        assert_eq!(Anthropic.response(reply).unwrap().text, "pong");
+        assert_eq!(Anthropic.response(reply).unwrap().message.text(), "pong");
+    }
+
+    fn provider() -> Provider<Anthropic> {
+        Provider::anthropic(&std::env::var("ANTHROPIC_API_KEY").expect("set ANTHROPIC_API_KEY"))
     }
 
     #[tokio::test]
     #[ignore = "calls Anthropic"]
     async fn anthropic() {
-        let Ok(key) = std::env::var("ANTHROPIC_API_KEY") else {
-            return eprintln!("skipping: ANTHROPIC_API_KEY not set");
-        };
-        let res = Provider::anthropic(&key).chat(&pong()).await.unwrap();
+        let res = provider()
+            .chat(&Request::new(MODEL), &pong_context())
+            .await
+            .unwrap();
         println!("{res:?}");
-        assert!(!res.text.is_empty());
+        assert!(!res.message.text().is_empty());
+    }
+
+    /// Model calls the tool, we answer, model replies with text: the whole loop through `Context`.
+    #[tokio::test]
+    #[ignore = "calls Anthropic"]
+    async fn anthropic_tool_loop() {
+        let provider = provider();
+        // Thinking shown, so the second call sends signed thinking with text back.
+        let req = Request::new(MODEL).thinking(true).effort(Effort::High);
+        let mut ctx = Context::new("Use the weather tool to answer.");
+        ctx.register(Tool {
+            name: "weather".into(),
+            description: "Current weather for a city".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": { "city": { "type": "string" } },
+                "required": ["city"],
+            }),
+        });
+        ctx.push(Message::user(
+            "What is the weather in the capital of the country that won the 1998 FIFA World Cup? Work out which city first.",
+        ));
+
+        let res = provider.chat(&req, &ctx).await.unwrap();
+        assert!(res.message.content.iter().any(|b| matches!(
+            b,
+            Block::Thinking {
+                signature: Some(_),
+                ..
+            }
+        )));
+        let (id, name, input) = res.message.tool_calls().next().expect("a tool call");
+        assert_eq!(name, "weather");
+        println!("call: {input}");
+        let id = id.to_string();
+        ctx.push(res.message);
+        ctx.push(Message::tool_result(id, "18C and sunny"));
+
+        let res = provider.chat(&req, &ctx).await.unwrap();
+        println!("reply: {}", res.message.text());
+        assert!(res.message.text().contains("18"));
     }
 }
