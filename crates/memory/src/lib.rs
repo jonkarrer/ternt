@@ -395,6 +395,17 @@ impl Memory {
             self.index.remove(&[old.id])?;
         }
         self.index.upsert(&[document(&item)])?;
+        tracing::debug!(
+            id = item.id,
+            lineage = item.lineage,
+            version = item.version,
+            scope = item.scope.as_str(),
+            key = ?item.key,
+            kind = item.body.kind(),
+            source = ?item.source,
+            text = %item.body.text(),
+            "memory written"
+        );
         Ok(item)
     }
 
@@ -425,6 +436,7 @@ impl Memory {
             )?
             .query_map([id], |row| row.get(0))?
             .collect::<Result<_, _>>()?;
+        tracing::debug!(id, removed = ?ids, "memory forgotten");
         self.index.remove(&ids)
     }
 

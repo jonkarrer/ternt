@@ -63,7 +63,10 @@ impl Task for ToolCall {
     async fn run(&self, rt: Runtime<Self>) -> Result<()> {
         let call = rt.input();
         let output = match (rt.state(), self.tools.get(&call.name)) {
-            (_, None) => ToolOutput::error(format!("tool {} is not available", call.name)),
+            (_, None) => {
+                tracing::warn!(tool = %call.name, "the model called a tool that isn't available");
+                ToolOutput::error(format!("tool {} is not available", call.name))
+            }
             // Like pi-durable: the intent is committed and the tool runs in this same phase, so
             // `Execute` is only ever reached when an invocation was cut off mid-call, by a crash
             // or a close alike, and the replay rule decides.
@@ -75,6 +78,11 @@ impl Task for ToolCall {
             (&State::Execute { replay }, Some(tool))
                 if replay == Replay::Unsafe || tool.replay() == Replay::Unsafe =>
             {
+                tracing::warn!(
+                    tool = %call.name,
+                    call_id = %call.call_id,
+                    "unsafe tool call was interrupted; not run again"
+                );
                 ToolOutput::error(format!(
                     "tool {} was interrupted and may have partially run; it was not run again",
                     call.name
@@ -88,15 +96,26 @@ impl Task for ToolCall {
 
 async fn execute(rt: &Runtime<ToolCall>, tool: &dyn crate::Tool) -> Result<ToolOutput> {
     let call = rt.input();
+    let started = std::time::Instant::now();
     let result = tokio::select! {
         result = tool.execute(call.arguments.clone()) => result,
         _ = rt.cancelled() => bail!("cancelled"),
     };
-    Ok(match result {
+    let output = match result {
         Ok(content) => ToolOutput {
             content,
             is_error: false,
         },
         Err(error) => ToolOutput::error(format!("{error:#}")),
-    })
+    };
+    tracing::info!(
+        tool = %call.name,
+        call_id = %call.call_id,
+        arguments = %call.arguments,
+        ms = started.elapsed().as_millis() as u64,
+        is_error = output.is_error,
+        result = %output.content,
+        "tool call"
+    );
+    Ok(output)
 }

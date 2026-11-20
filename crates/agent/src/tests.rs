@@ -1054,3 +1054,53 @@ async fn a_run_that_ends_abnormally_leaves_the_thread_valid() {
     assert!(transcript[2].starts_with("User: error: "), "{transcript:?}");
     assert!(!agent.engine().thread("t1", |t| t.in_turn()).unwrap());
 }
+
+#[tokio::test]
+async fn a_turn_can_be_traced_back_step_by_step() {
+    let (journal, _guard) = telemetry::capture();
+    let script = Script::new(vec![
+        Reply::Error("overloaded"),
+        Reply::Call("weather", json!({ "city": "Paris" })),
+        Reply::Text("18C and sunny"),
+    ]);
+    let mut tools = Tools::new();
+    tools.add(TestTool::new("weather", "18C"));
+    let store = store();
+    let agent = start(&store, &script, tools);
+    let id = agent.submit("t1", Input::new("Weather in Paris?")).unwrap();
+    assert_eq!(settled(&agent, &id).await, done("18C and sunny"));
+
+    let traced = journal.entries(&telemetry::Filter::default()).unwrap();
+    let find = |message: &str| {
+        traced
+            .iter()
+            .find(|e| e.message == message)
+            .unwrap_or_else(|| panic!("no {message:?} in {traced:#?}"))
+    };
+    // Each event knows its thread and task, and the phase it happened in.
+    let failed = find("model request failed");
+    assert_eq!(failed.thread.as_deref(), Some("t1"));
+    assert_eq!(failed.fields["kind"], "agent.generation");
+    assert_eq!(failed.fields["phase"], "request");
+    assert_eq!(failed.fields["error"], "overloaded");
+    let call = find("tool call");
+    assert_eq!(call.fields["kind"], "agent.tool");
+    assert_eq!(call.fields["result"], "18C");
+    assert_eq!(call.fields["arguments"]["city"], "Paris");
+    assert_ne!(call.task, failed.task);
+    assert_eq!(find("input answered").fields["answer"], "18C and sunny");
+
+    // The turn's timeline: what was said, and what happened in between, in order.
+    let inspector = telemetry::inspect::Inspector::new(store.clone(), journal.clone(), None);
+    let timeline = inspector.thread("t1", Some(1), false).unwrap().text;
+    let at = |needle: &str| {
+        timeline
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle:?} missing from\n{timeline}"))
+    };
+    assert!(at("Weather in Paris?") < at("model request failed"));
+    assert!(at("model request failed") < at("tool call"));
+    assert!(at("tool call") < at("Assistant: 18C and sunny"));
+    let recent = inspector.recent(1).unwrap();
+    assert_eq!(recent.json[0]["problems"].as_array().unwrap().len(), 1);
+}

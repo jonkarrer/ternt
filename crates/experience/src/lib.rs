@@ -142,6 +142,7 @@ impl<A: Api> Experience<A> {
     /// Call before each model request (after `start_step`). Attends to the checkpoints since it
     /// last looked; when something calls for it, decides, acts on memory, and records what it
     /// recalled into the thread. Errors only when the thread can't record.
+    #[tracing::instrument(skip_all)]
     pub async fn consider(&self, thread: &mut Thread) -> Result<Outcome> {
         let upto = thread.checkpoints().len();
         let signals = self.attention.attend(thread, thread.considered_upto());
@@ -190,12 +191,14 @@ impl<A: Api> Experience<A> {
             .collect();
         thread.considered(upto, recalled)?;
         outcome.signals = signals;
+        trace_outcome(&outcome);
         Ok(outcome)
     }
 
     /// Idle work, between turns: summarize finished turns into an episode, update the thread's
     /// card, clean up memory, and compact the context if it has grown large. Each part commits
     /// on its own, so dropping the future (a new message arrived) stops it at a safe point.
+    #[tracing::instrument(skip_all)]
     pub async fn dream(&self, thread: &mut Thread) -> Result<Dream> {
         ensure!(!thread.in_turn(), "can't dream during a turn");
         let mut dream = Dream::default();
@@ -215,10 +218,22 @@ impl<A: Api> Experience<A> {
             Ok(compacted) => dream.compacted = compacted,
             Err(error) => dream.fail("compact", error),
         }
+        for (part, error) in &dream.failed {
+            tracing::warn!(part, error, "dream part failed");
+        }
+        tracing::info!(
+            episode = ?dream.episode.as_ref().map(|e| &e.text),
+            card = ?dream.card.as_ref().map(|c| &c.text),
+            refined = ?dream.refined.iter().map(|i| (i.id, i.body.text())).collect::<Vec<_>>(),
+            compacted = dream.compacted,
+            failed = dream.failed.len(),
+            "dreamed"
+        );
         Ok(dream)
     }
 
     /// Rewrites the thread's card when turns finished since the last one.
+    #[tracing::instrument(skip_all)]
     async fn card(&self, thread: &Thread) -> Result<Option<Card>> {
         let previous = self.memory.card(&thread.id)?;
         let previous = previous.as_ref().map(|c| (c.text.as_str(), c.to));
@@ -236,6 +251,7 @@ impl<A: Api> Experience<A> {
     }
 
     /// One model call for every retain/refine signal, with the memories related to them.
+    #[tracing::instrument(skip_all)]
     async fn decide(&self, signals: &[&Signal], thread: &str) -> Result<Vec<Decision>> {
         let scopes = self.scopes.searched();
         let mut related: HashMap<i64, Item> = HashMap::new();
@@ -295,6 +311,7 @@ impl<A: Api> Experience<A> {
     }
 
     /// An episode for the finished turns since the last one, once there are enough.
+    #[tracing::instrument(skip_all)]
     async fn summarize(&self, thread: &Thread) -> Result<Option<Episode>> {
         let start = self
             .memory
@@ -320,6 +337,7 @@ impl<A: Api> Experience<A> {
     }
 
     /// Drops exact duplicates in code, then lets the model merge or correct the rest.
+    #[tracing::instrument(skip_all)]
     async fn refine(&self) -> Result<Vec<Item>> {
         let mut refined = Vec::new();
         let mut seen = HashSet::new();
@@ -371,6 +389,7 @@ impl<A: Api> Experience<A> {
     }
 
     /// Replaces older messages with a summary, keeping recent ones and whole turns intact.
+    #[tracing::instrument(skip_all)]
     async fn compact(&self, thread: &mut Thread) -> Result<bool> {
         let messages = &thread.context().messages;
         if messages.len() <= self.compact_after_messages {
@@ -402,6 +421,35 @@ impl<A: Api> Experience<A> {
 
 /// Memories recalled into messages still in the context, so they aren't recalled twice. Follows
 /// the context as State builds it: per message, its role and the memories recalled into it.
+/// What attention noticed and what came of it; a decision that failed is a warning.
+fn trace_outcome(outcome: &Outcome) {
+    let signals: Vec<String> = outcome
+        .signals
+        .iter()
+        .map(|s| {
+            let intent = format!("{:?}", s.intent).to_lowercase();
+            format!(
+                "{intent} {:.2} #{} {}: {}",
+                s.salience, s.checkpoint, s.detector, s.text
+            )
+        })
+        .collect();
+    for decision in &outcome.decisions {
+        if let Decision::Ignore { reason } = decision
+            && reason.contains("failed")
+        {
+            tracing::warn!(reason, "consider decision failed");
+        }
+    }
+    tracing::info!(
+        signals = ?signals,
+        decisions = ?outcome.decisions,
+        recalled = ?outcome.recalled.iter().map(|i| (i.id, i.body.text())).collect::<Vec<_>>(),
+        written = ?outcome.written.iter().map(|i| (i.id, i.body.text())).collect::<Vec<_>>(),
+        "considered"
+    );
+}
+
 fn recalled_in_context(thread: &Thread) -> HashSet<i64> {
     let mut messages: Vec<(Role, Vec<i64>)> = Vec::new();
     for checkpoint in thread.checkpoints() {

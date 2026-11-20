@@ -153,6 +153,7 @@ pub(crate) fn place_steers(tx: &mut Tx, thread: &str) -> Result<()> {
             kept.push(id);
             continue;
         }
+        tracing::info!(thread, submission = %id, text = %queued.text, "steer placed");
         tx.thread(thread)?.push(Message::user(queued.text))?;
         update(tx, &id, |s| {
             s.status = Status::Placed;
@@ -196,6 +197,15 @@ fn finish(
 }
 
 fn settle(tx: &mut Tx, id: &str, settled: Settled) -> Result<()> {
+    let thread = submission(tx, id)?.thread;
+    match &settled {
+        Settled::Done { answer } => {
+            tracing::info!(thread, submission = id, answer, "input answered")
+        }
+        Settled::Unanswered { reason } => {
+            tracing::warn!(thread, submission = id, reason, "input unanswered")
+        }
+    }
     update(tx, id, |s| match settled {
         Settled::Done { answer } => {
             s.status = Status::Done;

@@ -5,6 +5,7 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+tracing.workspace = true
 anyhow.workspace = true
 context.workspace = true
 engine.workspace = true
@@ -18,3 +19,4 @@ tokio.workspace = true
 
 [dev-dependencies]
 memory.workspace = true
+telemetry.workspace = true

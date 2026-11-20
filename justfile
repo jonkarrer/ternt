@@ -22,3 +22,7 @@ check:
 db path="data/tokidoki.db":
     mkdir -p "$(dirname {{path}})"
     tursodb {{path}}
+
+# Read what the agent did, e.g. `just inspect recent` or `just inspect search vegetarian`.
+inspect *args:
+    cargo run -q -p telemetry --bin inspect -- {{args}}

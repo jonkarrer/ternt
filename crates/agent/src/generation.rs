@@ -72,7 +72,7 @@ impl<M: Model> Task for Generation<M> {
             &State::Consider { round } => {
                 let mind = self.mind.as_deref().expect("Consider only with a mind");
                 let next = Next::Continue(State::Request { round, attempt: 1 });
-                think(&rt, mind, Mind::consider, next).await
+                think(&rt, mind, ("consider", Mind::consider), next).await
             }
             &State::Request { round, attempt } => self.request(&rt, round, attempt).await,
             State::Tools {
@@ -162,6 +162,7 @@ impl<M: Model> Generation<M> {
             }
             // Out of tool rounds: the calls get error results and the run ends.
             if round > max_rounds {
+                tracing::warn!(round, "turn limit: the model kept calling tools");
                 close_calls(tx.thread(thread)?, "not run: turn limit")?;
                 inbox::end_run(tx, thread, Settled::unanswered("turn_limit"), false)?;
                 return Ok(Some(Next::Fail("turn limit".into())));
@@ -188,7 +189,9 @@ impl<M: Model> Generation<M> {
 
     /// Another attempt after a durable backoff, or the run ends unanswered.
     fn retry(&self, rt: &Runtime<Self>, round: u32, attempt: u32, error: String) -> Result<()> {
-        if attempt < self.settings.max_attempts {
+        let last = attempt >= self.settings.max_attempts;
+        tracing::warn!(round, attempt, last, error = %error, "model request failed");
+        if !last {
             let backoff = self.settings.backoff_ms << (attempt - 1).min(16);
             let next = State::Request {
                 round,

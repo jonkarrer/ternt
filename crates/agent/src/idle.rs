@@ -50,15 +50,15 @@ impl Task for Idle {
         let Some(mind) = self.mind.as_deref() else {
             return rt.commit(|_| Ok(Some(Next::Complete(()))));
         };
-        let (after, work, next): (_, Work, _) = match rt.state() {
+        let (after, work, next): (_, (&str, Work), _) = match rt.state() {
             State::Dream => (
                 self.settings.dream_after_ms,
-                Mind::dream,
+                ("dream", Mind::dream as Work),
                 Next::Continue(State::Settle),
             ),
             State::Settle => (
                 self.settings.settle_after_ms,
-                Mind::settle,
+                ("settle", Mind::settle as Work),
                 Next::Complete(()),
             ),
         };

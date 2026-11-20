@@ -7,6 +7,9 @@ pub use anthropic::Anthropic;
 pub use anyhow::Result;
 pub use openai::OpenAi;
 
+use std::sync::Arc;
+use std::time::Instant;
+
 use anyhow::{Context as _, bail};
 use context::{Context, Message};
 use serde::{Serialize, de::DeserializeOwned};
@@ -72,12 +75,19 @@ pub trait Api {
     fn response(&self, reply: Self::Reply) -> Option<Response>;
 }
 
+/// Recorded replies, for replaying: given a request body exactly as a provider would send it,
+/// the raw reply it got then, if any. A body it doesn't know goes to the provider.
+pub trait Tape: Send + Sync {
+    fn reply(&self, provider: &str, body: &Value) -> Option<Value>;
+}
+
 pub struct Provider<A> {
     name: &'static str,
     url: &'static str,
     headers: Vec<(&'static str, String)>,
     http: reqwest::Client,
     api: A,
+    tape: Option<Arc<dyn Tape>>,
 }
 
 impl<A: Api> Provider<A> {
@@ -93,11 +103,94 @@ impl<A: Api> Provider<A> {
             headers,
             http: reqwest::Client::new(),
             api,
+            tape: None,
         }
     }
 
+    /// Answers from `tape` the requests it recorded; the rest go to the provider.
+    pub fn with_tape(mut self, tape: Arc<dyn Tape>) -> Self {
+        self.tape = Some(tape);
+        self
+    }
+
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// Sends the request and reads the reply. Every call is traced (`model call`), with the
+    /// body sent and the raw reply, so it can be inspected or replayed later.
     pub async fn chat(&self, req: &Request, ctx: &Context) -> Result<Response> {
-        let mut builder = self.http.post(self.url).json(&self.api.body(req, ctx));
+        let body = self.api.body(req, ctx);
+        let started = Instant::now();
+        let taped = self.tape.as_ref().and_then(|t| t.reply(self.name, &body));
+        let replayed = taped.is_some();
+        let raw = match taped {
+            Some(raw) => Ok(raw),
+            None => self.send(&body).await,
+        };
+        let ms = started.elapsed().as_millis() as u64;
+        let read = |raw: Value| -> Result<(Value, Response)> {
+            let reply = serde_json::from_value(raw.clone()).context(self.name)?;
+            let response = self
+                .api
+                .response(reply)
+                .with_context(|| format!("{} returned no reply", self.name))?;
+            Ok((raw, response))
+        };
+        match raw.and_then(read) {
+            Ok((raw, res)) => {
+                let calls: Vec<&str> = res.message.tool_calls().map(|(_, name, _)| name).collect();
+                let stop = raw["stop_reason"]
+                    .as_str()
+                    .or(raw["choices"][0]["finish_reason"].as_str())
+                    .unwrap_or("");
+                // Cut off, refused, or nothing at all: still a reply, but likely a bad one.
+                let suspect =
+                    matches!(stop, "max_tokens" | "length" | "refusal" | "content_filter")
+                        || (calls.is_empty() && res.message.text().trim().is_empty());
+                if suspect {
+                    tracing::warn!(
+                        provider = self.name,
+                        model = %req.model,
+                        stop,
+                        "model reply was cut off, refused or empty"
+                    );
+                }
+                tracing::info!(
+                    stop,
+                    provider = self.name,
+                    model = %req.model,
+                    ms,
+                    replayed,
+                    input_tokens = res.input_tokens,
+                    output_tokens = res.output_tokens,
+                    text = %res.message.text(),
+                    calls = ?calls,
+                    request = %body,
+                    response = %raw,
+                    "model call"
+                );
+                Ok(res)
+            }
+            Err(error) => {
+                tracing::warn!(
+                    provider = self.name,
+                    model = %req.model,
+                    ms,
+                    replayed,
+                    error = %format!("{error:#}"),
+                    request = %body,
+                    "model call failed"
+                );
+                Err(error)
+            }
+        }
+    }
+
+    /// Posts a request body as-is and returns the raw reply: for replaying a recorded call,
+    /// edited or not.
+    pub async fn send(&self, body: &Value) -> Result<Value> {
+        let mut builder = self.http.post(self.url).json(body);
         for (key, value) in &self.headers {
             builder = builder.header(*key, value);
         }
@@ -108,10 +201,7 @@ impl<A: Api> Provider<A> {
             let body = res.text().await.unwrap_or_default();
             bail!("{} returned {status}: {}", self.name, error_message(&body));
         }
-
-        self.api
-            .response(res.json().await.context(self.name)?)
-            .with_context(|| format!("{} returned no reply", self.name))
+        res.json().await.context(self.name)
     }
 }
 

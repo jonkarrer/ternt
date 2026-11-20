@@ -180,23 +180,32 @@ pub(crate) type Work = for<'a> fn(&'a dyn Mind, &'a mut Thread) -> MindFuture<'a
 pub(crate) async fn think<T: Task>(
     rt: &Runtime<T>,
     mind: &dyn Mind,
-    work: Work,
+    (name, work): (&'static str, Work),
     next: Next<T::State, T::Output>,
 ) -> Result<()> {
     let mut copy = rt.thread(|t| t.snapshot())?;
     let base = copy.checkpoints().len();
-    let done = tokio::select! {
-        result = work(mind, &mut copy) => result.is_ok(),
+    let result = tokio::select! {
+        result = work(mind, &mut copy) => result,
         _ = rt.cancelled() => anyhow::bail!("cancelled"),
     };
+    if let Err(error) = &result {
+        tracing::warn!(work = name, error = %format!("{error:#}"), "mind work failed; skipped");
+    }
     let events: Vec<Event> = copy.checkpoints()[base..]
         .iter()
         .map(|c| c.event.clone())
         .collect();
     rt.commit(|tx| {
         let thread = tx.thread(rt.thread_id())?;
-        if done && thread.checkpoints().len() == base {
+        if result.is_ok() && thread.checkpoints().len() == base {
             thread.append(events)?;
+        } else if result.is_ok() && !events.is_empty() {
+            tracing::warn!(
+                work = name,
+                lost = events.len(),
+                "mind work discarded: the thread changed meanwhile"
+            );
         }
         Ok(Some(next))
     })
@@ -314,12 +323,28 @@ impl Agent {
             last: self.engine.doc(LAST_THREAD)?,
         };
         let route = router.route(store, &routing, &threads).await?;
-        self.engine.commit(|tx| admit(tx, route, input))
+        let text = input.text.clone();
+        let sent = self.engine.commit(|tx| admit(tx, route, input))?;
+        if let Some(route) = &sent.route {
+            tracing::info!(
+                thread = %sent.thread,
+                submission = %sent.submission,
+                by = route.by.as_str(),
+                reason = %route.reason,
+                new = matches!(route.target, router::Target::New),
+                text = %text,
+                "input routed"
+            );
+        }
+        Ok(sent)
     }
 
     /// Admits an input durably and returns its submission ID.
     pub fn submit(&self, thread: &str, input: Input) -> Result<String> {
-        self.engine.commit(|tx| inbox::submit(tx, thread, input))
+        let (text, when_busy) = (input.text.clone(), input.when_busy);
+        let id = self.engine.commit(|tx| inbox::submit(tx, thread, input))?;
+        tracing::info!(thread, submission = %id, when_busy = ?when_busy, text = %text, "input submitted");
+        Ok(id)
     }
 
     pub fn submission(&self, id: &str) -> Result<Option<Submission>> {

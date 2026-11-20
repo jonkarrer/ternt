@@ -17,6 +17,7 @@ pub const RESUME_HANDOFF: &str =
 impl<A: Api> Experience<A> {
     /// Writes the thread's resume card and resets its context to it. `None` when nothing
     /// finished since the last card.
+    #[tracing::instrument(skip_all)]
     pub async fn settle(&self, thread: &mut Thread) -> Result<Option<Resume>> {
         ensure!(!thread.in_turn(), "can't settle during a turn");
         let previous = self.memory.resume(&thread.id)?;
@@ -43,6 +44,7 @@ impl<A: Api> Experience<A> {
         let len = thread.context().messages.len();
         let handoff = Message::user(format!("{RESUME_HANDOFF}\n{}", resume.text));
         thread.replace(0..len, vec![handoff])?;
+        tracing::info!(resume = %resume.text, replaced = len, "settled");
         Ok(Some(resume))
     }
 }

@@ -38,6 +38,7 @@ use inference::{Provider, Request};
 use memory::{Card, Memory, Resume, Scope};
 use serde_json::Value;
 use state::{Checkpointer, ThreadInfo};
+use tracing::Instrument;
 
 use search::{rank_threads, terms_of};
 
@@ -231,7 +232,34 @@ impl<A: Api> Router<A> {
         input: &Input,
         threads: &[ThreadView],
     ) -> Result<Route> {
+        let started = std::time::Instant::now();
+        let route = self
+            .decide(store, input, threads)
+            .instrument(tracing::info_span!("route"))
+            .await?;
+        tracing::info!(
+            to = ?route.target,
+            by = route.by.as_str(),
+            reason = %route.reason,
+            ms = started.elapsed().as_millis() as u64,
+            last = ?input.last,
+            threads = threads.len(),
+            text = %input.text,
+            "route"
+        );
+        Ok(route)
+    }
+
+    async fn decide(
+        &self,
+        store: &dyn Checkpointer,
+        input: &Input,
+        threads: &[ThreadView],
+    ) -> Result<Route> {
         let signals = cues::notice(&self.cues, &input.text);
+        if !signals.is_empty() {
+            tracing::debug!(signals = ?signals, "route cues");
+        }
         let cue =
             |cue: RouteCue, min: f32| signals.iter().find(|s| s.cue == cue && s.salience >= min);
         let strong_new = cue(RouteCue::NewTopic, 0.8);
@@ -293,6 +321,13 @@ impl<A: Api> Router<A> {
 
         // 3. Search: decisive coverage, or coverage and BM25 agreeing.
         let ranked = rank_threads(&query, &pool);
+        tracing::debug!(
+            query = %query,
+            ranked = ?ranked,
+            cards = ?all_cards.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+            pool = ?pool.iter().map(|t| &t.info.id).collect::<Vec<_>>(),
+            "route search"
+        );
         let quoted: String = query.chars().take(60).collect();
         if let Some(&(best, score)) = ranked.first() {
             let second = ranked.get(1).map_or(0.0, |r| r.1);
@@ -375,6 +410,7 @@ impl<A: Api> Router<A> {
             .ok()
             .and_then(|res| json_object(&res.message.text()))
         else {
+            tracing::warn!(fallback = %fallback.reason, "router model gave no usable answer");
             return fallback;
         };
         let reason = answer["reason"]

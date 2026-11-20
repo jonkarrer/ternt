@@ -37,6 +37,7 @@ use serde_json::Value;
 use state::{Savepoint, Sqlite, Thread};
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
+use tracing::Instrument;
 
 use runtime::{Invocation, Mode};
 use task::Erased;
@@ -359,6 +360,12 @@ impl Shared {
         for id in advanced {
             *inner.progress.entry(id).or_default() += 1;
         }
+        for (id, task) in &tasks {
+            let before = inner.tasks.get(id).map(|t| t.state.name());
+            if before != Some(task.state.name()) {
+                trace_change(task, before);
+            }
+        }
         for (id, task) in tasks {
             if task.state.is_terminal() {
                 inner.tasks.remove(&id);
@@ -423,6 +430,14 @@ impl Shared {
                     continue;
                 };
                 let (checkpoint, restarts) = (checkpoint.clone(), task.restarts + 1);
+                tracing::warn!(
+                    task = id,
+                    thread = %task.thread,
+                    kind = %task.kind,
+                    phase = phase_name(&checkpoint),
+                    restarts,
+                    "task was cut off by a crash; it runs its phase again"
+                );
                 tx.update(id, |task| {
                     task.state = TaskState::Pending { checkpoint };
                     task.restarts = restarts;
@@ -687,6 +702,16 @@ async fn supervise(
             break;
         }
         let before = shared.progress(id);
+        // Everything traced during the phase carries which task, thread and phase it was.
+        let span = tracing::info_span!(
+            "phase",
+            task = id,
+            thread = %record.thread,
+            kind = %record.kind,
+            phase = record.state.checkpoint().map_or("", phase_name),
+            aborting = mode == Mode::Abort,
+            restarts = record.restarts,
+        );
         let invocation = Arc::new(Invocation {
             shared: shared.clone(),
             record,
@@ -694,10 +719,13 @@ async fn supervise(
             generation,
             cancel: cancel.clone(),
         });
-        let phase = tokio::spawn(match mode {
-            Mode::Run => kind.clone().run(invocation),
-            Mode::Abort => kind.clone().abort(invocation),
-        });
+        let phase = tokio::spawn(
+            match mode {
+                Mode::Run => kind.clone().run(invocation),
+                Mode::Abort => kind.clone().abort(invocation),
+            }
+            .instrument(span),
+        );
         shared.set_phase(id, generation, phase.abort_handle());
         let error = match phase.await {
             Ok(Ok(())) => None,
@@ -729,6 +757,47 @@ async fn supervise(
         }
     }
     shared.release(id, generation);
+}
+
+/// The `phase` tag of a task's checkpoint (states are tagged enums), or "".
+fn phase_name(checkpoint: &Value) -> &str {
+    checkpoint["phase"].as_str().unwrap_or("")
+}
+
+/// Traces a task's change of state, as committed: how serious depends on how it ended.
+fn trace_change(task: &TaskRecord, before: Option<&str>) {
+    let (id, thread, kind) = (task.id, task.thread.as_str(), task.kind.as_str());
+    let from = before.unwrap_or("new");
+    match &task.state {
+        TaskState::Terminal { outcome } => match outcome {
+            Outcome::Completed { result } => {
+                tracing::debug!(task = id, thread, kind, from, result = %result, "task completed")
+            }
+            Outcome::Failed { error } => {
+                tracing::warn!(task = id, thread, kind, from, error, "task failed")
+            }
+            Outcome::Faulted { error } => {
+                tracing::error!(task = id, thread, kind, from, error, "task faulted")
+            }
+            Outcome::Aborted { reason } => {
+                tracing::info!(task = id, thread, kind, from, reason = ?reason, "task aborted")
+            }
+            Outcome::Orphaned { reason } => {
+                tracing::warn!(task = id, thread, kind, from, reason, "task orphaned")
+            }
+        },
+        state => tracing::debug!(
+            task = id,
+            thread,
+            kind,
+            from,
+            to = state.name(),
+            phase = state.checkpoint().map_or("", phase_name),
+            restarts = task.restarts,
+            abort = task.abort_requested,
+            "task state"
+        ),
+    }
 }
 
 fn panic_message(join: tokio::task::JoinError) -> String {
