@@ -124,10 +124,11 @@ impl Config {
     pub fn models(provider: Vendor) -> (&'static str, &'static str) {
         match provider {
             Vendor::Anthropic => ("claude-opus-5-5", "claude-haiku-5-5"),
-            // Checked against the account's /v1/models on 2026-11-21: deepseek-v4-pro,
-            // the first choice, isn't served there.
+            // Cheap by choice (the owner's): the flash model answers and routes. Checked
+            // against the account's /v1/models on 2026-11-21; deepseek-v4-pro isn't served
+            // there, kimi-k3p1-pro is, if something stronger is ever wanted.
             Vendor::Fireworks => (
-                "accounts/fireworks/models/kimi-k3p1-pro",
+                "accounts/fireworks/models/deepseek-v4p1-flash",
                 "accounts/fireworks/models/deepseek-v4p1-flash",
             ),
             Vendor::Baseten => (

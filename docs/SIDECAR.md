@@ -28,7 +28,7 @@ tokidoki-serve --data <dir>
   | `TOKIDOKI_PROVIDER` | key | answers with | routes with |
   | --- | --- | --- | --- |
   | `anthropic` (the default) | `ANTHROPIC_API_KEY` | `claude-opus-5-5` | `claude-haiku-5-5` |
-  | `fireworks` | `FIREWORKS_API_KEY` | `accounts/fireworks/models/kimi-k3p1-pro` | `accounts/fireworks/models/deepseek-v4p1-flash` |
+  | `fireworks` | `FIREWORKS_API_KEY` | `accounts/fireworks/models/deepseek-v4p1-flash` | `accounts/fireworks/models/deepseek-v4p1-flash` |
   | `baseten` | `BASETEN_API_KEY` | `deepseek-ai/DeepSeek-V4-Pro` | `deepseek-ai/DeepSeek-V4.1-Flash` |
 
   One provider does everything: answering, the memory work, and routing a message to its

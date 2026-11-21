@@ -635,7 +635,7 @@ mod tests {
 
     /// The model tokidoki answers with on Fireworks (`tokidoki::Config::models`): vendors
     /// retire names, and a wrong one is a 404 on every call.
-    const FIREWORKS_MODEL: &str = "accounts/fireworks/models/kimi-k3p1-pro";
+    const FIREWORKS_MODEL: &str = "accounts/fireworks/models/deepseek-v4p1-flash";
 
     #[tokio::test]
     #[ignore = "calls Fireworks"]
@@ -645,6 +645,28 @@ mod tests {
             FIREWORKS_MODEL,
         )
         .await;
+    }
+
+    /// The cheap default must still call tools: the agent is nothing without them.
+    #[tokio::test]
+    #[ignore = "calls Fireworks"]
+    async fn fireworks_tool_loop() {
+        let provider = Provider::fireworks(&key("FIREWORKS_API_KEY"));
+        let req = Request::new(FIREWORKS_MODEL).thinking(false);
+        let mut ctx = Context::new("Use the weather tool to answer.");
+        ctx.register(weather_tool());
+        ctx.push(Message::user("What's the weather in Paris?"));
+
+        let res = provider.chat(&req, &ctx).await.unwrap();
+        let (id, name, input) = res.message.tool_calls().next().expect("a tool call");
+        assert_eq!(name, "weather");
+        println!("call: {input}");
+        let id = id.to_string();
+        ctx.push(res.message);
+        ctx.push(Message::tool_result(id, "18C and sunny"));
+        let res = provider.chat(&req, &ctx).await.unwrap();
+        println!("reply: {}", res.message.text());
+        assert!(res.message.text().to_lowercase().contains("sunny"));
     }
 
     fn has_thinking(message: &Message) -> bool {
