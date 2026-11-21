@@ -8,7 +8,7 @@ file is what isn't in the code.
 - **The agent** (⌘J, `src-tauri/src/agent/`) is tokidoki, run as a sidecar process; the repo
   is `~/devjon/projects/tokidoki` and the contract is `docs/AGENT-SIDECAR.md` here. Both
   repos are developed by the same agent since 2026-11-21: when the contract moves, change
-  both, and copy `crates/interface/protocol.ts` to `src/agent/protocol.ts`.
+  both, then `just sync-protocol` here copies tokidoki's protocol (Rust and TypeScript) over.
 - **Scope of the agent: a chat with memory.** No requests from the sidecar back to Ternt, no
   key per space, until the owner says so.
 - **Bring your own key.** Settings → Agent picks the provider (Fireworks AI default, or
