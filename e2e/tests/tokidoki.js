@@ -1,4 +1,5 @@
-// The panel against the real agent, tokidoki-serve, built from the tokidoki repo:
+// The panel against the real agent, tokidoki-serve, built from the tokidoki repo, on each
+// provider's cheapest model (tokidoki.env sets TOKIDOKI_MODELS=cheap):
 //
 //   TERNT_SIDECAR=tokidoki e2e/run.sh tokidoki
 //

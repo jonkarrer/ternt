@@ -23,6 +23,12 @@ Short requests, often "pull and deploy": pull `main`, judge patch or minor from 
 `just upload <bump>`, verify `latest.json`, report. Step by step otherwise. The release Mac is
 the Mac mini with the signing keychain (`~/.tauri/ternt-sign.keychain.password` unlocks it).
 
+## Tests that call a model
+
+Always on a very cheap model (the owner's rule): the real-agent suite runs the sidecar with
+`TOKIDOKI_MODELS=cheap` (`e2e/tests/tokidoki.env`), which picks each provider's cheapest model.
+Never run a test against a provider's default model.
+
 ## Checks before a commit
 
 `just check` (sidecar build, svelte-check, clippy on the workspace), `bun run test:unit`, and
