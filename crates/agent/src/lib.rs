@@ -20,10 +20,12 @@
 mod generation;
 mod idle;
 mod inbox;
+mod live;
 mod tool;
 
 pub use generation::Generation;
 pub use idle::Idle;
+pub use live::{Live, Shown};
 pub use tool::{ToolCall, ToolCallInput, ToolOutput};
 
 use std::collections::HashMap;
@@ -35,6 +37,7 @@ use anyhow::Result;
 use context::Context;
 use engine::{Engine, Next, Registry, Runtime, Task, TaskId, Tx};
 use inference::providers::Api;
+use inference::providers::OnDelta;
 use inference::{Provider, Request, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -45,6 +48,17 @@ use interface::{Doing, Input, Rejected, Sent, Status, Submission, WhenBusy};
 /// What the agent loop calls for each request.
 pub trait Model: Send + Sync + 'static {
     fn chat(&self, ctx: &Context) -> impl Future<Output = Result<Response>> + Send;
+
+    /// `chat`, handing `on_delta` the reply as it is written. A model that can't stream just
+    /// answers.
+    fn stream(
+        &self,
+        ctx: &Context,
+        on_delta: OnDelta<'_>,
+    ) -> impl Future<Output = Result<Response>> + Send {
+        let _ = on_delta;
+        self.chat(ctx)
+    }
 }
 
 /// A provider and its request settings, as a `Model`.
@@ -56,6 +70,10 @@ pub struct ProviderModel<A> {
 impl<A: Api + Send + Sync + 'static> Model for ProviderModel<A> {
     async fn chat(&self, ctx: &Context) -> Result<Response> {
         self.provider.chat(&self.request, ctx).await
+    }
+
+    async fn stream(&self, ctx: &Context, on_delta: OnDelta<'_>) -> Result<Response> {
+        self.provider.stream(&self.request, ctx, on_delta).await
     }
 }
 
@@ -219,16 +237,18 @@ impl<A: Api + Send + Sync + 'static> Mind for experience::Experience<A> {
     }
 }
 
-/// Registers the agent's tasks; open the engine with this registry.
+/// Registers the agent's tasks; open the engine with this registry. Replies are shown on
+/// `live` as they are written.
 pub fn register<M: Model>(
     registry: &mut Registry,
     model: Arc<M>,
     tools: Tools,
     mind: Option<Arc<dyn Mind>>,
     settings: Settings,
+    live: Live,
 ) {
     registry
-        .register(Generation::new(model, mind.clone(), settings.clone()))
+        .register(Generation::new(model, mind.clone(), settings.clone(), live))
         .register(ToolCall::new(tools))
         .register(Idle::new(mind, settings));
 }

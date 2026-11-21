@@ -4,8 +4,9 @@
 //! raw reply), routing decisions, what Experience recalled and wrote, tool calls, task state
 //! changes, faults and retries. Each event carries the `thread` and `task` it happened in.
 //!
-//! `init` sends them to a journal: an append-only SQLite file beside the state database,
-//! searchable by words. The `inspect` binary reads the journal together with the state
+//! `record` sends them to a journal: an append-only SQLite file beside the state database,
+//! searchable by words. A process can record several at once, one per running system: each
+//! gets a span, and what is traced inside it goes to its journal and no other. The `inspect` binary reads the journal together with the state
 //! database (threads, tasks), so a moment described in words ("it forgot I'm vegetarian")
 //! can be found, laid out step by step, and its model calls re-sent (`inspect replay`).
 //! `Journal` is also an `inference::Tape`: a provider given one answers recorded requests
@@ -75,11 +76,37 @@ pub fn data_dir() -> PathBuf {
 /// model call holds its whole conversation, so it grows fast.
 pub const RETENTION_DAYS: u64 = 14;
 
-/// Installs the global subscriber: the journal at `path`, first pruned (in the background) of
-/// entries older than its retention, and the console on stderr, filtered by `TOKIDOKI_LOG` (default
-/// `warn`; e.g. `TOKIDOKI_LOG=router=debug`). Flush the returned journal before exiting: it
-/// writes on its own thread.
-pub fn init(path: &Path) -> Result<Journal> {
+/// A journal being recorded to, and the span whose events it gets. Dropping it stops the
+/// recording for spans opened afterwards; flush the journal before exiting (it writes on its
+/// own thread).
+pub struct Recording {
+    pub journal: Journal,
+    /// What is traced inside this span, in a span opened inside it, or in a task spawned
+    /// `in_current_span` inside it, is recorded in `journal`. Enter it around everything the
+    /// system does.
+    pub span: tracing::Span,
+    route: u64,
+}
+
+impl Drop for Recording {
+    fn drop(&mut self) {
+        layer::routes().remove(&self.route);
+    }
+}
+
+/// Starts recording to the journal at `path`, first pruned (in the background) of entries
+/// older than its retention. The first call installs the process's subscriber: journals, and
+/// the console on stderr, filtered by `TOKIDOKI_LOG` (default `warn`; e.g.
+/// `TOKIDOKI_LOG=router=debug`). Fails when the program has installed a subscriber of its
+/// own, which then gets the events instead.
+///
+/// Any number of journals can be recorded at once: an event goes to the journal of the
+/// `Recording::span` it happened in, and nowhere when it happened in none.
+pub fn record(path: &Path) -> Result<Recording> {
+    anyhow::ensure!(
+        install(true),
+        "another tracing subscriber is installed in this process"
+    );
     let journal = Journal::open(path)?;
     let days = std::env::var("TOKIDOKI_JOURNAL_DAYS")
         .ok()
@@ -93,16 +120,41 @@ pub fn init(path: &Path) -> Result<Journal> {
             eprintln!("telemetry: pruning the journal failed: {error:#}");
         }
     });
-    let console = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stderr)
-        .with_filter(env_filter("TOKIDOKI_LOG", "warn"));
-    let recorded = JournalLayer::new(journal.clone())
-        .with_filter(events(env_filter("TOKIDOKI_JOURNAL", &journal_default())));
-    tracing_subscriber::registry()
-        .with(console)
-        .with(recorded)
-        .try_init()?;
-    Ok(journal)
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let route = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    layer::routes().insert(route, journal.clone());
+    // The layer reads the route off this span as it opens, and sends its events there.
+    let span = tracing::info_span!(target: "telemetry", "tokidoki", route);
+    Ok(Recording {
+        journal,
+        span,
+        route,
+    })
+}
+
+/// Installs the one subscriber this process records through, once; `console` (of the first
+/// call) adds warnings on stderr. Whether it is the process's subscriber: not when the
+/// program installed its own first.
+fn install(console: bool) -> bool {
+    static INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *INSTALLED.get_or_init(|| {
+        // A program records what `TOKIDOKI_JOURNAL` says; a test, always the default.
+        let filter = match console {
+            true => env_filter("TOKIDOKI_JOURNAL", &journal_default()),
+            false => EnvFilter::new(journal_default()),
+        };
+        let recorded = JournalLayer.with_filter(events(filter));
+        let console = console.then(|| {
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_filter(env_filter("TOKIDOKI_LOG", "warn"))
+        });
+        tracing_subscriber::registry()
+            .with(console)
+            .with(recorded)
+            .try_init()
+            .is_ok()
+    })
 }
 
 fn env_filter(var: &str, default: &str) -> EnvFilter {
@@ -119,19 +171,16 @@ where
 }
 
 /// Records what is traced on this thread, until the guard drops, into a fresh in-memory
-/// journal, filtered as `init` does by default: for tests that check what was traced.
+/// journal, filtered as `record` does by default: for tests that check what was traced.
 ///
-/// One global subscriber serves every capture, sending each event to the journal of the
-/// thread it happened on (a test's current-thread runtime runs its tasks there). A
-/// subscriber per thread would race: `tracing` caches per call site whether anyone listens,
-/// across threads, so a test running beside others could miss its own events.
+/// The process's one subscriber serves every capture, sending each event that happened in
+/// no recording's span to the journal of the thread it happened on (a test's current-thread
+/// runtime runs its tasks there). A subscriber per thread would race: `tracing` caches per
+/// call site whether anyone listens, across threads, so a test running beside others could
+/// miss its own events.
 pub fn capture() -> (Journal, Capture) {
-    static INSTALL: std::sync::Once = std::sync::Once::new();
-    INSTALL.call_once(|| {
-        let layer = JournalLayer::captured().with_filter(events(EnvFilter::new(journal_default())));
-        // Fails only if the program installed its own subscriber; then nothing is captured.
-        let _ = tracing_subscriber::registry().with(layer).try_init();
-    });
+    // Fails only if the program installed its own subscriber; then nothing is captured.
+    install(false);
     let journal = Journal::in_memory().expect("in-memory journal");
     layer::CAPTURE.with(|slot| *slot.borrow_mut() = Some(journal.clone()));
     (journal, Capture(()))
@@ -219,5 +268,39 @@ mod tests {
         let entries = journal.entries(&Filter::default()).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].thread.as_deref(), Some("t9"));
+    }
+
+    /// Two recordings in one process: each journal gets what happened in its own span, also
+    /// from a span opened inside it and a task spawned there, and nothing of the other's.
+    #[tokio::test]
+    async fn each_recording_gets_only_its_own_events() {
+        use tracing::Instrument;
+        let dir = std::env::temp_dir().join(format!("tokidoki-routes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let one = record(&dir.join("one.journal.db")).unwrap();
+        let two = record(&dir.join("two.journal.db")).unwrap();
+
+        one.span.in_scope(|| tracing::info!("in one"));
+        two.span.in_scope(|| {
+            tracing::info_span!("phase", thread = "t2").in_scope(|| tracing::info!("in two"));
+        });
+        tokio::spawn(async { tracing::info!("spawned in one") }.instrument(one.span.clone()))
+            .await
+            .unwrap();
+        tracing::info!("in neither");
+
+        let messages = |journal: &Journal| -> Vec<String> {
+            let entries = journal.entries(&Filter::default()).unwrap();
+            entries.into_iter().map(|e| e.message).collect()
+        };
+        assert_eq!(messages(&one.journal), ["in one", "spawned in one"]);
+        assert_eq!(messages(&two.journal), ["in two"]);
+        let entry = &two.journal.entries(&Filter::default()).unwrap()[0];
+        assert_eq!(entry.thread.as_deref(), Some("t2"));
+        // How it was routed is not part of what happened.
+        assert!(!entry.fields.contains_key("route"));
+        assert_eq!(entry.spans, "tokidoki > phase");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -45,4 +45,53 @@ mod tests {
                                "change": {"kind": "turn_started"}})
         );
     }
+
+    /// `protocol.ts` is these types, as this crate has them. Regenerate it with `just types`.
+    #[cfg(feature = "ts")]
+    #[test]
+    fn the_typescript_protocol_is_current() {
+        use ts_rs::TS;
+        fn decl<T: TS>() -> String {
+            let docs = T::docs().unwrap_or_default();
+            // Times in ms and row IDs: far below what a JSON number holds exactly.
+            let config = ts_rs::Config::default().with_large_int("number");
+            format!("{docs}export {}", T::decl(&config))
+        }
+        let types = [
+            decl::<Speaker>(),
+            decl::<Media>(),
+            decl::<Part>(),
+            decl::<WhenBusy>(),
+            decl::<Input>(),
+            decl::<Route>(),
+            decl::<Sent>(),
+            decl::<Status>(),
+            decl::<Submission>(),
+            decl::<ThreadSummary>(),
+            decl::<Role>(),
+            decl::<Content>(),
+            decl::<Change>(),
+            decl::<Event>(),
+            decl::<Memory>(),
+            decl::<MemoryKind>(),
+            decl::<MemorySource>(),
+            decl::<MemoryChange>(),
+            decl::<Delta>(),
+            decl::<Doing>(),
+            decl::<Feedback>(),
+        ];
+        let header = "// The tokidoki protocol (crates/interface/src/protocol.rs), as TypeScript.\n\
+            // Generated: change the Rust types, then run `just types`.\n\n\
+            export type JsonValue = number | string | boolean | JsonValue[] | { [key: string]: JsonValue } | null;\n";
+        let generated = format!("{header}\n{}\n", types.join("\n\n"));
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/protocol.ts");
+        if std::env::var_os("TOKIDOKI_WRITE_TYPES").is_some() {
+            std::fs::write(path, &generated).unwrap();
+        }
+        let current = std::fs::read_to_string(path).unwrap_or_default();
+        assert!(
+            current == generated,
+            "protocol.ts is out of date: run `just types`"
+        );
+    }
 }

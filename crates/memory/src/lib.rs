@@ -16,7 +16,7 @@ pub use index::{Document, Fts, Index};
 
 use std::fmt;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, bail};
@@ -210,9 +210,23 @@ pub struct Card {
     pub at: SystemTime,
 }
 
+/// Something memory just stored or dropped, for whoever watches (`Memory::watch`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Change {
+    /// An item was written: new, or a new version of `was`.
+    Written { item: Item, was: Option<Box<Item>> },
+    /// Every version of an item was removed.
+    Forgotten { ids: Vec<i64> },
+    /// A thread got a new card.
+    Carded(Card),
+}
+
+type Watcher = Box<dyn Fn(Change) + Send + Sync>;
+
 pub struct Memory {
     conn: Mutex<Connection>,
     index: Box<dyn Index>,
+    watcher: OnceLock<Watcher>,
 }
 
 const ITEM_COLUMNS: &str = "items.id, items.lineage, items.scope, items.key, items.version, items.replaces, items.source, items.created_at, items.body";
@@ -302,7 +316,21 @@ impl Memory {
         Ok(Self {
             conn: Mutex::new(conn),
             index,
+            watcher: OnceLock::new(),
         })
+    }
+
+    /// Calls `watcher` with every change from now on, whoever makes it, once it is stored.
+    /// One watcher per store: the first set stays. It runs inside the write, so it must be
+    /// quick and must not call back into the store (pass the change on to a channel).
+    pub fn watch(&self, watcher: impl Fn(Change) + Send + Sync + 'static) {
+        let _ = self.watcher.set(Box::new(watcher));
+    }
+
+    fn changed(&self, change: Change) {
+        if let Some(watcher) = self.watcher.get() {
+            watcher(change);
+        }
     }
 
     /// Adds an item, or a new version when its key already exists in the scope.
@@ -406,6 +434,10 @@ impl Memory {
             text = %item.body.text(),
             "memory written"
         );
+        self.changed(Change::Written {
+            item: item.clone(),
+            was: old.map(Box::new),
+        });
         Ok(item)
     }
 
@@ -437,7 +469,11 @@ impl Memory {
             .query_map([id], |row| row.get(0))?
             .collect::<Result<_, _>>()?;
         tracing::debug!(id, removed = ?ids, "memory forgotten");
-        self.index.remove(&ids)
+        self.index.remove(&ids)?;
+        if !ids.is_empty() {
+            self.changed(Change::Forgotten { ids });
+        }
+        Ok(())
     }
 
     /// Current versions in `scopes` relevant to `query`, best first, as ranked by the index.
@@ -619,14 +655,16 @@ impl Memory {
             params![thread, scope.as_str(), text],
         )?;
         tx.commit()?;
-        Ok(Card {
+        let card = Card {
             id,
             thread: thread.into(),
             scope,
             text,
             to,
             at,
-        })
+        };
+        self.changed(Change::Carded(card.clone()));
+        Ok(card)
     }
 
     /// Threads in `scopes` whose newest card matches any word of `query`, best first, with
@@ -1046,5 +1084,43 @@ mod tests {
         let hits = memory.search_cards("ryokan", &[me()], 5).unwrap();
         assert_eq!(hits.len(), 1);
         assert!(memory.search_cards("osaka", &[me()], 5).unwrap().is_empty());
+    }
+
+    /// A watcher hears every change, with what a new version replaced.
+    #[test]
+    fn a_watcher_hears_every_change() {
+        let memory = Memory::in_memory().unwrap();
+        let heard = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let sink = heard.clone();
+        memory.watch(move |change| sink.lock().unwrap().push(change));
+
+        let scope = Scope::user("u");
+        let first = memory
+            .write(Write::fact(scope.clone(), "Likes tea"))
+            .unwrap();
+        let second = memory
+            .replace(first.id, Write::fact(scope.clone(), "Likes coffee"))
+            .unwrap();
+        memory.forget(second.id).unwrap();
+        memory.forget(second.id).unwrap();
+        let card = memory.add_card("t", scope, "About drinks", 3).unwrap();
+
+        assert_eq!(
+            *heard.lock().unwrap(),
+            vec![
+                Change::Written {
+                    item: first.clone(),
+                    was: None
+                },
+                Change::Written {
+                    item: second.clone(),
+                    was: Some(Box::new(first.clone()))
+                },
+                Change::Forgotten {
+                    ids: vec![first.id, second.id]
+                },
+                Change::Carded(card),
+            ]
+        );
     }
 }

@@ -1,10 +1,12 @@
 //! Anthropic Messages API: system prompt is its own field, `max_tokens` is required,
 //! and the reply is a list of content blocks.
 
-use super::{Api, Provider, Request, Response, Stop};
+use super::{Api, Assembler, Delta, Provider, Request, Response, Result, Stop};
+use anyhow::{Context as _, bail, ensure};
 use context::{Block, Context, Message, Role};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 
 pub struct Anthropic;
 
@@ -86,6 +88,131 @@ impl Api for Anthropic {
             output_tokens: reply.usage.output_tokens,
             stop,
         })
+    }
+
+    fn stream(&self) -> Option<Box<dyn Assembler>> {
+        Some(Box::<Stream>::default())
+    }
+}
+
+/// A streamed message, put back together: `message_start` holds the message with no content,
+/// each content block then opens, grows by deltas and closes, and `message_delta` brings the
+/// stop reason and the final usage.
+#[derive(Default)]
+struct Stream {
+    message: Value,
+    /// A tool call's input arrives as pieces of JSON text, parsed when its block closes.
+    inputs: HashMap<usize, String>,
+    stopped: bool,
+}
+
+impl Stream {
+    fn block(&mut self, event: &Value) -> Result<&mut Value> {
+        let index = event["index"].as_u64().context("an event with no index")? as usize;
+        self.message["content"]
+            .get_mut(index)
+            .with_context(|| format!("no content block {index}"))
+    }
+}
+
+impl Assembler for Stream {
+    fn event(&mut self, event: &Value) -> Result<Option<Delta>> {
+        match event["type"].as_str() {
+            Some("message_start") => self.message = event["message"].clone(),
+            Some("content_block_start") => {
+                let content = self.message["content"]
+                    .as_array_mut()
+                    .context("a content block before the message started")?;
+                ensure!(
+                    event["index"].as_u64() == Some(content.len() as u64),
+                    "content blocks out of order"
+                );
+                content.push(event["content_block"].clone());
+            }
+            Some("content_block_delta") => {
+                let delta = &event["delta"];
+                let piece = |field: &str| delta[field].as_str().unwrap_or_default();
+                match delta["type"].as_str() {
+                    Some("text_delta") => {
+                        append(self.block(event)?, "text", piece("text"));
+                        return Ok(Some(Delta::Text(piece("text").into())));
+                    }
+                    Some("thinking_delta") => {
+                        append(self.block(event)?, "thinking", piece("thinking"));
+                        return Ok(Some(Delta::Thinking(piece("thinking").into())));
+                    }
+                    Some("signature_delta") => {
+                        append(self.block(event)?, "signature", piece("signature"));
+                    }
+                    Some("input_json_delta") => {
+                        let index = event["index"].as_u64().unwrap_or_default() as usize;
+                        let input = self.inputs.entry(index).or_default();
+                        input.push_str(piece("partial_json"));
+                    }
+                    Some("citations_delta") => {
+                        let citation = delta["citation"].clone();
+                        match &mut self.block(event)?["citations"] {
+                            Value::Array(citations) => citations.push(citation),
+                            none => *none = json!([citation]),
+                        }
+                    }
+                    // A kind of delta added since: the block keeps what it has.
+                    _ => {}
+                }
+            }
+            Some("content_block_stop") => {
+                let index = event["index"].as_u64().unwrap_or_default() as usize;
+                if let Some(input) = self.inputs.remove(&index) {
+                    // Cut off mid-input, the JSON is incomplete: kept as text, like the
+                    // arguments another vendor sends as invalid JSON (see `message`).
+                    self.block(event)?["input"] = match input.trim() {
+                        "" => json!({}),
+                        text => serde_json::from_str(text).unwrap_or_else(|_| input.into()),
+                    };
+                }
+            }
+            Some("message_delta") => {
+                let message = self
+                    .message
+                    .as_object_mut()
+                    .context("a message delta before the message started")?;
+                merge(message, &event["delta"]);
+                if let Some(usage) = message.get_mut("usage").and_then(Value::as_object_mut) {
+                    merge(usage, &event["usage"]);
+                }
+            }
+            Some("message_stop") => self.stopped = true,
+            Some("error") => {
+                let error = &event["error"];
+                bail!(
+                    "the stream failed: {}",
+                    error["message"].as_str().unwrap_or(&error.to_string())
+                );
+            }
+            // Keep-alives, and kinds of event added since.
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    fn finish(self: Box<Self>) -> Result<Value> {
+        ensure!(self.stopped, "the stream ended before the reply did");
+        Ok(self.message)
+    }
+}
+
+/// Adds `piece` to the end of a block's text field.
+fn append(block: &mut Value, field: &str, piece: &str) {
+    match &mut block[field] {
+        Value::String(text) => text.push_str(piece),
+        none => *none = piece.into(),
+    }
+}
+
+/// Sets `into`'s fields to those `from` has.
+fn merge(into: &mut Map<String, Value>, from: &Value) {
+    for (key, value) in from.as_object().into_iter().flatten() {
+        into.insert(key.clone(), value.clone());
     }
 }
 
@@ -360,6 +487,123 @@ mod tests {
         .unwrap();
         assert!(matches!(reply.content[2], ContentBlock::Other(_)));
         assert_eq!(Anthropic.response(reply).unwrap().message.text(), "pong");
+    }
+
+    /// A stream is put back together into the reply the non-streaming call returns: text,
+    /// signed thinking, a tool call's input, the stop reason and the final usage.
+    #[test]
+    fn a_stream_assembles_into_the_full_reply() {
+        let events = [
+            json!({ "type": "message_start", "message": {
+                "id": "msg_1", "type": "message", "role": "assistant", "model": MODEL,
+                "content": [], "stop_reason": null, "stop_sequence": null,
+                "usage": { "input_tokens": 10, "output_tokens": 1 } } }),
+            json!({ "type": "ping" }),
+            json!({ "type": "content_block_start", "index": 0,
+                "content_block": { "type": "thinking", "thinking": "", "signature": "" } }),
+            json!({ "type": "content_block_delta", "index": 0,
+                "delta": { "type": "thinking_delta", "thinking": "Paris. " } }),
+            json!({ "type": "content_block_delta", "index": 0,
+                "delta": { "type": "signature_delta", "signature": "sig" } }),
+            json!({ "type": "content_block_stop", "index": 0 }),
+            json!({ "type": "content_block_start", "index": 1,
+                "content_block": { "type": "text", "text": "" } }),
+            json!({ "type": "content_block_delta", "index": 1,
+                "delta": { "type": "text_delta", "text": "Let me " } }),
+            json!({ "type": "content_block_delta", "index": 1,
+                "delta": { "type": "text_delta", "text": "check." } }),
+            json!({ "type": "content_block_stop", "index": 1 }),
+            json!({ "type": "content_block_start", "index": 2, "content_block": {
+                "type": "tool_use", "id": "c1", "name": "weather", "input": {} } }),
+            json!({ "type": "content_block_delta", "index": 2,
+                "delta": { "type": "input_json_delta", "partial_json": "{\"city\": \"Pa" } }),
+            json!({ "type": "content_block_delta", "index": 2,
+                "delta": { "type": "input_json_delta", "partial_json": "ris\"}" } }),
+            json!({ "type": "content_block_stop", "index": 2 }),
+            json!({ "type": "message_delta",
+                "delta": { "stop_reason": "tool_use", "stop_sequence": null },
+                "usage": { "output_tokens": 42 } }),
+            json!({ "type": "message_stop" }),
+        ];
+        let mut stream = Anthropic.stream().unwrap();
+        let deltas: Vec<Delta> = events
+            .iter()
+            .filter_map(|event| stream.event(event).unwrap())
+            .collect();
+        assert_eq!(
+            deltas,
+            [
+                Delta::Thinking("Paris. ".into()),
+                Delta::Text("Let me ".into()),
+                Delta::Text("check.".into()),
+            ]
+        );
+        let raw = stream.finish().unwrap().to_string();
+        let res = Provider::anthropic("none").read(&raw).unwrap();
+        assert_eq!(res.stop, Stop::ToolUse);
+        assert_eq!((res.input_tokens, res.output_tokens), (10, 42));
+        assert_eq!(
+            res.message.content,
+            vec![
+                Block::Thinking {
+                    text: "Paris. ".into(),
+                    signature: Some("sig".into()),
+                },
+                Block::Text {
+                    text: "Let me check.".into(),
+                },
+                Block::ToolCall {
+                    id: "c1".into(),
+                    name: "weather".into(),
+                    input: json!({ "city": "Paris" }),
+                },
+            ]
+        );
+    }
+
+    /// A stream that fails or stops early is an error, never a shorter reply.
+    #[test]
+    fn a_broken_stream_is_an_error() {
+        let start = json!({ "type": "message_start", "message": {
+            "id": "msg_1", "type": "message", "role": "assistant", "model": MODEL,
+            "content": [], "stop_reason": null,
+            "usage": { "input_tokens": 1, "output_tokens": 1 } } });
+        let mut cut = Anthropic.stream().unwrap();
+        cut.event(&start).unwrap();
+        assert!(cut.finish().is_err());
+
+        let mut failed = Anthropic.stream().unwrap();
+        failed.event(&start).unwrap();
+        let error = failed
+            .event(&json!({ "type": "error",
+                "error": { "type": "overloaded_error", "message": "Overloaded" } }))
+            .unwrap_err();
+        assert!(error.to_string().contains("Overloaded"));
+    }
+
+    /// The reply arrives in pieces, and is the reply `chat` reads.
+    #[tokio::test]
+    #[ignore = "calls Anthropic"]
+    async fn anthropic_streams() {
+        let pieces = std::sync::Mutex::new(Vec::new());
+        let res = provider()
+            .stream(&Request::new(MODEL), &pong_context(), &|delta| {
+                pieces.lock().unwrap().push(delta)
+            })
+            .await
+            .unwrap();
+        let written: String = pieces
+            .into_inner()
+            .unwrap()
+            .into_iter()
+            .filter_map(|delta| match delta {
+                Delta::Text(text) => Some(text),
+                Delta::Thinking(_) => None,
+            })
+            .collect();
+        println!("{res:?}");
+        assert!(!written.is_empty());
+        assert_eq!(written, res.message.text());
     }
 
     fn provider() -> Provider<Anthropic> {

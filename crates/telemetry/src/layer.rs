@@ -1,7 +1,13 @@
-//! A `tracing` layer that writes every event to the journal, with the fields of the spans it
+//! A `tracing` layer that writes every event to a journal, with the fields of the spans it
 //! happened in: an event inside a task's phase carries that phase's `thread` and `task`.
+//!
+//! Which journal: the one of the recording whose span the event happened in (`record`), so
+//! several systems in one process each keep their own. Outside any, the journal `capture` set
+//! for the current thread (tests), or none.
 
+use std::collections::HashMap;
 use std::fmt;
+use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use serde_json::value::RawValue;
 use serde_json::{Map, Value};
@@ -14,43 +20,28 @@ use tracing_subscriber::registry::LookupSpan;
 
 use crate::journal::{BODIES, Entry, Journal, Severity, as_text};
 
-pub struct JournalLayer {
-    /// `None`: the journal `capture` set for the current thread, if any.
-    journal: Option<Journal>,
-}
+pub struct JournalLayer;
 
 thread_local! {
     pub(crate) static CAPTURE: std::cell::RefCell<Option<Journal>> = const { std::cell::RefCell::new(None) };
 }
 
-impl JournalLayer {
-    pub fn new(journal: Journal) -> Self {
-        Self {
-            journal: Some(journal),
-        }
-    }
-
-    /// Writes to the journal `capture` set for the thread an event happens on.
-    pub(crate) fn captured() -> Self {
-        Self { journal: None }
-    }
-
-    fn record(&self, entry: Entry, bodies: Vec<(String, String)>) {
-        match &self.journal {
-            Some(journal) => journal.record_with(entry, bodies),
-            None => {
-                if let Ok(Some(journal)) = CAPTURE.try_with(|slot| slot.borrow().clone()) {
-                    journal.record_with(entry, bodies);
-                }
-            }
-        }
-    }
+/// The journals being recorded to, by the number their recording's span (`RECORDING`)
+/// carries in its `route` field.
+pub(crate) fn routes() -> MutexGuard<'static, HashMap<u64, Journal>> {
+    static ROUTES: LazyLock<Mutex<HashMap<u64, Journal>>> = LazyLock::new(Mutex::default);
+    crate::journal::lock(&ROUTES)
 }
+
+/// The name of a recording's own span: only its `route` field is read as one.
+const RECORDING: &str = "tokidoki";
 
 /// A span's name and fields, kept in its extensions.
 struct SpanFields {
     name: &'static str,
     fields: Map<String, Value>,
+    /// The journal this span's events go to: set on a recording's own span.
+    journal: Option<Journal>,
 }
 
 impl<S> Layer<S> for JournalLayer
@@ -61,9 +52,16 @@ where
         let Some(span) = ctx.span(id) else { return };
         let mut fields = Map::new();
         attrs.record(&mut Fields::new(&mut fields));
+        let journal = match attrs.metadata().name() == RECORDING {
+            true => (fields.remove("route").as_ref())
+                .and_then(Value::as_u64)
+                .and_then(|route| routes().get(&route).cloned()),
+            false => None,
+        };
         span.extensions_mut().insert(SpanFields {
             name: attrs.metadata().name(),
             fields,
+            journal,
         });
     }
 
@@ -89,9 +87,12 @@ where
             .map(as_text)
             .unwrap_or_default();
         let mut spans = Vec::new();
+        let mut journal = None;
         for span in ctx.event_scope(event).into_iter().flatten() {
             if let Some(data) = span.extensions().get::<SpanFields>() {
                 spans.push(data.name);
+                // The nearest recording's: there is one, unless systems are nested.
+                journal = journal.or_else(|| data.journal.clone());
                 for (key, value) in &data.fields {
                     fields.entry(key.as_str()).or_insert_with(|| value.clone());
                 }
@@ -114,8 +115,11 @@ where
             message,
             fields,
         };
+        let journal = journal.or_else(|| CAPTURE.try_with(|slot| slot.borrow().clone()).ok()?);
         // Written on the journal's own thread; one that can't write reports it there.
-        self.record(entry, bodies);
+        if let Some(journal) = journal {
+            journal.record_with(entry, bodies);
+        }
     }
 }
 

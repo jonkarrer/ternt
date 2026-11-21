@@ -1,6 +1,7 @@
 //! OpenAI-style chat completions: OpenAI, Baseten, Fireworks.
 
-use super::{Api, Provider, Request, Response, Stop};
+use super::{Api, Assembler, Delta, Provider, Request, Response, Stop};
+use anyhow::{Result, bail, ensure};
 use context::{Block, Context, Message, Role};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -122,6 +123,121 @@ impl Api for OpenAi {
             output_tokens: reply.usage.completion_tokens,
             stop,
         })
+    }
+
+    fn stream(&self) -> Option<Box<dyn Assembler>> {
+        Some(Box::<Stream>::default())
+    }
+}
+
+/// A streamed completion, put back together: every chunk repeats the completion's ID and
+/// model and brings a piece of the one choice (text, thinking, or tool calls by index); the
+/// chunk that ends it has the `finish_reason`, and that one or a last one with no choices
+/// the usage.
+#[derive(Default)]
+struct Stream {
+    /// The first chunk: the completion's ID, creation time and model.
+    first: Option<Value>,
+    content: String,
+    reasoning: String,
+    refusal: String,
+    calls: Vec<Value>,
+    finish: Option<String>,
+    usage: Value,
+}
+
+impl Assembler for Stream {
+    fn ask(&self, body: &mut Value) {
+        body["stream"] = true.into();
+        // Without it OpenAI and Baseten leave the token counts out of a stream.
+        body["stream_options"] = json!({ "include_usage": true });
+    }
+
+    fn event(&mut self, chunk: &Value) -> Result<Option<Delta>> {
+        // A failure after the stream began comes as an event, the status long sent.
+        let error = &chunk["error"];
+        if !error.is_null() {
+            bail!(
+                "{}",
+                error["message"].as_str().unwrap_or(&error.to_string())
+            );
+        }
+        if self.first.is_none() {
+            self.first = Some(chunk.clone());
+        }
+        if !chunk["usage"].is_null() {
+            self.usage = chunk["usage"].clone();
+        }
+        let choice = &chunk["choices"][0];
+        if let Some(finish) = choice["finish_reason"].as_str() {
+            self.finish = Some(finish.to_string());
+        }
+        let delta = &choice["delta"];
+        let piece = |field: &str| delta[field].as_str().unwrap_or_default();
+        for call in delta["tool_calls"].as_array().into_iter().flatten() {
+            let index = call["index"].as_u64().unwrap_or(self.calls.len() as u64) as usize;
+            ensure!(index <= self.calls.len(), "tool calls out of order");
+            if index == self.calls.len() {
+                self.calls.push(json!({
+                    "id": "", "type": "function", "function": { "name": "", "arguments": "" },
+                }));
+            }
+            // The ID and name come once, the arguments as pieces of JSON text.
+            let (so_far, function) = (&mut self.calls[index], &call["function"]);
+            if let Some(id) = call["id"].as_str().filter(|id| !id.is_empty()) {
+                so_far["id"] = id.into();
+            }
+            if let Some(name) = function["name"].as_str().filter(|name| !name.is_empty()) {
+                so_far["function"]["name"] = name.into();
+            }
+            let arguments = so_far["function"]["arguments"].as_str().unwrap_or_default();
+            let more = function["arguments"].as_str().unwrap_or_default();
+            so_far["function"]["arguments"] = format!("{arguments}{more}").into();
+        }
+        self.refusal.push_str(piece("refusal"));
+        // Thinking is `reasoning_content` on Baseten and Fireworks, `reasoning` on some others.
+        let thinking = match piece("reasoning_content") {
+            "" => piece("reasoning"),
+            thinking => thinking,
+        };
+        self.reasoning.push_str(thinking);
+        self.content.push_str(piece("content"));
+        Ok(match (piece("content"), thinking) {
+            ("", "") => None,
+            ("", thinking) => Some(Delta::Thinking(thinking.into())),
+            (text, _) => Some(Delta::Text(text.into())),
+        })
+    }
+
+    fn finish(self: Box<Self>) -> Result<Value> {
+        ensure!(
+            self.finish.is_some(),
+            "the stream ended before the reply did"
+        );
+        let first = self.first.unwrap_or_default();
+        let filled = |text: String| (!text.is_empty()).then_some(text);
+        let usage = match self.usage {
+            Value::Null => json!({ "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 }),
+            usage => usage,
+        };
+        Ok(json!({
+            "id": first["id"].as_str().unwrap_or_default(),
+            "object": "chat.completion",
+            "created": first["created"].as_u64().unwrap_or_default(),
+            "model": first["model"].as_str().unwrap_or_default(),
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": filled(self.content),
+                    "reasoning_content": filled(self.reasoning),
+                    "refusal": filled(self.refusal),
+                    "tool_calls": (!self.calls.is_empty()).then_some(self.calls),
+                },
+                "finish_reason": self.finish,
+            }],
+            "usage": usage,
+        }))
     }
 }
 
@@ -280,6 +396,103 @@ mod tests {
             .unwrap();
         println!("{res:?}");
         assert!(!res.message.text().is_empty());
+    }
+
+    /// What `Provider::stream` does with a body of server-sent events.
+    fn streamed(body: &str) -> (Result<Response>, Vec<Delta>) {
+        let mut stream = OpenAi.stream().unwrap();
+        let mut deltas = Vec::new();
+        for event in crate::providers::Sse::default().feed(body.as_bytes()) {
+            match stream.event(&event) {
+                Ok(delta) => deltas.extend(delta),
+                Err(error) => return (Err(error), deltas),
+            }
+        }
+        let read = stream.finish().and_then(|reply| {
+            let reply: ChatCompletion = serde_json::from_value(reply)?;
+            Ok(OpenAi.response(reply).unwrap())
+        });
+        (read, deltas)
+    }
+
+    #[test]
+    fn a_stream_asks_for_its_usage() {
+        let mut body = json!({ "model": "m" });
+        OpenAi.stream().unwrap().ask(&mut body);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn a_streamed_reply_is_the_whole_reply() {
+        let chunk = |rest: &str| {
+            format!(
+                "data: {{\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":7,\
+                 \"model\":\"m\",{rest}}}\n\n"
+            )
+        };
+        let choice = |delta: &str, finish: &str| {
+            chunk(&format!(
+                "\"choices\":[{{\"index\":0,\"delta\":{delta},\"finish_reason\":{finish}}}],\
+                 \"usage\":null"
+            ))
+        };
+        let body = [
+            choice(r#"{"role":"assistant","content":""}"#, "null"),
+            choice(r#"{"reasoning_content":"Let me "}"#, "null"),
+            choice(r#"{"reasoning_content":"think."}"#, "null"),
+            choice(r#"{"content":"It is "}"#, "null"),
+            choice(r#"{"content":"sunny."}"#, "null"),
+            choice(
+                r#"{"tool_calls":[{"index":0,"id":"c9","type":"function","function":{"name":"weather","arguments":""}}]}"#,
+                "null",
+            ),
+            choice(
+                r#"{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":"}}]}"#,
+                "null",
+            ),
+            choice(
+                r#"{"tool_calls":[{"index":0,"function":{"arguments":"\"Paris\"}"}}]}"#,
+                "null",
+            ),
+            choice("{}", r#""tool_calls""#),
+            chunk(
+                r#""choices":[],"usage":{"prompt_tokens":11,"completion_tokens":5,"total_tokens":16}"#,
+            ),
+            "data: [DONE]\n\n".to_string(),
+        ]
+        .concat();
+
+        let (read, deltas) = streamed(&body);
+        let read = read.unwrap();
+        assert_eq!(
+            deltas,
+            [
+                Delta::Thinking("Let me ".into()),
+                Delta::Thinking("think.".into()),
+                Delta::Text("It is ".into()),
+                Delta::Text("sunny.".into()),
+            ]
+        );
+        assert_eq!(read.stop, Stop::ToolUse);
+        assert_eq!((read.input_tokens, read.output_tokens), (11, 5));
+        assert_eq!(read.message.text(), "It is sunny.");
+        let calls: Vec<_> = read.message.tool_calls().collect();
+        assert_eq!(calls, [("c9", "weather", &json!({ "city": "Paris" }))]);
+        assert!(
+            matches!(&read.message.content[0], Block::Thinking { text, .. } if text == "Let me think.")
+        );
+    }
+
+    #[test]
+    fn a_stream_cut_short_or_failing_is_an_error() {
+        let cut = "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"It\"},\"finish_reason\":null}]}\n\n";
+        let (read, deltas) = streamed(cut);
+        assert_eq!(deltas, [Delta::Text("It".into())]);
+        assert!(read.unwrap_err().to_string().contains("ended before"));
+
+        let failed = "data: {\"error\":{\"message\":\"overloaded\"}}\n\n";
+        assert_eq!(streamed(failed).0.unwrap_err().to_string(), "overloaded");
     }
 
     #[test]

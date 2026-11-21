@@ -1,0 +1,70 @@
+/* Tokidoki: cool paper and ink, indigo for what it does, plum for what it remembers.
+   The interface speaks in the system face; Tokidoki's own words are set in the system serif. */
+:root {
+  color-scheme: light dark;
+  --paper: #eef0f6;
+  --side: #e3e6f0;
+  --raised: #f8f9fc;
+  --ink: #1a2036;
+  --muted: #68708a;
+  --line: #d3d8e6;
+  --indigo: #2f45b5;
+  --plum: #b4457a;
+  --danger: #b3372f;
+  --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --voice: ui-serif, "New York", "Iowan Old Style", Georgia, serif;
+  --code: ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #141826;
+    --side: #0f1320;
+    --raised: #1c2133;
+    --ink: #e6e9f4;
+    --muted: #8c94ae;
+    --line: #272d42;
+    --indigo: #8fa2f2;
+    --plum: #e58bb4;
+    --danger: #ef8a80;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font: 14px/1.45 var(--ui);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+button {
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: default;
+}
+:focus-visible {
+  outline: 2px solid var(--indigo);
+  outline-offset: 2px;
+}
+.selectable {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: auto;
+}

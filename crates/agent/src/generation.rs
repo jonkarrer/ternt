@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use state::Thread;
 
 use crate::tool::{ToolCall, ToolCallInput, ToolOutput};
-use crate::{Mind, Model, Settings, Settled, inbox, think};
+use crate::{Live, Mind, Model, Settings, Settled, inbox, think};
 
 pub(crate) const NAME: &str = "agent.generation";
 
@@ -17,14 +17,16 @@ pub struct Generation<M> {
     model: Arc<M>,
     mind: Option<Arc<dyn Mind>>,
     settings: Settings,
+    live: Live,
 }
 
 impl<M> Generation<M> {
-    pub fn new(model: Arc<M>, mind: Option<Arc<dyn Mind>>, settings: Settings) -> Self {
+    pub fn new(model: Arc<M>, mind: Option<Arc<dyn Mind>>, settings: Settings, live: Live) -> Self {
         Self {
             model,
             mind,
             settings,
+            live,
         }
     }
 }
@@ -134,9 +136,11 @@ impl<M: Model> Generation<M> {
         if rt.restarts() > 0 {
             return self.retry(rt, round, attempt, "interrupted by a restart".into());
         }
-        let ctx = rt.thread(|t| t.context().clone())?;
+        let (ctx, seq) = rt.thread(|t| (t.context().clone(), t.checkpoints().len()))?;
+        let thread = rt.thread_id();
+        let show = |delta| self.live.delta(thread, seq, delta);
         let reply = tokio::select! {
-            reply = self.model.chat(&ctx) => reply,
+            reply = self.model.stream(&ctx, &show) => reply,
             _ = rt.cancelled() => bail!("cancelled"),
         };
         let message = match reply {
@@ -144,7 +148,6 @@ impl<M: Model> Generation<M> {
             Err(error) => return self.retry(rt, round, attempt, format!("{error:#}")),
         };
 
-        let thread = rt.thread_id();
         let max_rounds = self.settings.max_rounds;
         let calls: Vec<ToolCallInput> = message
             .tool_calls()

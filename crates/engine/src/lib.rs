@@ -37,7 +37,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use state::{Checkpoint, Savepoint, Sqlite, Thread};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::AbortHandle;
 use tracing::Instrument;
 
@@ -71,6 +71,13 @@ pub(crate) struct Shared {
     version: watch::Sender<u64>,
     /// What each commit changed, for `subscribe`.
     changes: broadcast::Sender<Arc<Committed>>,
+    /// The span the engine was opened in: everything it runs is traced inside it, so whoever
+    /// opened it can tell its events from another engine's (`telemetry::record`).
+    span: tracing::Span,
+    /// A clone is held by every task the engine spawns, until `stopped` takes this one: the
+    /// receiver then ends once the last task has.
+    alive: Mutex<Option<mpsc::Sender<()>>>,
+    ended: tokio::sync::Mutex<mpsc::Receiver<()>>,
 }
 
 /// What one commit stored, as `Engine::subscribe` reports it: the values themselves, so a
@@ -141,7 +148,11 @@ impl Engine {
         store::init(&store)?;
         let (tasks, next_id) =
             store.read(|conn| Ok((store::live(conn)?, store::next_id(conn)?)))?;
+        let (alive, ended) = mpsc::channel(1);
         let shared = Arc::new(Shared {
+            span: tracing::Span::current(),
+            alive: Mutex::new(Some(alive)),
+            ended: tokio::sync::Mutex::new(ended),
             store,
             registry,
             settings,
@@ -179,7 +190,7 @@ impl Engine {
     pub fn resume(&self) {
         let mut inner = self.shared.lock();
         if inner.scheduler.is_none() && !inner.closed {
-            let handle = tokio::spawn(schedule(self.shared.clone()));
+            let handle = self.shared.spawn(schedule(self.shared.clone()));
             inner.scheduler = Some(handle.abort_handle());
         }
     }
@@ -284,6 +295,24 @@ impl Engine {
         self.shared
             .store
             .transaction(|tx| pending.iter().try_for_each(|task| store::save(tx, task)))
+    }
+
+    /// Whether the engine has been closed (or crashed): it runs and commits nothing more.
+    pub fn is_closed(&self) -> bool {
+        self.shared.lock().closed
+    }
+
+    /// After `close`: returns once everything the engine was running has stopped, so nothing
+    /// of it still touches the store, or anything else it was given. At once on an engine
+    /// that is still open. A phase stuck in code that never yields never stops: give this a
+    /// time limit.
+    pub async fn stopped(&self) {
+        if !self.is_closed() {
+            return;
+        }
+        drop(self.shared.alive.lock().unwrap().take());
+        let mut ended = self.shared.ended.lock().await;
+        while ended.recv().await.is_some() {}
     }
 
     /// Stops as a crash would: nothing more is written. For tests of recovery.
@@ -521,6 +550,20 @@ impl Shared {
         })
     }
 
+    /// Spawns `work` in the engine's span, counted among what `Engine::stopped` waits for.
+    fn spawn<F>(&self, work: F) -> tokio::task::JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let alive = self.alive.lock().unwrap().clone();
+        let counted = async move {
+            let _alive = alive;
+            work.await
+        };
+        tokio::spawn(counted.instrument(self.span.clone()))
+    }
+
     /// Stops the scheduler and every invocation, and refuses further commits.
     fn stop(&self) {
         let mut inner = self.lock();
@@ -686,7 +729,7 @@ impl Shared {
         let Some((generation, kind)) = reserved else {
             return Ok(());
         };
-        let supervisor = tokio::spawn(supervise(
+        let supervisor = self.spawn(supervise(
             self.clone(),
             id,
             mode,
@@ -777,7 +820,7 @@ async fn supervise(
             generation,
             cancel: cancel.clone(),
         });
-        let phase = tokio::spawn(
+        let phase = shared.spawn(
             match mode {
                 Mode::Run => kind.clone().run(invocation),
                 Mode::Abort => kind.clone().abort(invocation),

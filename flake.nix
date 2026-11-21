@@ -22,6 +22,7 @@
             turso     # ships `tursodb`, the local engine shell — not the cloud CLI
             turso-cli # ships `turso`, the Turso Cloud CLI
             jq
+            bun       # the app's front end (app/) and the Tauri CLI
           ];
         };
       });

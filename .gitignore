@@ -6,3 +6,5 @@
 /.claude/worktrees
 *.db
 result
+node_modules/
+/app/dist/

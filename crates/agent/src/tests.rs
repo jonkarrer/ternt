@@ -158,7 +158,14 @@ fn start_with(
     settings: Settings,
 ) -> Agent {
     let mut registry = Registry::new();
-    register(&mut registry, script.clone(), tools, mind, settings);
+    register(
+        &mut registry,
+        script.clone(),
+        tools,
+        mind,
+        settings,
+        Live::default(),
+    );
     let engine = Engine::open(store.clone(), registry, EngineSettings::default()).unwrap();
     engine.resume();
     Agent::new(engine, NewThreads::default())
@@ -550,7 +557,14 @@ async fn live_tool_loop() {
     let mut tools = Tools::new();
     tools.add(weather);
     let mut registry = Registry::new();
-    register(&mut registry, model, tools, None, Settings::default());
+    register(
+        &mut registry,
+        model,
+        tools,
+        None,
+        Settings::default(),
+        Live::default(),
+    );
     let engine = Engine::open(store(), registry, EngineSettings::default()).unwrap();
     engine.resume();
     engine
@@ -863,6 +877,7 @@ async fn live_remembers_across_threads() {
         Tools::new(),
         Some(Arc::new(experience)),
         Settings::default(),
+        Live::default(),
     );
     let engine = Engine::open(store(), registry, EngineSettings::default()).unwrap();
     engine.resume();
@@ -1143,7 +1158,14 @@ async fn new_threads_start_with_the_system_prompt_and_tools() {
     let store = store();
     let mut registry = Registry::new();
     let specs = tools.specs();
-    register(&mut registry, script.clone(), tools, None, fast());
+    register(
+        &mut registry,
+        script.clone(),
+        tools,
+        None,
+        fast(),
+        Live::default(),
+    );
     let engine = Engine::open(store.clone(), registry, EngineSettings::default()).unwrap();
     engine.resume();
     let new_threads = NewThreads {

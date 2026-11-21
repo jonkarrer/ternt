@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-# Becomes ["crates/*"] once the first crate exists (cargo rejects a pattern that matches nothing).
-members = ["crates/*"]
+# The crates, and the Tauri app that packages them (app/, with its front end).
+members = ["crates/*", "app/src-tauri"]
 
 [workspace.package]
 edition = "2024"

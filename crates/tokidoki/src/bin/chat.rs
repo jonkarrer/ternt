@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use telemetry::inspect::clip;
 use tokidoki::interface::{
-    Change, Content, Doing, Event, Feedback, Input, Role, Sent, Speaker, Status,
+    Change, Content, Delta, Doing, Event, Feedback, Input, MemoryChange, Role, Sent, Speaker,
+    Status,
 };
 use tokidoki::{Config, Events, Tokidoki};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -40,7 +41,7 @@ async fn run() -> Result<()> {
     let scratch = Scratch::new(keep)?;
     let mut config = Config::from_env()?;
     config.data = scratch.path().to_path_buf();
-    let tokidoki = Tokidoki::open(config, agent::Tools::new())?;
+    let tokidoki = Tokidoki::open(config, tokidoki::Tools::new())?;
     println!(
         "tokidoki: a fresh one, in {}; /help for commands",
         scratch.path().display()
@@ -122,7 +123,7 @@ async fn run() -> Result<()> {
             }
         }
     }
-    tokidoki.close()
+    tokidoki.close().await
 }
 
 #[derive(Debug, PartialEq)]
@@ -141,6 +142,9 @@ async fn follow(
 ) -> Result<Followed> {
     let mut status = String::new();
     let mut stopping = false;
+    // A reply is being written on the current line; the latest reply was shown that way.
+    let mut writing = false;
+    let mut shown = false;
     loop {
         let event = tokio::select! {
             event = events.recv() => event,
@@ -166,12 +170,34 @@ async fn follow(
             },
             Some(event) => event,
         };
+        // Anything else ends the line a reply was being written on.
+        if writing && !matches!(event, Event::Delta { .. }) {
+            println!("\n");
+            writing = false;
+        }
         match event {
+            Event::Delta {
+                thread,
+                delta: Delta::Text { text },
+            } if thread == sent.thread => {
+                if !writing {
+                    println!();
+                    writing = true;
+                    shown = true;
+                    status.clear();
+                }
+                print!("{text}");
+                std::io::stdout().flush()?;
+            }
             // Tool calls show as they are made, below.
             Event::Activity { thread, doing } if thread == sent.thread => {
                 let now = match doing {
                     Doing::Remembering => "remembering",
-                    Doing::Thinking => "thinking",
+                    // A new request: its reply hasn't been shown.
+                    Doing::Thinking => {
+                        shown = false;
+                        "thinking"
+                    }
                     Doing::Tool { .. } => continue,
                 };
                 if status != now {
@@ -203,10 +229,22 @@ async fn follow(
                 }
                 _ => {}
             },
+            Event::Memory { change } => match change {
+                MemoryChange::Learned { memory } => {
+                    println!("  + learned: {}", clip(&memory.text, 100));
+                }
+                MemoryChange::Revised { memory, was, .. } => {
+                    println!("  ~ {} (was: {})", clip(&memory.text, 80), clip(&was, 60));
+                }
+                MemoryChange::Forgotten { ids } => println!("  - forgot {} memories", ids.len()),
+                MemoryChange::Described { .. } => {}
+            },
             Event::Submission { submission }
                 if submission.id == sent.submission && submission.is_settled() =>
             {
                 match submission.status {
+                    // Already on screen, if it was shown as it was written.
+                    Status::Done if shown => {}
                     Status::Done => println!("\n{}\n", submission.answer.unwrap_or_default()),
                     _ => println!("  (no answer: {})", submission.reason.unwrap_or_default()),
                 }
