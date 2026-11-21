@@ -18,16 +18,12 @@
   let error = $state<string | null>(null);
   let input = $state<HTMLTextAreaElement>();
   let scroller = $state<HTMLElement>();
-  /** Events that arrived for a conversation being started (its id isn't
-      known until `send` returns); replayed once it is. */
-  let early: AgentTagged["event"][] = [];
-  let sending = false;
 
   const space = $derived(request?.space ?? null);
   const list = $derived(rows(view.log));
   const busy = $derived(view.live.doing !== null);
   const presence = $derived(presenceText(view.live.doing));
-  const backend = $derived(status?.state === "running" ? status.backend : request?.backend);
+  const backend = $derived(status?.state === "running" ? status.backend : null);
   const stub = $derived(backend === "stub");
   /** The agent is up but has no key for its provider (Settings → Agent), so it can't answer yet. */
   const needsKey = $derived(status?.state === "running" && !stub && !status.hasKey);
@@ -39,6 +35,7 @@
 
   onMount(() => {
     const opens = browser.onAgentOpen(show);
+    const closes = browser.onAgentClose(() => (request = null));
     const events = browser.onAgentEvent(onEvent);
     const statuses = browser.onAgentStatus(onStatus);
     // A request made before this page loaded is waiting in Rust; subscribe
@@ -46,6 +43,7 @@
     opens.then(() => browser.agentRequest()).then((pending) => pending && show(pending));
     return () => {
       opens.then((off) => off());
+      closes.then((off) => off());
       events.then((off) => off());
       statuses.then((off) => off());
     };
@@ -134,10 +132,6 @@
 
   function onEvent({ space: from, event }: AgentTagged) {
     if (from !== request?.space.id) return;
-    if (sending && !view.thread && "thread" in event) {
-      if (early.length < 200) early.push(event);
-      return;
-    }
     if (apply(view, event)) catchUp();
     if (event.type === "checkpoint" && event.change.kind === "turn_ended") refreshThreads();
     scrollToEnd();
@@ -150,24 +144,16 @@
     const spaceId = request.space.id;
     draft = "";
     error = null;
-    sending = !view.thread;
-    early = [];
     try {
       const sent = await browser.agentSend(spaceId, text, view.thread);
       if (request?.space.id !== spaceId) return;
-      if (sent.thread !== view.thread) {
-        await openThread(sent.thread);
-        // What the agent did before the page knew the thread (history
-        // has the checkpoints; this adds the activity and text so far).
-        for (const event of early) if (apply(view, event)) catchUp();
-      }
+      // A new conversation: its id wasn't known until now. History has what
+      // the agent did meanwhile; streamed text picks up from the next delta.
+      if (sent.thread !== view.thread) await openThread(sent.thread);
       refreshThreads();
     } catch (e) {
       error = String(e);
       draft = text;
-    } finally {
-      sending = false;
-      early = [];
     }
   }
 
@@ -175,8 +161,8 @@
     if (request && view.thread) browser.agentAbort(request.space.id, view.thread);
   }
 
+  /** Rust hides the panel and says so (`agent:close`), the same as for ⌘J. */
   function close() {
-    request = null;
     return browser.closeAgent();
   }
 

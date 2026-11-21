@@ -14,12 +14,13 @@
   let keys = $state<AgentKeys | null>(null);
   let status = $state<AgentStatus | null>(null);
   let draft = $state("");
-  let basetenDraft = $state("");
   let saving = $state(false);
   let error = $state<string | null>(null);
 
   const chosen = $derived(PROVIDERS.find((p) => p.id === provider) ?? PROVIDERS[0]);
-  const saved = $derived(keys?.[provider] ?? false);
+  /** Where the chosen provider's key is: the Keychain, Ternt's environment, or nowhere. */
+  const source = $derived(keys?.[provider] ?? "none");
+  const saved = $derived(source !== "none");
 
   onMount(() => {
     browser.getPrefs().then((p) => (provider = p.agentProvider));
@@ -67,7 +68,6 @@
       await browser.agentSetKeys(update);
       keys = await browser.agentKeys();
       draft = "";
-      basetenDraft = "";
     } catch (e) {
       error = String(e);
     } finally {
@@ -79,12 +79,6 @@
     event.preventDefault();
     const key = draft.trim();
     if (key) change({ [provider]: key });
-  }
-
-  function saveBaseten(event: Event) {
-    event.preventDefault();
-    const key = basetenDraft.trim();
-    if (key) change({ baseten: key });
   }
 </script>
 
@@ -118,7 +112,9 @@
     <div class="label">
       {chosen.name} API key
       <div class="hint">
-        {#if saved}
+        {#if source === "environment"}
+          From Ternt's own environment (development); Settings can't change it.
+        {:else if saved}
           Saved in your Keychain.
         {:else}
           Not set. Make one at {chosen.where}; it is kept in your Keychain, never in a file.
@@ -135,44 +131,13 @@
       spellcheck="false"
     />
     <button class="button primary" type="submit" disabled={saving || !draft.trim()}>{saving ? "Saving…" : "Save"}</button>
-    {#if saved}
+    {#if source === "keychain"}
       <button class="button" type="button" disabled={saving} onclick={() => change({ [provider]: "" })}>Remove</button>
     {/if}
   </form>
   {#if error}
     <div class="row"><span class="error" role="alert">{error}</span></div>
   {/if}
-</div>
-
-<h2>Router</h2>
-<div class="card">
-  <form class="row" onsubmit={saveBaseten}>
-    <div class="label">
-      Baseten API key <span class="optional">optional</span>
-      <div class="hint">
-        {#if keys?.baseten}
-          Saved in your Keychain. The agent's router uses a small fast model there to place a message that it couldn't
-          by itself.
-        {:else}
-          Not set. Without it the router goes with its best guess, which is fine. The agent's router uses a small fast
-          model there to place a message that it couldn't by itself.
-        {/if}
-      </div>
-    </div>
-    <input
-      class="field key"
-      type="password"
-      bind:value={basetenDraft}
-      placeholder={keys?.baseten ? "Replace…" : "Baseten key"}
-      aria-label="Baseten API key"
-      autocomplete="off"
-      spellcheck="false"
-    />
-    <button class="button primary" type="submit" disabled={saving || !basetenDraft.trim()}>Save</button>
-    {#if keys?.baseten}
-      <button class="button" type="button" disabled={saving} onclick={() => change({ baseten: "" })}>Remove</button>
-    {/if}
-  </form>
 </div>
 
 <style>
@@ -190,12 +155,6 @@
   }
   .status[data-state="down"] {
     color: #c9302c;
-  }
-  .optional {
-    margin-left: 4px;
-    font-size: 11px;
-    font-weight: 400;
-    color: var(--text-muted);
   }
   .error {
     color: #c9302c;

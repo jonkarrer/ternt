@@ -210,7 +210,6 @@ export interface AgentRequest {
   /** Left edge of the content pane (logical px). */
   contentLeft: number;
   /** `stub` until tokidoki is embedded. */
-  backend: string;
   /** The agent's data folder under the app data dir. */
   folder: string;
 }
@@ -223,14 +222,16 @@ export interface AgentTagged {
 
 /** The agent process (src-tauri/src/agent/sidecar.rs): a crash there restarts it, not Ternt. */
 /** Which keys are set (never their values). Fireworks or Anthropic answers; Baseten is the router's fallback. */
-export type AgentKeys = { fireworks: boolean; anthropic: boolean; baseten: boolean };
+/** Where a key is: nowhere, the Keychain, or Ternt's own environment (development; Settings can't remove it). */
+export type KeySource = "none" | "keychain" | "environment";
+export type AgentKeys = { fireworks: KeySource; anthropic: KeySource };
 /** A key change: a missing field leaves that key as it is, "" removes it. */
 export type AgentKeyChange = Partial<Record<keyof AgentKeys, string>>;
 
 export type AgentStatus =
   | { state: "starting" }
   /** `provider` answers (Settings → Agent); `hasKey`: its key was given (the stub needs none). */
-  | { state: "running"; backend: string; restarted: boolean; provider: string; model: string | null; hasKey: boolean }
+  | { state: "running"; backend: string; restarted: boolean; provider: string; model: string | null; hasKey: boolean; generation: number }
   /** `asked`: restarted on purpose (Restart, a key change), not a crash. */
   | { state: "restarting"; attempt: number; asked: boolean }
   | { state: "down"; reason: string };
@@ -353,6 +354,8 @@ export const browser = {
   agentAbort: (space: number, thread: string) => invoke<boolean>("agent_abort", { space, thread }),
   onAgentOpen: (cb: (request: AgentRequest) => void): Promise<UnlistenFn> =>
     listen<AgentRequest>("agent:open", (e) => cb(e.payload)),
+  /** The panel was hidden (Esc, ⌘J, the command bar opening). */
+  onAgentClose: (cb: () => void): Promise<UnlistenFn> => listen("agent:close", () => cb()),
   onAgentEvent: (cb: (tagged: AgentTagged) => void): Promise<UnlistenFn> =>
     listen<AgentTagged>("agent:event", (e) => cb(e.payload)),
   agentStatus: () => invoke<AgentStatus>("agent_status"),

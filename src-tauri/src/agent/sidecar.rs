@@ -10,8 +10,9 @@
 //! `RESTART_WINDOW`, leaving a Restart button.
 //!
 //! The binary is `ternt-agent` beside Ternt's own executable (Tauri's
-//! `externalBin`; `TERNT_AGENT_BIN` overrides the path): the stub from
-//! `src/bin/ternt-agent` today, tokidoki's `serve` later.
+//! `externalBin`; `TERNT_AGENT_BIN` overrides the path): tokidoki-serve in a
+//! release, the stub from `src-tauri/agent` in development
+//! (`scripts/sidecar.sh`).
 
 use std::{
     collections::HashMap,
@@ -19,22 +20,22 @@ use std::{
     process::Stdio,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter, EventTarget};
+use tauri::{AppHandle, Emitter};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{ChildStdin, Command},
-    sync::{Mutex as AsyncMutex, oneshot},
+    sync::{Mutex as AsyncMutex, Notify, oneshot},
 };
 
 use super::{
-    AGENT_WEBVIEW, Agent, Outbox, Reply, keys,
+    Outbox, folder_name, keys,
     protocol::*,
     wire::{Frame, Request},
 };
@@ -44,6 +45,9 @@ use super::{
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the process has to say it is ready after starting.
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a process gets to leave after SIGTERM before SIGKILL. tokidoki
+/// stops its agents in milliseconds; the contract promises 300.
+const STOP_WITHIN: Duration = Duration::from_millis(300);
 /// Pauses before each restart. One more death within `RESTART_WINDOW` than
 /// there are entries here, and the process stays down.
 const BACKOFF: [Duration; 4] = [
@@ -71,6 +75,9 @@ pub enum Status {
         model: Option<String>,
         /// It was given that provider's key; without one it can't answer.
         has_key: bool,
+        /// Counts the processes started: a change means a new one, whatever
+        /// else looks the same.
+        generation: u64,
     },
     Restarting {
         /// Which restart this is within the budget; 0 when `asked`.
@@ -81,6 +88,28 @@ pub enum Status {
     Down {
         reason: String,
     },
+}
+
+/// What Ternt wants of the running process, read by the loop when it exits.
+#[derive(Clone, Copy, PartialEq)]
+#[repr(u8)]
+enum Intent {
+    /// Nothing: an exit is a death.
+    None = 0,
+    /// Stop it and start another (Restart, a key or provider change).
+    Restart = 1,
+    /// Stop it for good (Ternt is quitting).
+    Stop = 2,
+}
+
+impl Intent {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Restart,
+            2 => Self::Stop,
+            _ => Self::None,
+        }
+    }
 }
 
 pub struct Sidecar {
@@ -94,11 +123,14 @@ pub struct Sidecar {
     status: Mutex<Status>,
     /// When the process died, for the restart budget.
     deaths: Mutex<Vec<Instant>>,
+    /// The running process, 0 when there is none.
     pid: AtomicU32,
     /// A `run` loop is going (so `restart` knows whether to start one).
     running: AtomicBool,
-    /// The next exit is a restart Ternt asked for, not a death.
-    asked: AtomicBool,
+    intent: AtomicU8,
+    /// Cuts a back-off pause short (Restart pressed during one).
+    wake: Notify,
+    generation: AtomicU64,
 }
 
 /// The agent process to start.
@@ -125,12 +157,13 @@ fn restart_attempt(deaths: &mut Vec<Instant>, now: Instant) -> u32 {
     deaths.len() as u32
 }
 
-fn signal(pid: u32, sig: &str) {
+fn signal(pid: u32, sig: libc::c_int) {
     if pid != 0 {
-        let _ = std::process::Command::new("kill")
-            .arg(sig)
-            .arg(pid.to_string())
-            .status();
+        // Sending a signal to a pid we started and still hold is the one thing
+        // `kill` is for; the process's death is seen by the loop that owns it.
+        unsafe {
+            libc::kill(pid as libc::pid_t, sig);
+        }
     }
 }
 
@@ -147,7 +180,9 @@ impl Sidecar {
             deaths: Mutex::default(),
             pid: AtomicU32::new(0),
             running: AtomicBool::new(false),
-            asked: AtomicBool::new(false),
+            intent: AtomicU8::new(Intent::None as u8),
+            wake: Notify::new(),
+            generation: AtomicU64::new(0),
         })
     }
 
@@ -163,18 +198,31 @@ impl Sidecar {
     async fn run(self: Arc<Self>) {
         let mut restarted = false;
         loop {
-            if let Err(reason) = self.spawn_once(restarted).await {
-                self.set_status(Status::Down { reason });
-                break;
-            }
-            if self.asked.swap(false, Ordering::AcqRel) {
-                self.fail_pending("The agent was restarted.");
-                self.set_status(Status::Restarting {
-                    attempt: 0,
-                    asked: true,
-                });
-                restarted = false;
-                continue;
+            let outcome = self.spawn_once(restarted).await;
+            // However it ended, there is no process now.
+            self.pid.store(0, Ordering::Relaxed);
+            *self.stdin.lock().await = None;
+            let intent = Intent::from_u8(self.intent.swap(Intent::None as u8, Ordering::AcqRel));
+            match (intent, outcome) {
+                (Intent::Stop, _) => {
+                    self.fail_pending("Ternt is quitting.");
+                    break;
+                }
+                (Intent::Restart, _) => {
+                    self.fail_pending("The agent was restarted.");
+                    self.set_status(Status::Restarting {
+                        attempt: 0,
+                        asked: true,
+                    });
+                    restarted = false;
+                    continue;
+                }
+                (Intent::None, Err(reason)) => {
+                    self.fail_pending(&reason);
+                    self.set_status(Status::Down { reason });
+                    break;
+                }
+                (Intent::None, Ok(())) => {}
             }
             self.fail_pending("The agent process exited.");
             let attempt = restart_attempt(&mut self.deaths.lock().unwrap(), Instant::now());
@@ -191,7 +239,8 @@ impl Sidecar {
                 attempt,
                 asked: false,
             });
-            tokio::time::sleep(BACKOFF[attempt as usize - 1]).await;
+            // The pause, unless Restart cuts it short.
+            let _ = tokio::time::timeout(BACKOFF[attempt as usize - 1], self.wake.notified()).await;
             restarted = true;
         }
         self.running.store(false, Ordering::Release);
@@ -202,8 +251,8 @@ impl Sidecar {
     async fn spawn_once(&self, restarted: bool) -> Result<(), String> {
         let bin = binary();
         let _ = std::fs::create_dir_all(&self.data);
-        // Only an exit of the process started here can be one `restart` asked for.
-        self.asked.store(false, Ordering::Release);
+        // Only what is asked of the process started here counts for it.
+        self.intent.store(Intent::None as u8, Ordering::Release);
         // The user's provider and key reach the agent this way and no other.
         let provider = crate::prefs::get(&self.app).agent_provider;
         let keys = keys::load(provider);
@@ -237,9 +286,9 @@ impl Sidecar {
         }
 
         let mut lines = BufReader::new(stdout).lines();
-        let (backend, model) = match tokio::time::timeout(READY_TIMEOUT, lines.next_line()).await {
+        let ready = match tokio::time::timeout(READY_TIMEOUT, lines.next_line()).await {
             Ok(Ok(Some(line))) => match serde_json::from_str(&line) {
-                Ok(Frame::Ready { ready }) => (ready.backend, ready.model),
+                Ok(Frame::Ready { ready }) => ready,
                 _ => {
                     let _ = child.start_kill();
                     return Err(format!(
@@ -254,18 +303,17 @@ impl Sidecar {
         };
         *self.stdin.lock().await = Some(stdin);
         self.set_status(Status::Running {
-            backend,
+            backend: ready.backend,
             restarted,
             provider: provider.as_str().into(),
-            model,
+            model: ready.model,
             has_key,
+            generation: self.generation.fetch_add(1, Ordering::Relaxed) + 1,
         });
 
         while let Ok(Some(line)) = lines.next_line().await {
             self.on_line(&line);
         }
-        *self.stdin.lock().await = None;
-        self.pid.store(0, Ordering::Relaxed);
         let _ = child.wait().await;
         Ok(())
     }
@@ -296,23 +344,14 @@ impl Sidecar {
         }
     }
 
+    /// Every window hears (the panel and Settings both show it).
     fn set_status(&self, status: Status) {
         *self.status.lock().unwrap() = status.clone();
-        let _ = self
-            .app
-            .emit_to(EventTarget::webview(AGENT_WEBVIEW), "agent:status", status);
+        let _ = self.app.emit("agent:status", status);
     }
 
     pub fn status(&self) -> Status {
         self.status.lock().unwrap().clone()
-    }
-
-    /// What answers, once the process is up.
-    pub fn backend(&self) -> Option<String> {
-        match self.status() {
-            Status::Running { backend, .. } => Some(backend),
-            _ => None,
-        }
     }
 
     fn unavailable(&self) -> String {
@@ -325,7 +364,7 @@ impl Sidecar {
     }
 
     /// One request, answered or failed within `REQUEST_TIMEOUT`.
-    pub async fn call(
+    async fn call(
         &self,
         space: Option<String>,
         method: &str,
@@ -363,92 +402,107 @@ impl Sidecar {
         }
     }
 
-    /// Start over, on purpose (the Restart button, a key change): stop a
-    /// running process (the loop brings it back, with the keys read again),
-    /// or start one when it was left down.
-    pub fn restart(self: &Arc<Self>) {
-        self.deaths.lock().unwrap().clear();
-        let pid = self.pid.load(Ordering::Relaxed);
-        if pid != 0 {
-            self.asked.store(true, Ordering::Release);
-            // A TERM lets it finish what it is writing (tokidoki stops its
-            // agents cleanly in milliseconds); a KILL follows if it won't go.
-            signal(pid, "-TERM");
-            let me = self.clone();
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(300)).await;
-                if me.pid.load(Ordering::Relaxed) == pid {
-                    signal(pid, "-KILL");
-                }
-            });
-        } else if !self.running.load(Ordering::Acquire) {
-            self.set_status(Status::Starting);
-            self.start();
-        }
+    /// A request to one space's agent, which opens on first use.
+    async fn ask<T: DeserializeOwned>(
+        &self,
+        space: u32,
+        method: &str,
+        params: Value,
+    ) -> Result<T, String> {
+        let value = self.call(Some(folder_name(space)), method, params).await?;
+        serde_json::from_value(value)
+            .map_err(|err| format!("The agent answered with something unexpected: {err}"))
     }
 
-    /// Stop the process before Ternt exits: a TERM to let it finish writing,
-    /// then a KILL. (Runs on the main thread at exit, so no async here.)
-    pub fn shutdown(&self) {
+    /// Returns as soon as the input is placed; the answer arrives as events.
+    /// `label` is the space's name, which the agent tells its new threads.
+    pub async fn send(&self, space: u32, label: &str, input: Input) -> Result<Sent, String> {
+        self.ask(space, "send", json!({ "input": input, "label": label }))
+            .await
+    }
+
+    pub async fn threads(&self, space: u32) -> Result<Vec<ThreadSummary>, String> {
+        self.ask(space, "threads", Value::Null).await
+    }
+
+    /// A thread's checkpoints from `since` on.
+    pub async fn history(
+        &self,
+        space: u32,
+        thread: String,
+        since: usize,
+    ) -> Result<Vec<Event>, String> {
+        self.ask(
+            space,
+            "history",
+            json!({ "thread": thread, "since": since }),
+        )
+        .await
+    }
+
+    /// Stop the turn under way; `false` if there was none.
+    pub async fn abort(&self, space: u32, thread: String) -> Result<bool, String> {
+        self.ask(space, "abort", json!({ "thread": thread })).await
+    }
+
+    /// The agent stopped and its files removed, for good.
+    pub async fn delete(&self, space: u32) -> Result<(), String> {
+        self.ask::<Value>(space, "delete", Value::Null)
+            .await
+            .map(|_| ())
+    }
+
+    /// Ask the running process to leave, with `intent` for the loop to read
+    /// when it has. Returns its pid, or `None` when nothing was running.
+    fn stop(&self, intent: Intent) -> Option<u32> {
         let pid = self.pid.load(Ordering::Relaxed);
         if pid == 0 {
+            return None;
+        }
+        self.intent.store(intent as u8, Ordering::Release);
+        signal(pid, libc::SIGTERM);
+        Some(pid)
+    }
+
+    /// Start over, on purpose (the Restart button, a key or provider change):
+    /// stop the process and let the loop start another, with the keys read
+    /// again; cut a back-off pause short; or start a loop when it was left
+    /// down.
+    pub fn restart(self: &Arc<Self>) {
+        self.deaths.lock().unwrap().clear();
+        match self.stop(Intent::Restart) {
+            Some(pid) => {
+                let me = self.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(STOP_WITHIN).await;
+                    if me.pid.load(Ordering::Relaxed) == pid {
+                        signal(pid, libc::SIGKILL);
+                    }
+                });
+            }
+            None if self.running.load(Ordering::Acquire) => self.wake.notify_one(),
+            None => {
+                self.set_status(Status::Starting);
+                self.start();
+            }
+        }
+    }
+
+    /// Stop the process before Ternt exits, and keep the loop from starting
+    /// another. Runs on the main thread at exit, so it waits by polling: the
+    /// loop clears `pid` the moment the process is gone, usually within a few
+    /// milliseconds.
+    pub fn shutdown(&self) {
+        let Some(pid) = self.stop(Intent::Stop) else {
             return;
+        };
+        let deadline = Instant::now() + STOP_WITHIN;
+        while self.pid.load(Ordering::Relaxed) == pid && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
         }
-        signal(pid, "-TERM");
-        std::thread::sleep(Duration::from_millis(300));
-        signal(pid, "-KILL");
-    }
-}
-
-fn parse<T: DeserializeOwned>(value: Value) -> Result<T, String> {
-    serde_json::from_value(value)
-        .map_err(|err| format!("The agent answered with something unexpected: {err}"))
-}
-
-/// A space's agent, in the sidecar.
-pub struct Remote {
-    sidecar: Arc<Sidecar>,
-    /// Its folder name (`space-7`).
-    space: String,
-    /// The space's name, passed along for the agent to use.
-    label: String,
-}
-
-impl Remote {
-    pub fn new(sidecar: Arc<Sidecar>, space: String, label: String) -> Self {
-        Self {
-            sidecar,
-            space,
-            label,
+        if self.pid.load(Ordering::Relaxed) == pid {
+            signal(pid, libc::SIGKILL);
         }
-    }
-
-    fn call<T: DeserializeOwned + Send + 'static>(
-        &self,
-        method: &'static str,
-        params: Value,
-    ) -> Reply<T> {
-        let sidecar = self.sidecar.clone();
-        let space = self.space.clone();
-        Box::pin(async move { parse(sidecar.call(Some(space), method, params).await?) })
-    }
-}
-
-impl Agent for Remote {
-    fn send(&self, input: Input) -> Reply<Sent> {
-        self.call("send", json!({ "input": input, "label": self.label }))
-    }
-
-    fn threads(&self) -> Reply<Vec<ThreadSummary>> {
-        self.call("threads", Value::Null)
-    }
-
-    fn history(&self, thread: String, since: usize) -> Reply<Vec<Event>> {
-        self.call("history", json!({ "thread": thread, "since": since }))
-    }
-
-    fn abort(&self, thread: String) -> Reply<bool> {
-        self.call("abort", json!({ "thread": thread }))
     }
 }
 
@@ -486,6 +540,13 @@ mod tests {
     }
 
     #[test]
+    fn intents_survive_the_trip_through_a_byte() {
+        for intent in [Intent::None, Intent::Restart, Intent::Stop] {
+            assert!(Intent::from_u8(intent as u8) == intent);
+        }
+    }
+
+    #[test]
     fn status_wire_shape() {
         let json = serde_json::to_value(Status::Running {
             backend: "stub".into(),
@@ -493,11 +554,12 @@ mod tests {
             provider: "fireworks".into(),
             model: None,
             has_key: false,
+            generation: 2,
         })
         .unwrap();
         assert_eq!(
             json,
-            serde_json::json!({ "state": "running", "backend": "stub", "restarted": true, "provider": "fireworks", "model": null, "hasKey": false })
+            serde_json::json!({ "state": "running", "backend": "stub", "restarted": true, "provider": "fireworks", "model": null, "hasKey": false, "generation": 2 })
         );
         let json = serde_json::to_value(Status::Restarting {
             attempt: 0,

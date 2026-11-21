@@ -10,7 +10,6 @@ const first = S().activeSpace;
 await A.open();
 const req = await A.request();
 await t.assert(req.space.id === first && req.folder === `space-${first}`, "opens for the active space, folder by id");
-await t.assert(["stub", "starting"].includes(req.backend), `the request names the backend (${req.backend})`);
 await t.assert((await A.text("h1 .space")) === S().spaces.find((s) => s.id === first).name, "header names the space");
 // The agent runs in a sidecar process, started with the app
 const status = await t.until(async () => {

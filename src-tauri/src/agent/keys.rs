@@ -34,11 +34,6 @@ pub const ANTHROPIC: Key = Key {
     variable: "ANTHROPIC_API_KEY",
     account: "anthropic",
 };
-/// The router's fallback model. Optional.
-pub const BASETEN: Key = Key {
-    variable: "BASETEN_API_KEY",
-    account: "baseten",
-};
 
 /// The key a provider answers with.
 pub fn answering(provider: AgentProvider) -> &'static Key {
@@ -48,17 +43,28 @@ pub fn answering(provider: AgentProvider) -> &'static Key {
     }
 }
 
+/// Where a key is, if anywhere.
+#[derive(Clone, Copy, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum Source {
+    #[default]
+    None,
+    Keychain,
+    /// Ternt's own environment (development); Settings can't remove it.
+    Environment,
+}
+
 impl Key {
-    /// The key, from the environment or the Keychain; `None` when neither has it.
-    pub fn read(&self) -> Result<Option<String>, String> {
+    /// The key and where it came from; `None` when neither place has it.
+    pub fn read(&self) -> Result<Option<(String, Source)>, String> {
         if let Some(value) = std::env::var(self.variable).ok().filter(|v| !v.is_empty()) {
-            return Ok(Some(value));
+            return Ok(Some((value, Source::Environment)));
         }
         match Entry::new(SERVICE, self.account)
             .map_err(|e| e.to_string())?
             .get_password()
         {
-            Ok(value) if !value.is_empty() => Ok(Some(value)),
+            Ok(value) if !value.is_empty() => Ok(Some((value, Source::Keychain))),
             Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
             Err(error) => Err(format!("reading the Keychain: {error}")),
         }
@@ -78,14 +84,14 @@ impl Key {
     }
 }
 
-/// The sidecar's environment for `provider`: its key and the router's, as (variable, value).
-/// The other provider's key stays out. A key that can't be read is logged and left out, so
+/// The sidecar's environment for `provider`: its key, as (variable, value). The other
+/// provider's key stays out. A key that can't be read is logged and left out, so
 /// the process still starts.
 pub fn load(provider: AgentProvider) -> Vec<(&'static str, String)> {
-    [answering(provider), &BASETEN]
+    [answering(provider)]
         .into_iter()
         .filter_map(|key| match key.read() {
-            Ok(value) => value.map(|value| (key.variable, value)),
+            Ok(value) => value.map(|(value, _)| (key.variable, value)),
             Err(error) => {
                 eprintln!("ternt-agent: {}: {error}", key.variable);
                 None
@@ -94,20 +100,24 @@ pub fn load(provider: AgentProvider) -> Vec<(&'static str, String)> {
         .collect()
 }
 
-/// Which keys are set, never their values: what the panel shows.
+/// Where each key is, never its value: what Settings shows.
 #[derive(Clone, Copy, Debug, Default, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Present {
-    pub fireworks: bool,
-    pub anthropic: bool,
-    pub baseten: bool,
+    pub fireworks: Source,
+    pub anthropic: Source,
 }
 
 pub fn present() -> Present {
-    let set = |key: &Key| key.read().ok().flatten().is_some();
+    let source = |key: &Key| {
+        key.read()
+            .ok()
+            .flatten()
+            .map(|(_, source)| source)
+            .unwrap_or_default()
+    };
     Present {
-        fireworks: set(&FIREWORKS),
-        anthropic: set(&ANTHROPIC),
-        baseten: set(&BASETEN),
+        fireworks: source(&FIREWORKS),
+        anthropic: source(&ANTHROPIC),
     }
 }

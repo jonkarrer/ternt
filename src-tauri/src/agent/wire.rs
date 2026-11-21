@@ -6,23 +6,26 @@
 //! Methods and their `params` (all take `space`, the agent's folder name,
 //! except `shutdown`):
 //!
-//! | method     | params                              | result                |
-//! |------------|-------------------------------------|-----------------------|
-//! | `send`     | `{ "input": Input }`                | `Sent`                |
-//! | `threads`  |                                     | `[ThreadSummary]`     |
-//! | `history`  | `{ "thread": id, "since": n }`      | `[Event]` checkpoints |
-//! | `abort`    | `{ "thread": id }`                  | `bool`                |
-//! | `close`    |                                     | `null`                |
-//! | `shutdown` |                                     | `null`, then exit     |
+//! | method     | params                               | result                |
+//! |------------|--------------------------------------|-----------------------|
+//! | `send`     | `{ "input": Input, "label": str }`   | `Sent`                |
+//! | `threads`  |                                      | `[ThreadSummary]`     |
+//! | `history`  | `{ "thread": id, "since": n }`       | `[Event]` checkpoints |
+//! | `abort`    | `{ "thread": id }`                   | `bool`                |
+//! | `delete`   |                                      | `null`, files removed |
+//! | `close`    |                                      | `null`                |
+//! | `shutdown` |                                      | `null`, then exit     |
 //!
 //! Agents open on first use; tokidoki's `Spaces::open` is the model. The
-//! same file is compiled into the stub sidecar (`src/bin/ternt-agent`), and
-//! docs/AGENT-SIDECAR.md describes it for tokidoki's `serve`.
+//! same file is compiled into the stub sidecar (`src-tauri/agent`), and
+//! docs/AGENT-SIDECAR.md is the contract tokidoki-serve implements.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::protocol::Event;
+#[cfg(test)]
+use super::protocol::*;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Request {
@@ -122,5 +125,49 @@ mod tests {
         let back: Request =
             serde_json::from_str(&serde_json::to_string(&request).unwrap()).unwrap();
         assert_eq!(back, request);
+    }
+
+    #[test]
+    fn protocol_wire_format_is_tokidokis() {
+        // The shapes in protocol.ts: tags and snake_case. Guards the copy in protocol.rs.
+        let event = Event::Checkpoint {
+            thread: "t1".into(),
+            seq: 3,
+            at: 1,
+            turn: 1,
+            change: Change::Message {
+                role: Role::Assistant,
+                content: vec![Content::ToolCall {
+                    id: "c".into(),
+                    name: "tabs".into(),
+                    input: serde_json::json!({ "space": 1 }),
+                }],
+            },
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "checkpoint");
+        assert_eq!(json["change"]["kind"], "message");
+        assert_eq!(json["change"]["role"], "assistant");
+        assert_eq!(json["change"]["content"][0]["type"], "tool_call");
+        assert_eq!(
+            serde_json::to_value(Event::Lagged).unwrap(),
+            serde_json::json!({ "type": "lagged" })
+        );
+        assert_eq!(
+            serde_json::to_value(Doing::Tool { name: "x".into() }).unwrap(),
+            serde_json::json!({ "kind": "tool", "name": "x" })
+        );
+        assert_eq!(
+            serde_json::to_value(WhenBusy::FollowUp).unwrap(),
+            "follow_up"
+        );
+        let input: Input = serde_json::from_value(serde_json::json!({
+            "from": { "id": "owner" },
+            "parts": [{ "type": "text", "text": "hi" }],
+            "when_busy": "steer"
+        }))
+        .unwrap();
+        assert_eq!(input.thread, None);
+        assert_eq!(input.from, Speaker::owner());
     }
 }

@@ -125,7 +125,7 @@ fn handle(
             let input: Input = serde_json::from_value(params["input"].clone())
                 .map_err(|e| format!("bad input: {e}"))?;
             // Test hooks for the supervisor in Ternt.
-            match input.text().trim() {
+            match stub::text_of(&input).trim() {
                 "/crash" => {
                     eprintln!("ternt-agent: crashing on request");
                     std::process::abort()

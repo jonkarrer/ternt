@@ -35,7 +35,7 @@ if (!status.hasKey) {
   // provider in Settings restarts the agent with that key.
   const have = await t.invoke("agent_keys");
   const other = status.provider === "fireworks" ? "anthropic" : "fireworks";
-  if (have[other]) {
+  if (have[other] !== "none") {
     const prefs = await t.invoke("get_prefs");
     await t.invoke("set_prefs", { prefs: { ...prefs, agentProvider: other } });
     status2 = await t.until(async () => {
@@ -68,9 +68,12 @@ await t.until(async () => !(await A.rows()).some(([k]) => k === "live") && !(awa
 await t.shot("tokidoki-reply");
 
 // What tokidoki keeps on disk comes back after the process is restarted on purpose
+const before = (await t.invoke("agent_status")).generation;
 await t.invoke("agent_restart");
-await t.until(async () => (await t.invoke("agent_status")).state !== "running" || (await t.invoke("agent_status")).restarted === false, "the process is going down");
-const again = await running();
+const again = await t.until(async () => {
+  const s = await t.invoke("agent_status");
+  return s.state === "running" && s.generation !== before ? s : null;
+}, "a new process is running", 20000);
 await t.assert(again.restarted === false, "an asked-for restart isn't reported as a crash");
 await t.until(async () => (await t.read("agent", `document.querySelector(".status")?.dataset.state ?? ""`)) === "", "no crash banner");
 await t.until(async () => (await userRows()).length === 1 && (await assistantRows()).some(([, x]) => /pong/i.test(x)), "the conversation is back from disk", 15000);

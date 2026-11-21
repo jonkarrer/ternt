@@ -21,20 +21,22 @@ ternt-agent --data <dir>
 - A space's folder name is lowercase letters, digits, `-` and `_`, at most 64 characters (tokidoki
   rejects anything else). `space-<id>` always fits.
 - **The provider and its key come from the environment.** `TOKIDOKI_PROVIDER` is `fireworks` or
-  `anthropic`: who the user chose in Settings → Agent. With it comes that provider's key and only
-  that one, `FIREWORKS_API_KEY` or `ANTHROPIC_API_KEY`, plus `BASETEN_API_KEY` (optional, the
-  router's). Ternt is bring-your-own-key: the keys live in the user's Keychain (service
-  `com.jokar.ternt`, accounts `fireworks`, `anthropic` and `baseten`; `.dev` in debug builds),
-  put there by Settings → Agent (`src-tauri/src/agent/keys.rs`), and reach the process this way
-  and no other. Changing the provider or its key restarts the process. A variable already in
+  `anthropic`: who the user chose in Settings → Agent (tokidoki also knows `baseten`; Ternt
+  doesn't offer it). With it comes that provider's key and only that one, `FIREWORKS_API_KEY` or
+  `ANTHROPIC_API_KEY`; the process answers, routes and remembers with that one provider. Ternt is
+  bring-your-own-key: the keys live in the user's Keychain (service `com.jokar.ternt`, accounts
+  `fireworks` and `anthropic`; `.dev` in debug builds), put there by Settings → Agent
+  (`src-tauri/src/agent/keys.rs`), and reach the process this way and no other. A variable already
+  in Ternt's own environment wins, for development (`doppler run -- just dev tokidoki`). Changing
+  the provider or the key restarts the process, since its environment is fixed at start. A variable already in
   Ternt's own environment wins, for development. Saving a key restarts the process, since the
-  environment is fixed at start. **Without an Anthropic key the process must still start and say
+  environment is fixed at start. **Without the provider's key the process must still start and say
   it is ready**; it answers requests that need the model with an error. Ternt knows whether it
   gave the provider's key (`hasKey` in the panel's status) and points at Settings instead of
-  sending. A variable already in Ternt's own environment wins over the Keychain, for development
-  (`doppler run -- just dev tokidoki`).
-- One environment means one Anthropic key for every space. A key per space (a work account for a
-  work space) is not designed: it would need a key in the request that opens the space.
+  sending.
+- One environment means one provider and one key for every space. A key per space (a work
+  account for a work space) is not designed: it would need a key in the request that opens the
+  space.
 - tokidoki holds `<dir>/.lock` while it runs: a second process on the same folder exits with code 1
   before its ready line. Ternt only starts a replacement after `wait` on the old process, so this
   happens only if something else runs a sidecar on Ternt's folder.
@@ -91,12 +93,14 @@ with its space on the way to the panel.
 | `threads`  |                                     | `[ThreadSummary]`, newest first  |
 | `history`  | `{ "thread": id, "since": n }`      | `[Event]`: checkpoints from `n`  |
 | `abort`    | `{ "thread": id }`                  | `true` if a turn was stopped     |
-| `close`    |                                     | `null`; the agent may be reopened|
 | `delete`   |                                     | `null`; the agent stopped and **all its files removed, for good** |
+| `close`    |                                     | `null`; the agent may be reopened|
 | `shutdown` |                                     | `null`, then exit                |
 
 Ternt calls `delete` when the user deletes a space (`agent::forget`), so the conversations and
-memory go with it. It must succeed for a space that was never opened or has no files.
+memory go with it. It must succeed for a space that was never opened or has no files. Ternt
+doesn't call `close` or `shutdown` today: it signals instead (below), and agents stay open for
+the life of the process.
 
 All types are `tokidoki::interface` (`crates/interface/protocol.ts` in TypeScript;
 `src/agent/protocol.ts` is Ternt's copy, `src-tauri/src/agent/protocol.rs` the same in Rust).
@@ -131,8 +135,8 @@ events. The stub answers `unknown method` to all of them.
   from its own state. **Deferred**: the agent is a chat with memory for now, by decision
   (2026-11-21), and neither side should build this until that changes.
 - **A key per space** (above).
-- **`when_busy: steer`**: Ternt sends it when a thread is mid-answer; tokidoki accepts it but it
-  hasn't been exercised against a real model yet.
+- **`when_busy`**: Ternt's panel holds input while a turn is under way (Stop ends it), so inputs
+  are sent with the default and `steer` has never been exercised against a real model.
 
 ## What Ternt does when the process dies
 
@@ -142,8 +146,11 @@ within two minutes leaves it down, with a Restart button. After a restart the pa
 `threads` and `history`, so an agent that resumes from disk (tokidoki) shows everything it had,
 and one that doesn't (the stub) shows a fresh start.
 
-A restart Ternt asks for (the Restart button, saving a key) is not a death: the process gets
-SIGTERM, then SIGKILL 300 ms later if it is still there, and comes back with no pause, no crash
-banner and the restart budget cleared.
+A restart Ternt asks for (the Restart button, saving a key, changing the provider) is not a
+death: the process gets SIGTERM, then SIGKILL 300 ms later if it is still there, and comes back
+with no pause, no crash banner and the restart budget cleared; asked during a back-off pause, it
+cuts the pause short. When Ternt quits it does the same with no restart to follow. The status
+carries a `generation` that changes with every process started, for anyone who needs to tell a
+new process from the old one.
 
 Two stub inputs exist for testing this: `/crash` aborts the process, `/exit` ends it cleanly.

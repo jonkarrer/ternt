@@ -1,31 +1,48 @@
-//! The agent protocol: tokidoki's `interface` types, as serde values.
-//!
-//! These mirror `crates/interface/src/protocol.rs` in the tokidoki repo (and
-//! its generated `protocol.ts`, copied to `src/agent/protocol.ts`) so the
-//! panel is written against the real wire format from day one. When tokidoki
-//! is embedded this module becomes `pub use tokidoki::interface::*;` and the
-//! stub goes away; nothing in the page changes.
+//! Tokidoki's protocol, copied from crates/interface/src/protocol.rs in the tokidoki
+//! repo (commit 7f34352) by scripts/sync-protocol.sh; don't edit it here. The same
+//! types as TypeScript are src/agent/protocol.ts. The sidecar's stub compiles this file too.
+#![allow(dead_code)] // Ternt uses what it needs of tokidoki's API.
+
+//! What goes in and comes out. How it travels is not tokidoki's concern: whatever carries it
+//! (an app, a bot, a terminal) passes these plain serde values on as it sees fit.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-/// Who an input came from.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+/// Who an input came from. Their memory scope follows from it, so the core decides who may
+/// speak. The ID is whatever the code passing inputs in uses to tell people apart.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Speaker {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
 
-/// Bytes, inline or where to fetch them.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(untagged)]
-pub enum Media {
-    Base64 { base64: String },
-    Url { url: String },
+impl Speaker {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: None,
+        }
+    }
+
+    /// The one whose tokidoki it is.
+    pub fn owner() -> Self {
+        Self::new("owner")
+    }
 }
 
-/// One piece of an input. Only text is used today.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+/// Bytes, inline or where to fetch them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Media {
+    Base64(String),
+    Url(String),
+}
+
+/// One piece of an input. The core takes text today; the other kinds are in the protocol so
+/// they can be passed in, and are refused until the core can use them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Part {
     Text {
@@ -46,44 +63,61 @@ pub enum Part {
     },
 }
 
+impl Part {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Part::Text { .. } => "text",
+            Part::Image { .. } => "image",
+            Part::Audio { .. } => "audio",
+            Part::File { .. } => "file",
+        }
+    }
+}
+
 /// What to do with an input to a thread that is busy answering another.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WhenBusy {
+    /// Wait for the current answer, then answer this.
+    #[default]
     FollowUp,
+    /// Join the current work after its tool round.
     Steer,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Input {
     pub from: Speaker,
     pub parts: Vec<Part>,
     /// The thread to send it to; `None` lets the router choose.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<String>,
-    /// The same ID finds the same submission instead of submitting twice.
-    #[serde(default)]
+    /// The same ID finds the same submission instead of submitting twice (a retried send).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    #[serde(default)]
     pub when_busy: WhenBusy,
 }
 
 impl Input {
-    /// The input's text, joined (the sidecar's stub reads it; Ternt only passes inputs on).
-    #[allow(dead_code)]
-    pub fn text(&self) -> String {
-        self.parts
-            .iter()
-            .filter_map(|p| match p {
-                Part::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+    pub fn text(from: Speaker, text: impl Into<String>) -> Self {
+        Self {
+            from,
+            parts: vec![Part::Text { text: text.into() }],
+            thread: None,
+            request_id: None,
+            when_busy: WhenBusy::default(),
+        }
+    }
+
+    pub fn to(mut self, thread: impl Into<String>) -> Self {
+        self.thread = Some(thread.into());
+        self
     }
 }
 
 /// Why an input went where it did.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Route {
     /// `rule`, `search`, `classifier` or `model`.
     pub by: String,
@@ -92,15 +126,15 @@ pub struct Route {
     pub new: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sent {
     pub thread: String,
     pub submission: String,
-    /// `None` when the input named its thread.
+    /// `None` when the input named its thread, or its request ID was already submitted.
     pub route: Option<Route>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Queued,
@@ -110,7 +144,7 @@ pub enum Status {
 }
 
 /// An input and what became of it.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Submission {
     pub id: String,
     pub thread: String,
@@ -121,13 +155,20 @@ pub struct Submission {
     pub reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+impl Submission {
+    pub fn is_settled(&self) -> bool {
+        matches!(self.status, Status::Done | Status::Unanswered)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThreadSummary {
     pub id: String,
     /// The start of its first message.
     pub title: String,
     pub turns: u32,
-    /// What it is about, in the agent's words (none for a new thread).
+    /// What it is about, in tokidoki's words: written while the thread is idle, so a new
+    /// thread has none yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub about: Option<String>,
     /// Ms since the epoch.
@@ -136,14 +177,14 @@ pub struct ThreadSummary {
     pub active_at: u64,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     User,
     Assistant,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Content {
     Text {
@@ -152,7 +193,7 @@ pub enum Content {
     ToolCall {
         id: String,
         name: String,
-        input: serde_json::Value,
+        input: Value,
     },
     ToolResult {
         call_id: String,
@@ -165,53 +206,110 @@ pub enum Content {
 }
 
 /// A change to a thread, as recorded: every checkpoint is one.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Change {
     TurnStarted,
     StepStarted,
-    Message { role: Role, content: Vec<Content> },
+    Message {
+        role: Role,
+        content: Vec<Content>,
+    },
     TurnEnded,
-    Routed { by: String, reason: String },
-    Recalled { memories: Vec<String> },
-    Compacted { replaced: u32, with: u32 },
-    System { text: Option<String> },
-    ToolAdded { name: String },
-    ToolRemoved { name: String },
+    Routed {
+        by: String,
+        reason: String,
+    },
+    /// Memories brought into the conversation.
+    Recalled {
+        memories: Vec<String>,
+    },
+    /// Messages replaced: compaction, or a long-idle thread settled into its resume card.
+    Compacted {
+        replaced: usize,
+        with: usize,
+    },
+    System {
+        text: Option<String>,
+    },
+    ToolAdded {
+        name: String,
+    },
+    ToolRemoved {
+        name: String,
+    },
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum MemoryKind {
-    Fact,
-    Procedure,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Event {
+    /// A thread changed. `seq` counts a thread's checkpoints from 0 with no gaps: a client
+    /// that sees one out of order, or reconnects, catches up with `Tokidoki::history(thread,
+    /// seq)`.
+    Checkpoint {
+        thread: String,
+        seq: usize,
+        /// Ms since the epoch.
+        at: u64,
+        turn: u32,
+        change: Change,
+    },
+    /// An input's status changed.
+    Submission { submission: Submission },
+    /// Work started on a thread.
+    Activity { thread: String, doing: Doing },
+    /// Part of a reply, as the model writes it. Never recorded, so `history` has none: the
+    /// reply arrives whole as a `Checkpoint` afterwards, and replaces what its deltas built.
+    /// So does a new `Activity` `Thinking` on the thread: the request failed partway and is
+    /// being made again.
+    Delta { thread: String, delta: Delta },
+    /// What tokidoki remembers changed: it learned something, corrected or dropped a memory
+    /// (while answering, or tidying up while idle), or the user did.
+    Memory { change: MemoryChange },
+    /// Events were missed (the client fell behind): re-read what it shows.
+    Lagged,
 }
 
-/// The checkpoint a memory came from.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct MemorySource {
-    pub thread: String,
-    pub seq: u64,
-}
-
-/// Something the agent remembers, across every thread.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+/// Something tokidoki remembers, across every thread.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Memory {
+    /// Names this version: a memory that is revised gets a new ID.
     pub id: i64,
     pub kind: MemoryKind,
+    /// The memory, as one line.
     pub text: String,
+    /// 1 when first learned; each revision adds one.
     pub version: u32,
+    /// When this version was learned, ms since the epoch.
     pub at: u64,
+    /// Where it was learned, when it came out of a conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<MemorySource>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryKind {
+    /// What is true: a fact or a preference.
+    Fact,
+    /// How something is done: steps worth repeating.
+    Procedure,
+}
+
+/// The checkpoint a memory came from (`Event::Checkpoint::seq`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemorySource {
+    pub thread: String,
+    pub seq: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MemoryChange {
     Learned {
         memory: Memory,
     },
+    /// `memory` took the place of the memory `replaces`, which said `was`.
     Revised {
         memory: Memory,
         replaces: i64,
@@ -220,6 +318,7 @@ pub enum MemoryChange {
     Forgotten {
         ids: Vec<i64>,
     },
+    /// A thread's `ThreadSummary::about` was written.
     Described {
         thread: String,
         about: String,
@@ -227,96 +326,32 @@ pub enum MemoryChange {
 }
 
 /// What a reply grew by.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Delta {
     Text { text: String },
     Thinking { text: String },
 }
 
-/// What the agent started doing on a thread.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+/// What tokidoki started doing on a thread.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Doing {
+    /// Recalling and retaining memories before answering.
     Remembering,
+    /// Waiting on the model.
     Thinking,
+    /// Running a tool the model asked for.
     Tool { name: String },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum Event {
-    Checkpoint {
-        thread: String,
-        seq: u64,
-        /// Ms since the epoch.
-        at: u64,
-        turn: u32,
-        change: Change,
-    },
-    Submission {
-        submission: Submission,
-    },
-    Activity {
-        thread: String,
-        doing: Doing,
-    },
-    Delta {
-        thread: String,
-        delta: Delta,
-    },
-    Memory {
-        change: MemoryChange,
-    },
-    /// Events were dropped: read `history` from where the page is.
-    Lagged,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn wire_format_matches_tokidoki() {
-        // The shapes in crates/interface/protocol.ts: tags and snake_case.
-        let event = Event::Checkpoint {
-            thread: "t1".into(),
-            seq: 3,
-            at: 1,
-            turn: 1,
-            change: Change::Message {
-                role: Role::Assistant,
-                content: vec![Content::ToolCall {
-                    id: "c".into(),
-                    name: "tabs".into(),
-                    input: serde_json::json!({ "space": 1 }),
-                }],
-            },
-        };
-        let json = serde_json::to_value(&event).unwrap();
-        assert_eq!(json["type"], "checkpoint");
-        assert_eq!(json["change"]["kind"], "message");
-        assert_eq!(json["change"]["role"], "assistant");
-        assert_eq!(json["change"]["content"][0]["type"], "tool_call");
-        assert_eq!(
-            serde_json::to_value(Event::Lagged).unwrap(),
-            serde_json::json!({ "type": "lagged" })
-        );
-        assert_eq!(
-            serde_json::to_value(Doing::Tool { name: "x".into() }).unwrap(),
-            serde_json::json!({ "kind": "tool", "name": "x" })
-        );
-        assert_eq!(
-            serde_json::to_value(WhenBusy::FollowUp).unwrap(),
-            "follow_up"
-        );
-        let input: Input = serde_json::from_value(serde_json::json!({
-            "from": { "id": "owner" },
-            "parts": [{ "type": "text", "text": "hi" }],
-            "when_busy": "steer"
-        }))
-        .unwrap();
-        assert_eq!(input.text(), "hi");
-        assert_eq!(input.thread, None);
-    }
+/// "That was wrong": recorded with the thread (and turn), for investigating later.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Feedback {
+    pub from: Speaker,
+    pub thread: String,
+    /// The turn it is about; `None` for the latest.
+    #[serde(default)]
+    pub turn: Option<u32>,
+    pub text: String,
 }

@@ -11,8 +11,12 @@ dev flavor="": (sidecar flavor)
     bun tauri dev
 
 # Build the agent sidecar into src-tauri/binaries; Ternt needs it to compile. `stub` (default) or `tokidoki` (from ../tokidoki)
-sidecar flavor="":
-    scripts/sidecar.sh {{flavor}}
+sidecar *args:
+    scripts/sidecar.sh {{args}}
+
+# Copy tokidoki's protocol (Rust and TypeScript) from ../tokidoki after it changes there
+sync-protocol:
+    scripts/sync-protocol.sh
 
 # Typecheck + lint — must be clean before commit
 check: sidecar
@@ -26,8 +30,8 @@ test:
 fmt:
     cd src-tauri && cargo fmt
 
-# Release bundle for this machine's architecture (judge performance here, not in dev)
-build:
+# Release bundle for this machine's architecture (judge performance here, not in dev); the sidecar in release too
+build: (sidecar "--release")
     bun tauri build
 
 # ─── Tests that need a desktop session ───────────────────

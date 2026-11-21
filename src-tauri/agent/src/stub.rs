@@ -151,7 +151,7 @@ impl Thread {
     fn push(&mut self, change: Change) -> Event {
         let event = Event::Checkpoint {
             thread: self.id.clone(),
-            seq: self.log.len() as u64,
+            seq: self.log.len(),
             at: now_ms(),
             turn: self.turns,
             change,
@@ -229,7 +229,7 @@ impl Stub {
     }
 
     pub fn send(&self, input: Input) -> Result<Sent, String> {
-        let text = input.text();
+        let text = text_of(&input);
         if text.trim().is_empty() {
             return Err("Nothing to send.".into());
         }
@@ -439,6 +439,19 @@ impl Stub {
         }
         true
     }
+}
+
+/// The input's text, joined: what the stub reads to pick a reply.
+pub fn text_of(input: &Input) -> String {
+    input
+        .parts
+        .iter()
+        .filter_map(|p| match p {
+            Part::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]

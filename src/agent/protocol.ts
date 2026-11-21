@@ -1,7 +1,6 @@
-// Tokidoki's protocol, copied from crates/interface/protocol.ts in the
-// tokidoki repo (generated there by `just types`). Copy it again when the
-// protocol changes; don't edit it here. src-tauri/src/agent/protocol.rs
-// is the same set of types in Rust.
+// Tokidoki's protocol, copied from crates/interface/protocol.ts in the tokidoki repo
+// (commit 7f34352; generated there by `just types`) by scripts/sync-protocol.sh; don't
+// edit it here. src-tauri/src/agent/protocol.rs is the same set of types in Rust.
 //
 // The tokidoki protocol (crates/interface/src/protocol.rs), as TypeScript.
 // Generated: change the Rust types, then run `just types`.
