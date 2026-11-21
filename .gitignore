@@ -6,3 +6,6 @@ node_modules/
 .env
 .direnv/
 result
+
+# Sidecar binaries built by scripts/publish.sh (bundle.externalBin)
+src-tauri/binaries/

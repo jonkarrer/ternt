@@ -219,6 +219,13 @@ export interface AgentTagged {
   event: AgentEvent;
 }
 
+/** The agent process (src-tauri/src/agent/sidecar.rs): a crash there restarts it, not Ternt. */
+export type AgentStatus =
+  | { state: "starting" }
+  | { state: "running"; backend: string; restarted: boolean }
+  | { state: "restarting"; attempt: number }
+  | { state: "down"; reason: string };
+
 /** Mirror the sidebar constants in src-tauri/src/browser.rs. */
 export const DEFAULT_SIDEBAR_WIDTH = 240;
 export const MIN_SIDEBAR_WIDTH = 180;
@@ -336,6 +343,11 @@ export const browser = {
     listen<AgentRequest>("agent:open", (e) => cb(e.payload)),
   onAgentEvent: (cb: (tagged: AgentTagged) => void): Promise<UnlistenFn> =>
     listen<AgentTagged>("agent:event", (e) => cb(e.payload)),
+  agentStatus: () => invoke<AgentStatus>("agent_status"),
+  /** Start the agent process over (after it was left down, or to recover it). */
+  agentRestart: () => invoke("agent_restart"),
+  onAgentStatus: (cb: (status: AgentStatus) => void): Promise<UnlistenFn> =>
+    listen<AgentStatus>("agent:status", (e) => cb(e.payload)),
   updateStatus: () => invoke<UpdateStatus>("update_status"),
   /** Install the update (downloading it first if needed) and relaunch. */
   installUpdate: () => invoke("install_update"),

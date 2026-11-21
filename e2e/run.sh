@@ -13,6 +13,7 @@ ROOT=${E2E:h}
 OUT=$E2E/.out
 mkdir -p $OUT && rm -rf $OUT/downloads
 
+$ROOT/scripts/sidecar.sh >/dev/null || exit 1
 (cd $ROOT/src-tauri && cargo build -q) || exit 1
 curl -s -o /dev/null localhost:1420 || { (cd $ROOT && bun run dev > $OUT/vite.log 2>&1 &); }
 curl -s -o /dev/null localhost:8766 || { (bun $E2E/fixtures/server.ts > $OUT/fixtures.log 2>&1 &); }

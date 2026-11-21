@@ -9,8 +9,16 @@ const assistantRows = async () => (await A.rows()).filter(([k]) => k === "assist
 const first = S().activeSpace;
 await A.open();
 const req = await A.request();
-await t.assert(req.space.id === first && req.backend === "stub" && req.folder === `space-${first}`, "opens for the active space, stub backend, folder by id");
+await t.assert(req.space.id === first && req.folder === `space-${first}`, "opens for the active space, folder by id");
+await t.assert(["stub", "starting"].includes(req.backend), `the request names the backend (${req.backend})`);
 await t.assert((await A.text("h1 .space")) === S().spaces.find((s) => s.id === first).name, "header names the space");
+// The agent runs in a sidecar process, started with the app
+const status = await t.until(async () => {
+  const s = await t.invoke("agent_status");
+  return s.state === "running" ? s : null;
+}, "the agent process is running");
+await t.assert(status.backend === "stub" && status.restarted === false, "it is the stub, on its first start");
+await t.until(async () => (await A.text(".badge")) === "stub", "the panel shows the backend");
 await t.shot("agent-empty");
 
 // A question streams back an answer
@@ -73,6 +81,17 @@ await A.type("second conversation");
 await A.key("Enter");
 await t.until(async () => (await assistantRows()).length === 1, "it gets its own reply", 15000);
 await t.until(async () => (await t.read("agent", `document.querySelectorAll("select.threads option").length`)) === "3", "both conversations are listed (plus New)");
+
+// A crash in the agent process restarts it, not Ternt
+await A.type("/crash");
+await A.key("Enter");
+await t.until(async () => (await t.read("agent", `document.querySelector(".status")?.dataset.state ?? ""`)) !== "", "the panel reports the crash", 10000);
+await t.until(async () => (await t.invoke("agent_status")).state === "running", "the process comes back", 15000);
+await t.until(async () => (await t.read("agent", `document.querySelector(".status")?.dataset.state ?? ""`)) === "restarted", "and the panel says it was restarted");
+await t.shot("agent-restarted");
+await A.type("still here?");
+await A.key("Enter");
+await t.until(async () => (await assistantRows()).some(([, x]) => x.includes("standing in")), "a new question is answered after the restart", 15000);
 
 // One overlay at a time
 await t.palette.open("new-tab");

@@ -125,6 +125,9 @@ build() {
     echo "signing as: $identity (team $APPLE_TEAM_ID)"
   fi
 
+  step "building the agent sidecar (both Apple targets)"
+  $ROOT/scripts/sidecar.sh --release
+
   step "building ($TARGET; signing and notarizing take a few minutes)"
   rm -rf $OUT
   bun install --frozen-lockfile

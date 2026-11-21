@@ -68,7 +68,8 @@ pub struct Input {
 }
 
 impl Input {
-    /// The input's text, joined.
+    /// The input's text, joined (the sidecar's stub reads it; Ternt only passes inputs on).
+    #[allow(dead_code)]
     pub fn text(&self) -> String {
         self.parts
             .iter()

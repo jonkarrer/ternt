@@ -1,11 +1,16 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import SpaceIcon from "../lib/SpaceIcon.svelte";
-  import { browser, type AgentRequest, type AgentTagged } from "../lib/browser";
+  import { browser, type AgentRequest, type AgentStatus, type AgentTagged } from "../lib/browser";
   import type { ThreadSummary } from "./protocol";
   import { apply, emptyView, presenceText, rows, type ThreadView } from "./thread";
 
   let request = $state<AgentRequest | null>(null);
+  /** The agent process; `null` until asked. */
+  let status = $state<AgentStatus | null>(null);
+  /** The process just came back from a crash (shown for a moment). */
+  let restarted = $state(false);
+  let restartedTimer: ReturnType<typeof setTimeout> | undefined;
   let view = $state<ThreadView>(emptyView());
   let threads = $state<ThreadSummary[]>([]);
   let draft = $state("");
@@ -13,24 +18,33 @@
   let error = $state<string | null>(null);
   let input = $state<HTMLTextAreaElement>();
   let scroller = $state<HTMLElement>();
+  /** Events that arrived for a conversation being started (its id isn't
+      known until `send` returns); replayed once it is. */
+  let early: AgentTagged["event"][] = [];
+  let sending = false;
 
   const space = $derived(request?.space ?? null);
   const list = $derived(rows(view.log));
   const busy = $derived(view.live.doing !== null);
   const presence = $derived(presenceText(view.live.doing));
-  const stub = $derived(request?.backend === "stub");
+  const backend = $derived(status?.state === "running" ? status.backend : request?.backend);
+  const stub = $derived(backend === "stub");
+  /** The process can take an input. */
+  const ready = $derived(!status || status.state === "running");
 
   const SUGGESTIONS = ["What's open in this space?", "Summarize what I was doing here", "/tool show me a tool call"];
 
   onMount(() => {
     const opens = browser.onAgentOpen(show);
     const events = browser.onAgentEvent(onEvent);
+    const statuses = browser.onAgentStatus(onStatus);
     // A request made before this page loaded is waiting in Rust; subscribe
     // first so none can slip in between.
     opens.then(() => browser.agentRequest()).then((pending) => pending && show(pending));
     return () => {
       opens.then((off) => off());
       events.then((off) => off());
+      statuses.then((off) => off());
     };
   });
 
@@ -40,6 +54,7 @@
     const sameSpace = request?.space.id === next.space.id;
     request = next;
     error = null;
+    browser.agentStatus().then((now) => (status = now));
     await tick();
     input?.focus();
     if (sameSpace && view.thread) {
@@ -84,8 +99,41 @@
     if (request?.space.id === spaceId) threads = next;
   }
 
+  /** The process started, stopped or came back. */
+  function onStatus(next: AgentStatus) {
+    const before = status;
+    status = next;
+    if (next.state !== "running") {
+      // Whatever it was writing is gone with it.
+      view.live = { doing: null, text: "" };
+      return;
+    }
+    if (next.restarted || (before && before.state !== "running")) {
+      restarted = next.restarted;
+      clearTimeout(restartedTimer);
+      restartedTimer = setTimeout(() => (restarted = false), 8000);
+      reload();
+    }
+  }
+
+  /** After a restart: the agent may have kept everything (tokidoki) or
+      nothing (the stub); show what it has now. */
+  async function reload() {
+    const spaceId = request?.space.id;
+    if (spaceId == null) return;
+    const next = await browser.agentThreads(spaceId).catch(() => [] as ThreadSummary[]);
+    if (request?.space.id !== spaceId) return;
+    threads = next;
+    const keep = view.thread && next.some((t) => t.id === view.thread) ? view.thread : (next[0]?.id ?? null);
+    await openThread(keep);
+  }
+
   function onEvent({ space: from, event }: AgentTagged) {
     if (from !== request?.space.id) return;
+    if (sending && !view.thread && "thread" in event) {
+      if (early.length < 200) early.push(event);
+      return;
+    }
     if (apply(view, event)) catchUp();
     if (event.type === "checkpoint" && event.change.kind === "turn_ended") refreshThreads();
     scrollToEnd();
@@ -93,18 +141,29 @@
 
   async function send(text = draft) {
     text = text.trim();
-    if (!text || !request || busy) return;
+    if (!text || !request || busy || !ready) return;
+    restarted = false;
     const spaceId = request.space.id;
     draft = "";
     error = null;
+    sending = !view.thread;
+    early = [];
     try {
       const sent = await browser.agentSend(spaceId, text, view.thread);
       if (request?.space.id !== spaceId) return;
-      if (sent.thread !== view.thread) await openThread(sent.thread);
+      if (sent.thread !== view.thread) {
+        await openThread(sent.thread);
+        // What the agent did before the page knew the thread (history
+        // has the checkpoints; this adds the activity and text so far).
+        for (const event of early) if (apply(view, event)) catchUp();
+      }
       refreshThreads();
     } catch (e) {
       error = String(e);
       draft = text;
+    } finally {
+      sending = false;
+      early = [];
     }
   }
 
@@ -229,13 +288,29 @@
         {/if}
       </div>
 
+      {#if status && status.state !== "running"}
+        <div class="status" class:down={status.state === "down"} data-state={status.state} role="status">
+          <span class="pulse" class:still={status.state === "down"}></span>
+          {#if status.state === "starting"}
+            Starting the agent…
+          {:else if status.state === "restarting"}
+            The agent stopped; starting it again{status.attempt > 1 ? ` (try ${status.attempt})` : ""}…
+          {:else}
+            {status.reason}
+            <button class="restart" onclick={() => browser.agentRestart()}>Restart</button>
+          {/if}
+        </div>
+      {:else if restarted}
+        <div class="status" data-state="restarted" role="status">The agent crashed and was restarted. This is what it kept.</div>
+      {/if}
       <div class="composer">
         <textarea
           bind:this={input}
           bind:value={draft}
           {onkeydown}
           rows="1"
-          placeholder="Ask {space.name}…"
+          placeholder={ready ? `Ask ${space.name}…` : "Waiting for the agent…"}
+          disabled={!ready}
           spellcheck="true"
           aria-label="Message to the {space.name} space's agent"
         ></textarea>
@@ -245,7 +320,7 @@
             Stop
           </button>
         {:else}
-          <button class="send" onclick={() => send()} disabled={!draft.trim()} aria-label="Send (↵)">
+          <button class="send" onclick={() => send()} disabled={!draft.trim() || !ready} aria-label="Send (↵)">
             <svg viewBox="0 0 16 16"><path d="M8 13V3m0 0L3.5 7.5M8 3l4.5 4.5" /></svg>
           </button>
         {/if}
@@ -496,6 +571,34 @@
     border-radius: 50%;
     background: var(--accent);
     animation: pulse 1.1s ease-in-out infinite;
+  }
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 16px 8px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    background: var(--fill);
+    color: var(--text-muted);
+    font-size: 12.5px;
+  }
+  .status.down {
+    background: color-mix(in srgb, #e0443e 12%, transparent);
+    color: #c9302c;
+  }
+  .status .pulse.still {
+    background: #e0443e;
+    animation: none;
+  }
+  .restart {
+    margin-left: auto;
+    padding: 3px 9px;
+    border-radius: 6px;
+    background: var(--accent);
+    color: white;
+    font-size: 12px;
+    font-weight: 600;
   }
   .unanswered {
     padding: 7px 10px;

@@ -153,6 +153,8 @@ pub fn run() {
             agent::agent_threads,
             agent::agent_history,
             agent::agent_abort,
+            agent::agent_status,
+            agent::agent_restart,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,

@@ -1,11 +1,15 @@
 //! Tokidoki in Ternt: an AI agent per space, behind the Ask button and ⌘J.
 //!
-//! This module is the host side of the embedding described in tokidoki's
-//! `docs/EMBEDDING.md`. It owns:
+//! The agents run in their own process, the sidecar (`sidecar.rs`; protocol
+//! in `wire.rs` and docs/AGENT-SIDECAR.md): tokidoki's `serve` binary once it
+//! exists, the stub in `src/bin/ternt-agent` until then. A panic, an abort or
+//! running out of memory in an agent ends that process, never Ternt; the
+//! supervisor starts it again and the panel says so. This module owns:
 //!
-//! - **The boundary** (`Agent`): what a space's agent must do. `stub::Stub`
-//!   implements it today; tokidoki's `Spaces::open` will, one agent per
-//!   space folder (`folder_name`), opened lazily on first use.
+//! - **The boundary** (`Agent`): what a space's agent does, the same four
+//!   methods tokidoki offers. `sidecar::Remote` implements it over the
+//!   protocol; agents open lazily on first use, one per space folder
+//!   (`folder_name`).
 //! - **The outbox**: every agent's events, tagged with their space, go
 //!   through one bounded channel to one forwarder task, which coalesces
 //!   streamed text (one IPC message per ~30ms instead of one per token) and
@@ -14,20 +18,20 @@
 //!   sends `Lagged`, and the page catches up the same way.
 //! - **The panel**: a transparent webview over the window (like the command
 //!   bar), created on first open and kept hidden afterwards.
-//!
-//! Keeping a crash in an agent from taking the browser down is a build
-//! setting as much as code: see "Agent" in README.md.
 
 pub mod protocol;
-mod stub;
+mod sidecar;
+pub mod wire;
 
 use std::{
     collections::HashMap,
+    future::Future,
+    pin::Pin,
     sync::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde::Serialize;
@@ -39,6 +43,7 @@ use tokio::sync::mpsc;
 
 use crate::browser::{self, UI_WEBVIEW};
 use protocol::*;
+pub use sidecar::Status;
 
 pub const AGENT_WEBVIEW: &str = "agent";
 /// How long streamed text is held back to be sent as one piece.
@@ -46,16 +51,18 @@ const FLUSH: Duration = Duration::from_millis(30);
 /// Events waiting for the forwarder before some are dropped (`Lagged`).
 const QUEUE: usize = 2048;
 
-/// A space's agent. Mirrors the methods tokidoki's `Tokidoki` offers, so the
-/// embedding is a one-line swap per method.
+/// What a method answers, once the sidecar has.
+pub type Reply<T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send>>;
+
+/// A space's agent: the methods tokidoki's `Tokidoki` offers.
 pub trait Agent: Send + Sync {
-    /// Returns at once with where the input went; the answer arrives as events.
-    fn send(&self, input: Input) -> Result<Sent, String>;
-    fn threads(&self) -> Vec<ThreadSummary>;
+    /// Returns as soon as the input is placed; the answer arrives as events.
+    fn send(&self, input: Input) -> Reply<Sent>;
+    fn threads(&self) -> Reply<Vec<ThreadSummary>>;
     /// A thread's checkpoints from `since` on.
-    fn history(&self, thread: &str, since: usize) -> Vec<Event>;
+    fn history(&self, thread: String, since: usize) -> Reply<Vec<Event>>;
     /// Stop the turn under way; `false` if there was none.
-    fn abort(&self, thread: &str) -> bool;
+    fn abort(&self, thread: String) -> Reply<bool>;
 }
 
 /// A space as the panel shows it.
@@ -74,8 +81,9 @@ pub struct Request {
     space: SpaceInfo,
     /// Where the content pane starts, so the panel centers over the page.
     content_left: f64,
-    /// Which implementation answers (`stub` until tokidoki is embedded).
-    backend: &'static str,
+    /// Which implementation answers (`stub` until tokidoki's `serve` does),
+    /// or `starting` while the process comes up.
+    backend: String,
     /// The agent's data folder under the app data dir (`agents/<folder>`).
     folder: String,
 }
@@ -106,9 +114,14 @@ impl Outbox {
     }
 }
 
+/// An open agent and the space name it was opened with.
+type Opened = (String, Arc<dyn Agent>);
+
 #[derive(Default)]
 pub struct Host {
-    agents: Mutex<HashMap<u32, Arc<dyn Agent>>>,
+    /// Per space: the agent and the space name it was opened with.
+    agents: Mutex<HashMap<u32, Opened>>,
+    sidecar: OnceLock<Arc<sidecar::Sidecar>>,
     /// The open request, if the panel is showing (read by the page on load).
     request: Mutex<Option<Request>>,
     outbox: OnceLock<Outbox>,
@@ -132,16 +145,29 @@ pub fn start(app: &AppHandle) {
     if host.outbox.set(outbox.clone()).is_err() {
         return;
     }
-    let app = app.clone();
-    tauri::async_runtime::spawn(forward(app, rx, outbox.lagged));
+    tauri::async_runtime::spawn(forward(app.clone(), rx, outbox.lagged.clone()));
+    let data = crate::session::data_dir(app)
+        .map(|dir| dir.join("agents"))
+        .unwrap_or_else(|| std::env::temp_dir().join("ternt-agents"));
+    let sidecar = sidecar::Sidecar::new(app.clone(), outbox, data);
+    sidecar.start();
+    let _ = host.sidecar.set(sidecar);
 }
 
 /// Deliver events to the panel: text deltas for one thread merge into one
-/// message per `FLUSH`; everything else goes through in order.
+/// message, sent at most `FLUSH` after the first of them arrived (a steady
+/// stream must not hold them back); everything else goes through in order.
 async fn forward(app: AppHandle, mut rx: mpsc::Receiver<Tagged>, lagged: Arc<Mutex<Vec<u32>>>) {
     let mut pending: Vec<(u32, String, String)> = Vec::new();
+    /// With nothing pending, how long to wait before looking at `lagged`.
+    const IDLE: Duration = Duration::from_secs(1);
+    let mut since: Option<Instant> = None;
     loop {
-        match tokio::time::timeout(FLUSH, rx.recv()).await {
+        let wait = match since {
+            Some(first) => FLUSH.saturating_sub(first.elapsed()),
+            None => IDLE,
+        };
+        match tokio::time::timeout(wait, rx.recv()).await {
             Ok(None) => return,
             Ok(Some(Tagged { space, event })) => {
                 if !app.state::<Host>().visible.load(Ordering::Relaxed) {
@@ -152,6 +178,7 @@ async fn forward(app: AppHandle, mut rx: mpsc::Receiver<Tagged>, lagged: Arc<Mut
                         thread,
                         delta: Delta::Text { text },
                     } => {
+                        since.get_or_insert_with(Instant::now);
                         match pending
                             .iter_mut()
                             .find(|(s, t, _)| *s == space && *t == thread)
@@ -162,15 +189,20 @@ async fn forward(app: AppHandle, mut rx: mpsc::Receiver<Tagged>, lagged: Arc<Mut
                     }
                     event => {
                         flush(&app, &mut pending);
+                        since = None;
                         emit(&app, space, event);
                     }
                 }
             }
-            Err(_) => flush(&app, &mut pending),
+            Err(_) => {
+                flush(&app, &mut pending);
+                since = None;
+            }
         }
         let dropped: Vec<u32> = std::mem::take(&mut *lagged.lock().unwrap());
         for space in dropped {
             flush(&app, &mut pending);
+            since = None;
             emit(&app, space, Event::Lagged);
         }
     }
@@ -197,28 +229,38 @@ fn emit(app: &AppHandle, space: u32, event: Event) {
     );
 }
 
-/// The space's agent, opened on first use.
+/// The space's agent, opened on first use (again if the space was renamed,
+/// so the agent hears the new name).
 fn agent_for(app: &AppHandle, space: u32) -> Result<Arc<dyn Agent>, String> {
     let host = app.state::<Host>();
+    let info = browser::space_info(app, space).ok_or_else(|| format!("no space {space}"))?;
     let mut agents = host.agents.lock().unwrap();
-    if let Some(agent) = agents.get(&space) {
+    if let Some((label, agent)) = agents.get(&space)
+        && *label == info.name
+    {
         return Ok(agent.clone());
     }
-    let info = browser::space_info(app, space).ok_or_else(|| format!("no space {space}"))?;
-    let outbox = host
-        .outbox
+    let sidecar = host
+        .sidecar
         .get()
         .ok_or("the agent host isn't running")?
         .clone();
-    // tokidoki: `spaces.open(&folder_name(space), |data| Config::new(data, keys…), tools)`.
-    let agent: Arc<dyn Agent> = Arc::new(stub::Stub::new(space, info.name, outbox));
-    agents.insert(space, agent.clone());
+    let agent: Arc<dyn Agent> = Arc::new(sidecar::Remote::new(
+        sidecar,
+        folder_name(space),
+        info.name.clone(),
+    ));
+    agents.insert(space, (info.name, agent.clone()));
     Ok(agent)
 }
 
-/// Stop every agent (before exit; tokidoki's `close_all`).
+/// Stop the agent process (before exit).
 pub fn shutdown(app: &AppHandle) {
-    app.state::<Host>().agents.lock().unwrap().clear();
+    let host = app.state::<Host>();
+    host.agents.lock().unwrap().clear();
+    if let Some(sidecar) = host.sidecar.get() {
+        sidecar.shutdown();
+    }
 }
 
 fn create(window: &Window) -> tauri::Result<Webview> {
@@ -247,14 +289,19 @@ pub fn open(app: &AppHandle) -> tauri::Result<()> {
     let Some(space) = browser::active_space_info(app) else {
         return Ok(());
     };
+    let host = app.state::<Host>();
     let folder = folder_name(space.id);
+    let backend = host
+        .sidecar
+        .get()
+        .and_then(|s| s.backend())
+        .unwrap_or_else(|| "starting".into());
     let request = Request {
         space,
         folder,
         content_left: browser::content_left(app),
-        backend: "stub",
+        backend,
     };
-    let host = app.state::<Host>();
     *host.request.lock().unwrap() = Some(request.clone());
     host.visible.store(true, Ordering::Relaxed);
     let webview = match app.get_webview(AGENT_WEBVIEW) {
@@ -322,12 +369,12 @@ pub async fn agent_send(
         request_id: None,
         when_busy: WhenBusy::Steer,
     };
-    agent_for(&app, space)?.send(input)
+    agent_for(&app, space)?.send(input).await
 }
 
 #[tauri::command]
 pub async fn agent_threads(app: AppHandle, space: u32) -> Result<Vec<ThreadSummary>, String> {
-    Ok(agent_for(&app, space)?.threads())
+    agent_for(&app, space)?.threads().await
 }
 
 #[tauri::command]
@@ -337,12 +384,36 @@ pub async fn agent_history(
     thread: String,
     since: usize,
 ) -> Result<Vec<Event>, String> {
-    Ok(agent_for(&app, space)?.history(&thread, since))
+    agent_for(&app, space)?.history(thread, since).await
 }
 
 #[tauri::command]
 pub async fn agent_abort(app: AppHandle, space: u32, thread: String) -> Result<bool, String> {
-    Ok(agent_for(&app, space)?.abort(&thread))
+    agent_for(&app, space)?.abort(thread).await
+}
+
+/// Where the agent process stands (the panel asks on open; `agent:status`
+/// carries changes).
+#[tauri::command]
+pub async fn agent_status(app: AppHandle) -> Status {
+    app.state::<Host>()
+        .sidecar
+        .get()
+        .map(|s| s.status())
+        .unwrap_or(Status::Down {
+            reason: "The agent host isn't running.".into(),
+        })
+}
+
+/// The panel's Restart button.
+#[tauri::command]
+pub async fn agent_restart(app: AppHandle) -> Result<(), String> {
+    app.state::<Host>()
+        .sidecar
+        .get()
+        .ok_or("the agent host isn't running")?
+        .restart();
+    Ok(())
 }
 
 #[cfg(test)]

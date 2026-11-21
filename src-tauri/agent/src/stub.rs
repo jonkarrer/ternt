@@ -1,7 +1,8 @@
 //! A stand-in agent until tokidoki is wired in: every input gets a streamed
 //! canned reply with the same shape of events a real turn has (submission,
-//! checkpoints, activity, deltas), so the panel can be built, tested and
-//! profiled without keys or a model. Nothing is persisted.
+//! checkpoints, activity, deltas), so Ternt's panel can be built, tested and
+//! profiled without keys or a model. Nothing is persisted: a restart of the
+//! sidecar forgets every conversation (tokidoki resumes from its files).
 //!
 //! Inputs starting with `/tool` also run a pretend tool; `/error` goes
 //! unanswered.
@@ -12,9 +13,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use tauri::async_runtime::JoinHandle;
+use tokio::task::JoinHandle;
 
-use super::{Agent, Outbox, protocol::*};
+use crate::{Outbox, protocol::*};
 
 /// Pause before the first word, as a model would.
 const THINK: Duration = Duration::from_millis(350);
@@ -24,8 +25,10 @@ const TOOL: Duration = Duration::from_millis(400);
 const WORD: Duration = Duration::from_millis(18);
 
 pub struct Stub {
-    space: u32,
-    name: String,
+    /// The agent's folder name (`space-7`): how events are tagged.
+    space: String,
+    /// What the space is called, for the canned text (`label` on `send`).
+    label: Mutex<String>,
     outbox: Outbox,
     inner: Arc<Mutex<Inner>>,
 }
@@ -51,7 +54,7 @@ struct Thread {
 /// What the stub answers.
 pub struct Reply {
     pub tool: Option<ToolUse>,
-    /// `None`: the input goes unanswered, with this reason.
+    /// `Err`: the input goes unanswered, with this reason.
     pub text: Result<String, String>,
 }
 
@@ -110,7 +113,7 @@ pub fn script(space: &str, text: &str) -> Reply {
         text: Ok(format!(
             "I'm the {space} space's agent, standing in until tokidoki is connected.{about}{tool_line} \
              Each space gets its own agent with its own memory, so nothing said here reaches your other spaces. \
-             Try /tool to see a tool call, or /error to see a failed turn."
+             Try /tool to see a tool call, /error to see a failed turn, or /crash to watch Ternt restart me."
         )),
     }
 }
@@ -181,53 +184,51 @@ impl Inner {
     }
 }
 
+/// Record and send a checkpoint.
+fn checkpoint(inner: &Mutex<Inner>, outbox: &Outbox, space: &str, thread: &str, change: Change) {
+    let event = inner.lock().unwrap().thread(thread).map(|t| t.push(change));
+    if let Some(event) = event {
+        outbox.push(space, event);
+    }
+}
+
+/// Send `base` (its id, thread and text) with a new status.
+fn send_status(
+    outbox: &Outbox,
+    space: &str,
+    base: &Submission,
+    status: Status,
+    answer: Option<String>,
+    reason: Option<String>,
+) {
+    outbox.push(
+        space,
+        Event::Submission {
+            submission: Submission {
+                status,
+                answer,
+                reason,
+                ..base.clone()
+            },
+        },
+    );
+}
+
 impl Stub {
-    pub fn new(space: u32, name: String, outbox: Outbox) -> Self {
+    pub fn new(space: String, outbox: Outbox) -> Self {
         Self {
+            label: Mutex::new(space.clone()),
             space,
-            name,
             outbox,
             inner: Arc::default(),
         }
     }
 
-    fn emit(&self, event: Event) {
-        self.outbox.push(self.space, event);
+    pub fn set_label(&self, label: &str) {
+        *self.label.lock().unwrap() = label.into();
     }
 
-    /// Record and send a checkpoint.
-    fn checkpoint(inner: &Mutex<Inner>, outbox: &Outbox, space: u32, thread: &str, change: Change) {
-        let event = inner.lock().unwrap().thread(thread).map(|t| t.push(change));
-        if let Some(event) = event {
-            outbox.push(space, event);
-        }
-    }
-
-    /// Send `base` (its id, thread and text) with a new status.
-    fn submission(
-        outbox: &Outbox,
-        space: u32,
-        base: &Submission,
-        status: Status,
-        answer: Option<String>,
-        reason: Option<String>,
-    ) {
-        outbox.push(
-            space,
-            Event::Submission {
-                submission: Submission {
-                    status,
-                    answer,
-                    reason,
-                    ..base.clone()
-                },
-            },
-        );
-    }
-}
-
-impl Agent for Stub {
-    fn send(&self, input: Input) -> Result<Sent, String> {
+    pub fn send(&self, input: Input) -> Result<Sent, String> {
         let text = input.text();
         if text.trim().is_empty() {
             return Err("Nothing to send.".into());
@@ -255,17 +256,17 @@ impl Agent for Stub {
             // Busy answering: the new input takes over (the stub doesn't queue).
             if let Some(running) = inner.running.remove(&thread) {
                 running.abort();
-                let t = inner.thread(&thread).unwrap();
-                let ended = t.push(Change::TurnEnded);
-                self.emit(ended);
+                let ended = inner.thread(&thread).unwrap().push(Change::TurnEnded);
+                self.outbox.push(&self.space, ended);
             }
             let submission = inner.id("sub-");
-            let t = inner.thread(&thread).unwrap();
-            t.turns += 1;
+            inner.thread(&thread).unwrap().turns += 1;
             (thread, submission, route)
         };
 
-        let (space, outbox, inner) = (self.space, self.outbox.clone(), self.inner.clone());
+        let space = self.space.clone();
+        let outbox = self.outbox.clone();
+        let inner = self.inner.clone();
         let base = Submission {
             id: submission,
             thread: thread.clone(),
@@ -274,30 +275,28 @@ impl Agent for Stub {
             answer: None,
             reason: None,
         };
-        Self::submission(&outbox, space, &base, Status::Queued, None, None);
-        Self::checkpoint(&inner, &outbox, space, &thread, Change::TurnStarted);
-        Self::checkpoint(
+        send_status(&outbox, &space, &base, Status::Queued, None, None);
+        checkpoint(&inner, &outbox, &space, &thread, Change::TurnStarted);
+        checkpoint(
             &inner,
             &outbox,
-            space,
+            &space,
             &thread,
             Change::Message {
                 role: Role::User,
                 content: vec![Content::Text { text: text.clone() }],
             },
         );
-        Self::submission(&outbox, space, &base, Status::Placed, None, None);
+        send_status(&outbox, &space, &base, Status::Placed, None, None);
 
-        let reply = script(&self.name, &text);
+        let reply = script(&self.label.lock().unwrap(), &text);
         let task_thread = thread.clone();
-        let task_inner = inner.clone();
         let task_base = base.clone();
-        let task = tauri::async_runtime::spawn(async move {
+        let task = tokio::spawn(async move {
             let thread = task_thread;
-            let inner = task_inner;
             let base = task_base;
             outbox.push(
-                space,
+                &space,
                 Event::Activity {
                     thread: thread.clone(),
                     doing: Doing::Thinking,
@@ -306,7 +305,7 @@ impl Agent for Stub {
             tokio::time::sleep(THINK).await;
             if let Some(tool) = &reply.tool {
                 outbox.push(
-                    space,
+                    &space,
                     Event::Activity {
                         thread: thread.clone(),
                         doing: Doing::Tool {
@@ -314,10 +313,10 @@ impl Agent for Stub {
                         },
                     },
                 );
-                Self::checkpoint(
+                checkpoint(
                     &inner,
                     &outbox,
-                    space,
+                    &space,
                     &thread,
                     Change::Message {
                         role: Role::Assistant,
@@ -329,10 +328,10 @@ impl Agent for Stub {
                     },
                 );
                 tokio::time::sleep(TOOL).await;
-                Self::checkpoint(
+                checkpoint(
                     &inner,
                     &outbox,
-                    space,
+                    &space,
                     &thread,
                     Change::Message {
                         role: Role::User,
@@ -344,7 +343,7 @@ impl Agent for Stub {
                     },
                 );
                 outbox.push(
-                    space,
+                    &space,
                     Event::Activity {
                         thread: thread.clone(),
                         doing: Doing::Thinking,
@@ -356,7 +355,7 @@ impl Agent for Stub {
                 Ok(answer) => {
                     for word in chunks(answer) {
                         outbox.push(
-                            space,
+                            &space,
                             Event::Delta {
                                 thread: thread.clone(),
                                 delta: Delta::Text { text: word },
@@ -364,10 +363,10 @@ impl Agent for Stub {
                         );
                         tokio::time::sleep(WORD).await;
                     }
-                    Self::checkpoint(
+                    checkpoint(
                         &inner,
                         &outbox,
-                        space,
+                        &space,
                         &thread,
                         Change::Message {
                             role: Role::Assistant,
@@ -376,10 +375,10 @@ impl Agent for Stub {
                             }],
                         },
                     );
-                    Self::checkpoint(&inner, &outbox, space, &thread, Change::TurnEnded);
-                    Self::submission(
+                    checkpoint(&inner, &outbox, &space, &thread, Change::TurnEnded);
+                    send_status(
                         &outbox,
-                        space,
+                        &space,
                         &base,
                         Status::Done,
                         Some(answer.clone()),
@@ -387,10 +386,10 @@ impl Agent for Stub {
                     );
                 }
                 Err(reason) => {
-                    Self::checkpoint(&inner, &outbox, space, &thread, Change::TurnEnded);
-                    Self::submission(
+                    checkpoint(&inner, &outbox, &space, &thread, Change::TurnEnded);
+                    send_status(
                         &outbox,
-                        space,
+                        &space,
                         &base,
                         Status::Unanswered,
                         None,
@@ -412,14 +411,14 @@ impl Agent for Stub {
         })
     }
 
-    fn threads(&self) -> Vec<ThreadSummary> {
+    pub fn threads(&self) -> Vec<ThreadSummary> {
         let inner = self.inner.lock().unwrap();
         let mut threads: Vec<_> = inner.threads.iter().map(Thread::summary).collect();
         threads.sort_by(|a, b| b.active_at.cmp(&a.active_at));
         threads
     }
 
-    fn history(&self, thread: &str, since: usize) -> Vec<Event> {
+    pub fn history(&self, thread: &str, since: usize) -> Vec<Event> {
         let mut inner = self.inner.lock().unwrap();
         inner
             .thread(thread)
@@ -427,7 +426,7 @@ impl Agent for Stub {
             .unwrap_or_default()
     }
 
-    fn abort(&self, thread: &str) -> bool {
+    pub fn abort(&self, thread: &str) -> bool {
         let mut inner = self.inner.lock().unwrap();
         let Some(running) = inner.running.remove(thread) else {
             return false;
@@ -436,7 +435,7 @@ impl Agent for Stub {
         if let Some(t) = inner.thread(thread) {
             let ended = t.push(Change::TurnEnded);
             drop(inner);
-            self.emit(ended);
+            self.outbox.push(&self.space, ended);
         }
         true
     }
@@ -498,5 +497,68 @@ mod tests {
             })
             .collect();
         assert_eq!(seqs, [0, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn a_turn_streams_then_lands() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let stub = Stub::new("space-1".into(), Outbox(tx));
+        stub.set_label("dev");
+        let input = Input {
+            from: Speaker {
+                id: "owner".into(),
+                name: None,
+            },
+            parts: vec![Part::Text { text: "hi".into() }],
+            thread: None,
+            request_id: None,
+            when_busy: WhenBusy::Steer,
+        };
+        let sent = stub.send(input).unwrap();
+        assert!(sent.route.unwrap().new);
+        let mut kinds = Vec::new();
+        let mut text = String::new();
+        while let Some(frame) = rx.recv().await {
+            let crate::wire::Frame::Event { space, event } = frame else {
+                panic!("not an event")
+            };
+            assert_eq!(space, "space-1");
+            match &event {
+                Event::Delta {
+                    delta: Delta::Text { text: t },
+                    ..
+                } => text.push_str(t),
+                Event::Submission { submission } if submission.status == Status::Done => {
+                    kinds.push("done");
+                    break;
+                }
+                Event::Checkpoint {
+                    change:
+                        Change::Message {
+                            role: Role::Assistant,
+                            ..
+                        },
+                    ..
+                } => kinds.push("assistant"),
+                Event::Checkpoint {
+                    change:
+                        Change::Message {
+                            role: Role::User, ..
+                        },
+                    ..
+                } => kinds.push("user"),
+                Event::Activity { .. } => kinds.push("activity"),
+                _ => {}
+            }
+        }
+        assert_eq!(kinds, ["user", "activity", "assistant", "done"]);
+        assert!(text.starts_with("I'm the dev space's agent"));
+        let history = stub.history(&sent.thread, 0);
+        assert_eq!(
+            history.len(),
+            4,
+            "turn_started, user, assistant, turn_ended"
+        );
+        assert_eq!(stub.threads().len(), 1);
     }
 }

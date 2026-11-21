@@ -172,38 +172,38 @@ name and email, kept on this Mac, and a summary of your profiles), **General** (
 ## Agent (Tokidoki)
 
 Every space gets its own AI agent: [tokidoki](https://github.com/jonkarrer/tokidoki), an agent with
-durable execution and long-term memory, embedded as a Rust crate. Press ⌘J or click **Ask <space>**
-at the top of the sidebar: a panel opens over the page with that space's conversations. Agents share
-nothing, so what the dev space's agent learns never reaches the marketing space's.
+durable execution and long-term memory. Press ⌘J or click **Ask <space>** at the top of the sidebar:
+a panel opens over the page with that space's conversations. Agents share nothing, so what the dev
+space's agent learns never reaches the marketing space's.
 
-The host side is `src-tauri/src/agent/`:
+The agents run in a **sidecar process**, not in Ternt. Ternt's release build aborts on panic, so a
+panic inside an agent (or in SQLite, or running out of memory) ends whatever process it runs in;
+in its own process that is the agent, never the browser. Ternt starts the process, restarts it
+with a short back-off when it dies, and the panel says so (a Restart button appears if it keeps
+dying). The protocol, JSON lines over stdin and stdout, is in [docs/AGENT-SIDECAR.md](docs/AGENT-SIDECAR.md);
+tokidoki's `serve` command will speak it. Until then the stub in `src-tauri/agent/` does: a
+streamed canned reply with the same shape of events a real turn has (`/tool` adds a pretend tool
+call, `/error` a failed turn, `/crash` kills the process so you can watch it come back).
 
-- `protocol.rs` mirrors tokidoki's `interface` types (`src/agent/protocol.ts` is its generated
-  TypeScript, copied from the tokidoki repo). The panel is written against the real wire format.
-- `mod.rs` owns the boundary (`trait Agent`: `send`, `threads`, `history`, `abort`), one lazily
-  opened agent per space (data folder `agents/space-<id>`), the panel webview, and the **outbox**:
-  every agent's events go through one bounded channel to one forwarder, which coalesces streamed
-  text into one IPC message per ~30 ms and sends nothing while the panel is hidden. The page
-  reloads a thread's history when it opens (checkpoints are numbered without gaps), so dropped
-  events cost nothing; a full queue sends `lagged` and the page catches up the same way.
-- `stub.rs` answers today: a streamed canned reply with the same shape of events a real turn has.
-  `/tool` adds a pretend tool call, `/error` a failed turn.
+- `src-tauri/src/agent/protocol.rs` mirrors tokidoki's `interface` types (`src/agent/protocol.ts`
+  is its generated TypeScript, copied from the tokidoki repo). The panel is written against the
+  real wire format.
+- `src-tauri/src/agent/mod.rs` owns the `Agent` boundary (`send`, `threads`, `history`, `abort`),
+  one lazily opened agent per space (folder `agents/space-<id>`), the panel webview, and the
+  **outbox**: every agent's events go through one bounded channel to one forwarder, which
+  coalesces streamed text into one IPC message per ~30 ms and sends nothing while the panel is
+  hidden. The page reloads a thread's history when it opens (checkpoints are numbered without
+  gaps), so dropped events cost nothing; a full queue sends `lagged` and the page catches up.
+- `src-tauri/src/agent/sidecar.rs` is the supervisor and Ternt's end of the protocol;
+  `src-tauri/src/agent/wire.rs` the line format.
 
-**Embedding tokidoki** (its `docs/EMBEDDING.md` is written for Ternt): add the crate, replace
-`protocol.rs` with `pub use tokidoki::interface::*`, and have `agent_for` call
-`Spaces::open(&folder_name(space), |data| Config::new(data, keys…), tools)`; the methods map one to
-one. Keys belong in the Keychain or Doppler, never the repo. Before shipping it, three build
-settings decide whether an agent bug can take the browser down:
-
-- `panic = "abort"` in the release profile turns a panic inside an agent into a crash of Ternt;
-  `panic = "unwind"` lets tokidoki's engine catch it and mark the task faulted. Alternatively run
-  the agents in a sidecar process (the strongest isolation; the `Agent` trait is the seam).
-- tokidoki installs the process's `tracing` subscriber on first `open`; Ternt must not install
-  its own first, or nothing is journaled.
-- its `reqwest` uses `aws-lc-rs` beside Ternt's `ring`; both work, the build gets heavier.
-
-The e2e suite `agent` drives the panel against the stub; `src/agent/thread.test.ts` covers the
-view model.
+The sidecar is its own crate so it can be built before Ternt (Tauri's build script checks that
+the binary named in `bundle.externalBin` exists): `just sidecar` (or `scripts/sidecar.sh`) puts it
+in `src-tauri/binaries/`, which `just dev`, `just check`, the unit tests, the e2e runner and
+`scripts/publish.sh --release` all do first. `TERNT_AGENT_BIN` points Ternt at another binary.
+Keys for the real agent belong in the Keychain or Doppler, never the repo. The e2e suite `agent`
+drives the panel against the stub, crash included; `src/agent/thread.test.ts` covers the view
+model and `cargo test -p ternt-agent` the stub.
 
 ## Architecture
 
@@ -216,7 +216,7 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
 | `term` | `term.html` → `src/term/` | All terminal tabs and their panes (xterm.js), created on first use |
 | `peek` | `index.html` again | The collapsed sidebar shown over the page on hover, pre-created hidden |
 | `palette` | `palette.html` → `src/palette/` | Command bar overlay, pre-created hidden |
-| `agent` | `agent.html` → `src/agent/` | Tokidoki panel (⌘J), created on first open then kept hidden (`src-tauri/src/agent/`) |
+| `agent` | `agent.html` → `src/agent/` | Tokidoki panel (⌘J), created on first open then kept hidden (`src-tauri/src/agent/`; the agents themselves run in the `ternt-agent` sidecar process) |
 | `settings` | `settings.html` → `src/settings/` | Settings, its own window (`src-tauri/src/settings.rs`) |
 | `little-N-bar` / `little-N-page` | `little.html` → `src/little/` / the web | Little Ternt windows (`src-tauri/src/little.rs`) |
 

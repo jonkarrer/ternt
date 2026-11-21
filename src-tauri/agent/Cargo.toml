@@ -1,0 +1,15 @@
+[package]
+name = "ternt-agent"
+version = "0.1.0"
+description = "Ternt's agent sidecar: the stub that stands in for tokidoki's serve"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "ternt-agent"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "io-std", "sync", "time"] }

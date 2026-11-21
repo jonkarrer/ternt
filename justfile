@@ -6,13 +6,17 @@ default:
 
 # ─── Core ────────────────────────────────────────────────
 
-# Run the app with hot reload
-dev:
+# Run the app with hot reload (the agent sidecar first: tauri dev only builds Ternt)
+dev: sidecar
     bun tauri dev
 
+# Build the agent sidecar (src-tauri/agent) into src-tauri/binaries; Ternt needs it to compile
+sidecar:
+    scripts/sidecar.sh
+
 # Typecheck + lint — must be clean before commit
-check:
-    bun run check && cd src-tauri && cargo clippy -q --all-targets -- -D warnings
+check: sidecar
+    bun run check && cd src-tauri && cargo clippy -q --workspace --all-targets -- -D warnings
 
 # Unit tests, type check and clippy (about a second); `just test-e2e` for the rest
 test:
