@@ -65,6 +65,28 @@ export function installTestHooks(getState: () => State, applyState?: (state: any
         return JSON.parse(await hooks.read("palette", js));
       },
     },
+    /** Drive the agent panel (⌘J). */
+    agent: {
+      request: () => invoke("agent_request"),
+      async open() {
+        await invoke("menu_action", { id: "agent" });
+        await hooks.until(() => hooks.agent.request(), "⌘J opens the agent panel");
+        await sleep(250);
+      },
+      type: (text: string) =>
+        hooks.eval(
+          "agent",
+          `(() => { const i = document.querySelector("textarea"); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event("input", { bubbles: true })); })()`,
+        ),
+      key: (key: string) =>
+        hooks.eval("agent", `document.querySelector("textarea").dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(key)}, bubbles: true }))`),
+      /** Transcript rows as [kind, text], in order. */
+      async rows(): Promise<[string, string][]> {
+        return JSON.parse(await hooks.read("agent", `JSON.stringify([...document.querySelectorAll("[data-row]")].map((r) => [r.dataset.row, r.textContent.trim()]))`));
+      },
+      /** The text of the first element matching `selector` ("" if none). */
+      text: (selector: string) => hooks.read("agent", `document.querySelector(${JSON.stringify(selector)})?.textContent ?? ""`),
+    },
     /** Text currently shown by a terminal tab. */
     termText: (id: number) => hooks.read("term", `window.__termText(${id})`),
     /** Evaluate `expr` in another webview and return its (string) result. */

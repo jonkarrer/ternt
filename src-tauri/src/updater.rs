@@ -140,7 +140,7 @@ pub fn start(app: &AppHandle) {
 /// The main window came forward: check if it's been a while.
 pub fn on_focus(app: &AppHandle) {
     // Before the first check, `start` has it covered.
-    if !enabled() || !since_last_check(app).is_some_and(|age| age >= CHECK_ON_FOCUS_AFTER) {
+    if !enabled() || since_last_check(app).is_none_or(|age| age < CHECK_ON_FOCUS_AFTER) {
         return;
     }
     let app = app.clone();

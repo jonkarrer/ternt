@@ -60,6 +60,8 @@ pub fn create(window: &Window) -> tauri::Result<()> {
 }
 
 pub fn open(app: &AppHandle, mode: Mode) -> tauri::Result<()> {
+    // One overlay at a time.
+    crate::agent::close(app)?;
     // The command bar takes over from explore mode (keeping what it showed).
     if browser::exploring(app) {
         browser::end_explore(app, browser::ExploreEnd::Commit);

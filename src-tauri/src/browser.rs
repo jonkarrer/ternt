@@ -143,6 +143,23 @@ pub fn active_space_profile(app: &AppHandle) -> (Option<String>, String) {
 /// Set once the saved session is back (or there was none).
 static RESTORED: AtomicBool = AtomicBool::new(false);
 
+/// A space as the agent panel shows it.
+pub fn space_info(app: &AppHandle, id: u32) -> Option<crate::agent::SpaceInfo> {
+    with(app, |s| {
+        s.space(id).map(|space| crate::agent::SpaceInfo {
+            id: space.id,
+            name: space.name.clone(),
+            color: space.color.clone(),
+            icon: space.icon.clone(),
+        })
+    })
+}
+
+pub fn active_space_info(app: &AppHandle) -> Option<crate::agent::SpaceInfo> {
+    let id = with(app, |s| s.active_space);
+    space_info(app, id)
+}
+
 pub fn mark_restored() {
     RESTORED.store(true, Ordering::Release);
 }

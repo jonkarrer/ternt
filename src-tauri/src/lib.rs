@@ -1,3 +1,4 @@
+mod agent;
 mod browser;
 #[cfg(all(debug_assertions, target_os = "macos"))]
 mod debug;
@@ -12,8 +13,8 @@ mod model;
 mod native;
 mod palette;
 mod panes;
-mod prefs;
 mod persist;
+mod prefs;
 mod pty;
 mod routing;
 mod session;
@@ -37,6 +38,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Browser::default())
+        .manage(agent::Host::default())
         .manage(palette::Palette::default())
         .manage(pty::Terminals::default())
         .manage(history::Store::default())
@@ -54,6 +56,7 @@ pub fn run() {
             prefs::load(app.handle());
             downloads::load(app.handle());
             updater::start(app.handle());
+            agent::start(app.handle());
             unload::start(app.handle());
 
             // Restore the last session, then open any `ternt <url>...` args.
@@ -143,6 +146,13 @@ pub fn run() {
             palette::palette_request,
             palette::open_palette,
             palette::close_palette,
+            agent::agent_request,
+            agent::open_agent,
+            agent::close_agent,
+            agent::agent_send,
+            agent::agent_threads,
+            agent::agent_history,
+            agent::agent_abort,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,
@@ -230,6 +240,7 @@ pub fn run() {
                 tauri::RunEvent::Exit => {
                     session::save_now(app);
                     history::save_now(app);
+                    agent::shutdown(app);
                     updater::install_on_exit(app);
                 }
                 // Links from other apps (Ternt as the default browser).

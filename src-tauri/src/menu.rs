@@ -9,7 +9,7 @@ use tauri::{
 use crate::{
     browser::{self, TabKind, Zone},
     model::SPACE_COLORS,
-    palette,
+    agent, palette,
     panes::Direction,
     settings, welcome,
 };
@@ -202,6 +202,8 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             )
         })
         .collect::<tauri::Result<Vec<_>>>()?;
+    let ask = MenuItem::with_id(app, "agent", "Ask Tokidoki", true, Some("CmdOrCtrl+J"))?;
+    let ask_separator = PredefinedMenuItem::separator(app)?;
     let new_space = MenuItem::with_id(app, "new-space", "New Space", true, None::<&str>)?;
     let new_folder = MenuItem::with_id(app, "new-folder", "New Folder", true, None::<&str>)?;
     let next_space = MenuItem::with_id(
@@ -220,6 +222,8 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     )?;
     let space_separator = PredefinedMenuItem::separator(app)?;
     let mut space_items: Vec<&dyn IsMenuItem<Wry>> = vec![
+        &ask,
+        &ask_separator,
         &new_space,
         &new_folder,
         &space_separator,
@@ -337,6 +341,7 @@ pub fn run_action(app: &AppHandle, id: String) {
                 Ok(())
             }
             "toggle-sidebar" => browser::toggle_sidebar(&app),
+            "agent" => agent::toggle(&app),
             "split-terminal" => browser::split_with_new_terminal(&app),
             "unsplit" => browser::end_group_of_active(&app),
             "welcome" => welcome::open(&app),

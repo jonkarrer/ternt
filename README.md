@@ -57,6 +57,7 @@ them run under `doppler run --`.
 | ⌘, | Settings (⌘1–⌘6 switch its pages, ⌘W closes it) |
 | ⌃H | Shortcuts and how-tos, searchable (also in the Help menu). In a terminal, ⌃H goes to the shell (backspace) |
 | ⌘H | Hide Ternt |
+| ⌘J | Ask Tokidoki: this space's AI agent in a panel over the page (also the Ask button at the top of the sidebar). One agent per space, each with its own memory; a stub answers until tokidoki is embedded (see Agent below) |
 
 ## Sidebar
 
@@ -168,6 +169,42 @@ name and email, kept on this Mac, and a summary of your profiles), **General** (
 **Links** (default browser, where links from other apps open), **Shortcuts** and **Advanced**
 (data folder).
 
+## Agent (Tokidoki)
+
+Every space gets its own AI agent: [tokidoki](https://github.com/jonkarrer/tokidoki), an agent with
+durable execution and long-term memory, embedded as a Rust crate. Press ⌘J or click **Ask <space>**
+at the top of the sidebar: a panel opens over the page with that space's conversations. Agents share
+nothing, so what the dev space's agent learns never reaches the marketing space's.
+
+The host side is `src-tauri/src/agent/`:
+
+- `protocol.rs` mirrors tokidoki's `interface` types (`src/agent/protocol.ts` is its generated
+  TypeScript, copied from the tokidoki repo). The panel is written against the real wire format.
+- `mod.rs` owns the boundary (`trait Agent`: `send`, `threads`, `history`, `abort`), one lazily
+  opened agent per space (data folder `agents/space-<id>`), the panel webview, and the **outbox**:
+  every agent's events go through one bounded channel to one forwarder, which coalesces streamed
+  text into one IPC message per ~30 ms and sends nothing while the panel is hidden. The page
+  reloads a thread's history when it opens (checkpoints are numbered without gaps), so dropped
+  events cost nothing; a full queue sends `lagged` and the page catches up the same way.
+- `stub.rs` answers today: a streamed canned reply with the same shape of events a real turn has.
+  `/tool` adds a pretend tool call, `/error` a failed turn.
+
+**Embedding tokidoki** (its `docs/EMBEDDING.md` is written for Ternt): add the crate, replace
+`protocol.rs` with `pub use tokidoki::interface::*`, and have `agent_for` call
+`Spaces::open(&folder_name(space), |data| Config::new(data, keys…), tools)`; the methods map one to
+one. Keys belong in the Keychain or Doppler, never the repo. Before shipping it, three build
+settings decide whether an agent bug can take the browser down:
+
+- `panic = "abort"` in the release profile turns a panic inside an agent into a crash of Ternt;
+  `panic = "unwind"` lets tokidoki's engine catch it and mark the task faulted. Alternatively run
+  the agents in a sidecar process (the strongest isolation; the `Agent` trait is the seam).
+- tokidoki installs the process's `tracing` subscriber on first `open`; Ternt must not install
+  its own first, or nothing is journaled.
+- its `reqwest` uses `aws-lc-rs` beside Ternt's `ring`; both work, the build gets heavier.
+
+The e2e suite `agent` drives the panel against the stub; `src/agent/thread.test.ts` covers the
+view model.
+
 ## Architecture
 
 One window, several native webviews (see `src-tauri/src/browser.rs`):
@@ -179,6 +216,7 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
 | `term` | `term.html` → `src/term/` | All terminal tabs and their panes (xterm.js), created on first use |
 | `peek` | `index.html` again | The collapsed sidebar shown over the page on hover, pre-created hidden |
 | `palette` | `palette.html` → `src/palette/` | Command bar overlay, pre-created hidden |
+| `agent` | `agent.html` → `src/agent/` | Tokidoki panel (⌘J), created on first open then kept hidden (`src-tauri/src/agent/`) |
 | `settings` | `settings.html` → `src/settings/` | Settings, its own window (`src-tauri/src/settings.rs`) |
 | `little-N-bar` / `little-N-page` | `little.html` → `src/little/` / the web | Little Ternt windows (`src-tauri/src/little.rs`) |
 

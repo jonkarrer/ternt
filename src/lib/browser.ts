@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { EventCallback, UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import type { Event as AgentEvent, Sent, ThreadSummary } from "../agent/protocol";
 
 /** Events sent to this webview. (The global `listen` also gets every event
  *  sent to any other webview: each state update arrived once per target.) */
@@ -194,6 +195,30 @@ export interface PaletteRequest {
   contentLeft: number;
 }
 
+/** The agent panel (⌘J): src-tauri/src/agent. */
+export interface AgentSpace {
+  id: number;
+  name: string;
+  color: string;
+  icon: string | null;
+}
+
+export interface AgentRequest {
+  space: AgentSpace;
+  /** Left edge of the content pane (logical px). */
+  contentLeft: number;
+  /** `stub` until tokidoki is embedded. */
+  backend: string;
+  /** The agent's data folder under the app data dir. */
+  folder: string;
+}
+
+/** An agent event with the space it came from. */
+export interface AgentTagged {
+  space: number;
+  event: AgentEvent;
+}
+
 /** Mirror the sidebar constants in src-tauri/src/browser.rs. */
 export const DEFAULT_SIDEBAR_WIDTH = 240;
 export const MIN_SIDEBAR_WIDTH = 180;
@@ -296,6 +321,21 @@ export const browser = {
     listen<BrowserState>("browser:state", (e) => cb(e.payload)),
   onPaletteOpen: (cb: (request: PaletteRequest) => void): Promise<UnlistenFn> =>
     listen<PaletteRequest>("palette:open", (e) => cb(e.payload)),
+
+  // The agent panel; `space` scopes every call to one space's agent.
+  agentRequest: () => invoke<AgentRequest | null>("agent_request"),
+  openAgent: () => invoke("open_agent"),
+  closeAgent: () => invoke("close_agent"),
+  /** Send `text`; `thread` continues a conversation, `null` starts one. */
+  agentSend: (space: number, text: string, thread: string | null) => invoke<Sent>("agent_send", { space, text, thread }),
+  agentThreads: (space: number) => invoke<ThreadSummary[]>("agent_threads", { space }),
+  /** A thread's checkpoints from `since` on. */
+  agentHistory: (space: number, thread: string, since: number) => invoke<AgentEvent[]>("agent_history", { space, thread, since }),
+  agentAbort: (space: number, thread: string) => invoke<boolean>("agent_abort", { space, thread }),
+  onAgentOpen: (cb: (request: AgentRequest) => void): Promise<UnlistenFn> =>
+    listen<AgentRequest>("agent:open", (e) => cb(e.payload)),
+  onAgentEvent: (cb: (tagged: AgentTagged) => void): Promise<UnlistenFn> =>
+    listen<AgentTagged>("agent:event", (e) => cb(e.payload)),
   updateStatus: () => invoke<UpdateStatus>("update_status"),
   /** Install the update (downloading it first if needed) and relaunch. */
   installUpdate: () => invoke("install_update"),

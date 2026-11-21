@@ -39,6 +39,9 @@ export const SHORTCUTS: ShortcutGroup[] = [
     ["⌃1 – ⌃9", "Select space"],
     ["⌥⌘←  ⌥⌘→", "Previous / next space"],
   ]),
+  group("Agent", [
+    ["⌘J", "Ask Tokidoki: this space's agent, in a panel over the page (also the Ask button at the top of the sidebar)"],
+  ]),
   group("App", [
     ["⌃H", "Shortcuts and how-tos (this sheet)"],
     ["⌘H", "Hide Ternt"],
@@ -49,6 +52,10 @@ export const SHORTCUTS: ShortcutGroup[] = [
 ];
 
 export const HOW_TOS: HowTo[] = [
+  {
+    title: "Ask your space's agent",
+    text: "Press ⌘J, or click Ask <space> at the top of the sidebar. Each space has its own agent with its own memory, so a dev space and a marketing space never mix. Enter sends, Shift+Enter adds a line, Esc closes; the + button starts a new conversation. Until tokidoki is connected a stand-in answers (marked stub).",
+  },
   {
     title: "Search a site",
     text: "Press ⌘T, type the start of a site's name and press Tab: you ⇥ YouTube, goo ⇥ Google, perp ⇥ Perplexity (also ChatGPT, Claude, GitHub, Wikipedia, Maps, Amazon, Reddit). What you type next is searched there. Backspace or Esc removes it.",
