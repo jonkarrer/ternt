@@ -34,7 +34,7 @@ use tokio::{
 };
 
 use super::{
-    AGENT_WEBVIEW, Agent, Outbox, Reply,
+    AGENT_WEBVIEW, Agent, Outbox, Reply, keys,
     protocol::*,
     wire::{Frame, Request},
 };
@@ -59,14 +59,20 @@ const RESTART_WINDOW: Duration = Duration::from_secs(120);
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum Status {
     Starting,
+    #[serde(rename_all = "camelCase")]
     Running {
         /// `stub` or `tokidoki`, from its first line.
         backend: String,
         /// It came back after dying: the panel reloads what it shows.
         restarted: bool,
+        /// It was given an Anthropic key; without one it can't answer.
+        has_key: bool,
     },
     Restarting {
+        /// Which restart this is within the budget; 0 when `asked`.
         attempt: u32,
+        /// Restarted on purpose (the Restart button, a key change), not a death.
+        asked: bool,
     },
     Down {
         reason: String,
@@ -87,6 +93,8 @@ pub struct Sidecar {
     pid: AtomicU32,
     /// A `run` loop is going (so `restart` knows whether to start one).
     running: AtomicBool,
+    /// The next exit is a restart Ternt asked for, not a death.
+    asked: AtomicBool,
 }
 
 /// The agent process to start.
@@ -135,6 +143,7 @@ impl Sidecar {
             deaths: Mutex::default(),
             pid: AtomicU32::new(0),
             running: AtomicBool::new(false),
+            asked: AtomicBool::new(false),
         })
     }
 
@@ -154,6 +163,15 @@ impl Sidecar {
                 self.set_status(Status::Down { reason });
                 break;
             }
+            if self.asked.swap(false, Ordering::AcqRel) {
+                self.fail_pending("The agent was restarted.");
+                self.set_status(Status::Restarting {
+                    attempt: 0,
+                    asked: true,
+                });
+                restarted = false;
+                continue;
+            }
             self.fail_pending("The agent process exited.");
             let attempt = restart_attempt(&mut self.deaths.lock().unwrap(), Instant::now());
             if attempt as usize > BACKOFF.len() {
@@ -165,7 +183,10 @@ impl Sidecar {
                 });
                 break;
             }
-            self.set_status(Status::Restarting { attempt });
+            self.set_status(Status::Restarting {
+                attempt,
+                asked: false,
+            });
             tokio::time::sleep(BACKOFF[attempt as usize - 1]).await;
             restarted = true;
         }
@@ -177,9 +198,17 @@ impl Sidecar {
     async fn spawn_once(&self, restarted: bool) -> Result<(), String> {
         let bin = binary();
         let _ = std::fs::create_dir_all(&self.data);
+        // Only an exit of the process started here can be one `restart` asked for.
+        self.asked.store(false, Ordering::Release);
+        // The user's keys reach the agent this way and no other.
+        let keys = keys::load();
+        let has_key = keys
+            .iter()
+            .any(|(variable, _)| *variable == keys::ANTHROPIC.variable);
         let mut child = Command::new(&bin)
             .arg("--data")
             .arg(&self.data)
+            .envs(keys)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -218,7 +247,11 @@ impl Sidecar {
             }
         };
         *self.stdin.lock().await = Some(stdin);
-        self.set_status(Status::Running { backend, restarted });
+        self.set_status(Status::Running {
+            backend,
+            restarted,
+            has_key,
+        });
 
         while let Ok(Some(line)) = lines.next_line().await {
             self.on_line(&line);
@@ -322,13 +355,24 @@ impl Sidecar {
         }
     }
 
-    /// Start over: kill a running process (the loop brings it back), or
-    /// start one when it was left down.
+    /// Start over, on purpose (the Restart button, a key change): stop a
+    /// running process (the loop brings it back, with the keys read again),
+    /// or start one when it was left down.
     pub fn restart(self: &Arc<Self>) {
         self.deaths.lock().unwrap().clear();
         let pid = self.pid.load(Ordering::Relaxed);
         if pid != 0 {
-            signal(pid, "-KILL");
+            self.asked.store(true, Ordering::Release);
+            // A TERM lets it finish what it is writing (tokidoki stops its
+            // agents cleanly in milliseconds); a KILL follows if it won't go.
+            signal(pid, "-TERM");
+            let me = self.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                if me.pid.load(Ordering::Relaxed) == pid {
+                    signal(pid, "-KILL");
+                }
+            });
         } else if !self.running.load(Ordering::Acquire) {
             self.set_status(Status::Starting);
             self.start();
@@ -438,11 +482,21 @@ mod tests {
         let json = serde_json::to_value(Status::Running {
             backend: "stub".into(),
             restarted: true,
+            has_key: false,
         })
         .unwrap();
         assert_eq!(
             json,
-            serde_json::json!({ "state": "running", "backend": "stub", "restarted": true })
+            serde_json::json!({ "state": "running", "backend": "stub", "restarted": true, "hasKey": false })
+        );
+        let json = serde_json::to_value(Status::Restarting {
+            attempt: 0,
+            asked: true,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "state": "restarting", "attempt": 0, "asked": true })
         );
         assert_eq!(
             serde_json::to_value(Status::Starting).unwrap(),

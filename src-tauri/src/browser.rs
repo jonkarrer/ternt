@@ -1756,6 +1756,7 @@ pub fn delete_space(app: &AppHandle, id: u32) -> tauri::Result<()> {
     let Some((removed, space)) = with(app, |s| s.remove_space(id)) else {
         return Ok(());
     };
+    crate::agent::forget(app, id);
     for tab in removed {
         match tab.kind {
             TabKind::Web => close_webview(app, tab.id)?,

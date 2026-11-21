@@ -110,7 +110,8 @@ fn handle(
         return Ok(Value::Null);
     }
     let space = request.space.ok_or("a space is required")?;
-    if request.method == "close" {
+    // The stub keeps nothing on disk, so deleting a space is closing it.
+    if request.method == "close" || request.method == "delete" {
         agents.remove(&space);
         return Ok(Value::Null);
     }

@@ -6,13 +6,13 @@ default:
 
 # ─── Core ────────────────────────────────────────────────
 
-# Run the app with hot reload (the agent sidecar first: tauri dev only builds Ternt)
-dev: sidecar
+# Run the app with hot reload (the agent sidecar first: tauri dev only builds Ternt). `just dev tokidoki` runs the real agent
+dev flavor="": (sidecar flavor)
     bun tauri dev
 
-# Build the agent sidecar (src-tauri/agent) into src-tauri/binaries; Ternt needs it to compile
-sidecar:
-    scripts/sidecar.sh
+# Build the agent sidecar into src-tauri/binaries; Ternt needs it to compile. `stub` (default) or `tokidoki` (from ../tokidoki)
+sidecar flavor="":
+    scripts/sidecar.sh {{flavor}}
 
 # Typecheck + lint — must be clean before commit
 check: sidecar

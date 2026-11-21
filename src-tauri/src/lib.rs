@@ -155,6 +155,8 @@ pub fn run() {
             agent::agent_abort,
             agent::agent_status,
             agent::agent_restart,
+            agent::agent_keys,
+            agent::agent_set_keys,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,

@@ -19,6 +19,7 @@
 //! - **The panel**: a transparent webview over the window (like the command
 //!   bar), created on first open and kept hidden afterwards.
 
+mod keys;
 pub mod protocol;
 mod sidecar;
 pub mod wire;
@@ -254,6 +255,26 @@ fn agent_for(app: &AppHandle, space: u32) -> Result<Arc<dyn Agent>, String> {
     Ok(agent)
 }
 
+/// A space was deleted: forget its agent, and have the sidecar remove its
+/// files (conversations, memory, journal). If the process is down just then
+/// the folder stays behind, which only costs disk.
+pub fn forget(app: &AppHandle, space: u32) {
+    let host = app.state::<Host>();
+    host.agents.lock().unwrap().remove(&space);
+    let Some(sidecar) = host.sidecar.get().cloned() else {
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        let folder = folder_name(space);
+        if let Err(err) = sidecar
+            .call(Some(folder.clone()), "delete", serde_json::Value::Null)
+            .await
+        {
+            eprintln!("ternt-agent: deleting {folder}: {err}");
+        }
+    });
+}
+
 /// Stop the agent process (before exit).
 pub fn shutdown(app: &AppHandle) {
     let host = app.state::<Host>();
@@ -445,4 +466,30 @@ mod tests {
         assert!(rx.try_recv().is_ok());
         assert!(rx.try_recv().is_err());
     }
+}
+
+/// Which API keys the user has given the agents (never their values).
+#[tauri::command]
+pub async fn agent_keys() -> keys::Present {
+    keys::present()
+}
+
+/// Store the keys and start the agent over with them. `None` leaves a key
+/// as it is; an empty string removes it.
+#[tauri::command]
+pub async fn agent_set_keys(
+    app: AppHandle,
+    anthropic: Option<String>,
+    baseten: Option<String>,
+) -> Result<(), String> {
+    if let Some(key) = anthropic {
+        keys::ANTHROPIC.write(key.trim())?;
+    }
+    if let Some(key) = baseten {
+        keys::BASETEN.write(key.trim())?;
+    }
+    if let Some(sidecar) = app.state::<Host>().sidecar.get() {
+        sidecar.restart();
+    }
+    Ok(())
 }

@@ -180,10 +180,19 @@ The agents run in a **sidecar process**, not in Ternt. Ternt's release build abo
 panic inside an agent (or in SQLite, or running out of memory) ends whatever process it runs in;
 in its own process that is the agent, never the browser. Ternt starts the process, restarts it
 with a short back-off when it dies, and the panel says so (a Restart button appears if it keeps
-dying). The protocol, JSON lines over stdin and stdout, is in [docs/AGENT-SIDECAR.md](docs/AGENT-SIDECAR.md);
-tokidoki's `serve` command will speak it. Until then the stub in `src-tauri/agent/` does: a
-streamed canned reply with the same shape of events a real turn has (`/tool` adds a pretend tool
-call, `/error` a failed turn, `/crash` kills the process so you can watch it come back).
+dying). The protocol, JSON lines over stdin and stdout, is in [docs/AGENT-SIDECAR.md](docs/AGENT-SIDECAR.md).
+Two programs speak it: tokidoki's `tokidoki-serve`, the real agent, and the stub in
+`src-tauri/agent/`, a streamed canned reply with the same shape of events a real turn has (`/tool`
+adds a pretend tool call, `/error` a failed turn, `/crash` kills the process so you can watch it
+come back). `just sidecar tokidoki` (or `TERNT_SIDECAR=tokidoki`) builds the real one from a
+tokidoki checkout beside this repo (`TOKIDOKI_SRC` to point elsewhere); the stub is the default,
+and what the e2e suites run against. `TERNT_SIDECAR=tokidoki e2e/run.sh tokidoki` runs the panel
+against the real agent (one model call if `ANTHROPIC_API_KEY` is set).
+
+The agent needs the user's **Anthropic API key**. The panel asks for it the first time and keeps it
+in the macOS Keychain (`src-tauri/src/agent/keys.rs`); Ternt hands it to the sidecar through its
+environment and nothing else ever sees it. A key already in Ternt's environment wins, which is how
+to run `just dev tokidoki` without touching the Keychain.
 
 - `src-tauri/src/agent/protocol.rs` mirrors tokidoki's `interface` types (`src/agent/protocol.ts`
   is its generated TypeScript, copied from the tokidoki repo). The panel is written against the

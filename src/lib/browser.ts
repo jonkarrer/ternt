@@ -220,10 +220,14 @@ export interface AgentTagged {
 }
 
 /** The agent process (src-tauri/src/agent/sidecar.rs): a crash there restarts it, not Ternt. */
+export type AgentKeys = { anthropic: boolean; baseten: boolean };
+
 export type AgentStatus =
   | { state: "starting" }
-  | { state: "running"; backend: string; restarted: boolean }
-  | { state: "restarting"; attempt: number }
+  /** `hasKey`: it was given an Anthropic key (the stub needs none). */
+  | { state: "running"; backend: string; restarted: boolean; hasKey: boolean }
+  /** `asked`: restarted on purpose (Restart, a key change), not a crash. */
+  | { state: "restarting"; attempt: number; asked: boolean }
   | { state: "down"; reason: string };
 
 /** Mirror the sidebar constants in src-tauri/src/browser.rs. */
@@ -348,6 +352,10 @@ export const browser = {
   agentRestart: () => invoke("agent_restart"),
   onAgentStatus: (cb: (status: AgentStatus) => void): Promise<UnlistenFn> =>
     listen<AgentStatus>("agent:status", (e) => cb(e.payload)),
+  /** Which API keys the agents have (never the values); they live in the Keychain. */
+  agentKeys: () => invoke<AgentKeys>("agent_keys"),
+  /** Store keys and restart the agent with them. `null` leaves one as it is, "" removes it. */
+  agentSetKeys: (anthropic: string | null, baseten: string | null) => invoke("agent_set_keys", { anthropic, baseten }),
   updateStatus: () => invoke<UpdateStatus>("update_status"),
   /** Install the update (downloading it first if needed) and relaunch. */
   installUpdate: () => invoke("install_update"),

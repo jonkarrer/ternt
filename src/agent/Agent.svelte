@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import SpaceIcon from "../lib/SpaceIcon.svelte";
-  import { browser, type AgentRequest, type AgentStatus, type AgentTagged } from "../lib/browser";
+  import { browser, type AgentKeys, type AgentRequest, type AgentStatus, type AgentTagged } from "../lib/browser";
   import type { ThreadSummary } from "./protocol";
   import { apply, emptyView, presenceText, rows, type ThreadView } from "./thread";
 
@@ -22,6 +22,14 @@
       known until `send` returns); replayed once it is. */
   let early: AgentTagged["event"][] = [];
   let sending = false;
+  /** Which API keys the agents have (the values stay in the Keychain). */
+  let keys = $state<AgentKeys | null>(null);
+  /** The keys card was opened from the footer (it also opens itself when a key is missing). */
+  let keysOpen = $state(false);
+  let anthropicDraft = $state("");
+  let basetenDraft = $state("");
+  let savingKeys = $state(false);
+  let keysError = $state<string | null>(null);
 
   const space = $derived(request?.space ?? null);
   const list = $derived(rows(view.log));
@@ -29,8 +37,10 @@
   const presence = $derived(presenceText(view.live.doing));
   const backend = $derived(status?.state === "running" ? status.backend : request?.backend);
   const stub = $derived(backend === "stub");
+  /** The agent is up but has no Anthropic key, so it can't answer yet. */
+  const needsKey = $derived(status?.state === "running" && !stub && !status.hasKey);
   /** The process can take an input. */
-  const ready = $derived(!status || status.state === "running");
+  const ready = $derived(!status || (status.state === "running" && !needsKey));
 
   const SUGGESTIONS = ["What's open in this space?", "Summarize what I was doing here", "/tool show me a tool call"];
 
@@ -55,6 +65,7 @@
     request = next;
     error = null;
     browser.agentStatus().then((now) => (status = now));
+    browser.agentKeys().then((now) => (keys = now));
     await tick();
     input?.focus();
     if (sameSpace && view.thread) {
@@ -63,7 +74,8 @@
       await catchUp();
       return;
     }
-    threads = await browser.agentThreads(next.space.id);
+    // Without a key tokidoki can't open the agent, so even this fails: then there is nothing to show.
+    threads = await browser.agentThreads(next.space.id).catch(() => [] as ThreadSummary[]);
     if (seq !== showSeq) return;
     await openThread(threads[0]?.id ?? null);
     scrollToEnd(true);
@@ -169,6 +181,31 @@
 
   function stop() {
     if (request && view.thread) browser.agentAbort(request.space.id, view.thread);
+  }
+
+  /** Store what was typed into the keys card (blank fields stay as they are) and restart the agent. */
+  async function saveKeys(event?: Event) {
+    event?.preventDefault();
+    const anthropic = anthropicDraft.trim() || null;
+    const baseten = basetenDraft.trim() || null;
+    if (!anthropic && !baseten) return;
+    await changeKeys(anthropic, baseten);
+  }
+
+  async function changeKeys(anthropic: string | null, baseten: string | null) {
+    savingKeys = true;
+    keysError = null;
+    try {
+      await browser.agentSetKeys(anthropic, baseten);
+      anthropicDraft = "";
+      basetenDraft = "";
+      keys = await browser.agentKeys();
+      keysOpen = false;
+    } catch (e) {
+      keysError = String(e);
+    } finally {
+      savingKeys = false;
+    }
   }
 
   function close() {
@@ -288,11 +325,37 @@
         {/if}
       </div>
 
+      {#if needsKey || keysOpen}
+        <form class="keys" data-state="keys" onsubmit={saveKeys}>
+          {#if needsKey}
+            <p><b>Tokidoki needs an Anthropic API key</b> to answer. It is kept in your Keychain and handed only to the agent process, never to Ternt's servers (there are none).</p>
+          {:else}
+            <p>Your keys are kept in your Keychain and handed only to the agent process. Leave a field blank to keep what is saved.</p>
+          {/if}
+          <label>
+            <span>Anthropic</span>
+            <input type="password" bind:value={anthropicDraft} placeholder={keys?.anthropic ? "saved" : "sk-ant-…"} autocomplete="off" spellcheck="false" />
+            {#if keys?.anthropic}<button type="button" class="link" onclick={() => changeKeys("", null)} disabled={savingKeys}>Remove</button>{/if}
+          </label>
+          <label>
+            <span>Baseten <em>optional</em></span>
+            <input type="password" bind:value={basetenDraft} placeholder={keys?.baseten ? "saved" : "the router's fallback model"} autocomplete="off" spellcheck="false" />
+            {#if keys?.baseten}<button type="button" class="link" onclick={() => changeKeys(null, "")} disabled={savingKeys}>Remove</button>{/if}
+          </label>
+          <div class="actions">
+            <button class="restart" type="submit" disabled={savingKeys || (!anthropicDraft.trim() && !basetenDraft.trim())}>{savingKeys ? "Saving…" : "Save"}</button>
+            {#if !needsKey}<button type="button" class="link" onclick={() => (keysOpen = false)}>Cancel</button>{/if}
+          </div>
+          {#if keysError}<div class="unanswered" role="alert">{keysError}</div>{/if}
+        </form>
+      {/if}
       {#if status && status.state !== "running"}
         <div class="status" class:down={status.state === "down"} data-state={status.state} role="status">
           <span class="pulse" class:still={status.state === "down"}></span>
           {#if status.state === "starting"}
             Starting the agent…
+          {:else if status.state === "restarting" && status.asked}
+            Restarting the agent…
           {:else if status.state === "restarting"}
             The agent stopped; starting it again{status.attempt > 1 ? ` (try ${status.attempt})` : ""}…
           {:else}
@@ -309,7 +372,7 @@
           bind:value={draft}
           {onkeydown}
           rows="1"
-          placeholder={ready ? `Ask ${space.name}…` : "Waiting for the agent…"}
+          placeholder={ready ? `Ask ${space.name}…` : needsKey ? "Add your Anthropic API key above" : "Waiting for the agent…"}
           disabled={!ready}
           spellcheck="true"
           aria-label="Message to the {space.name} space's agent"
@@ -330,6 +393,7 @@
         <span><kbd>⇧↵</kbd> new line</span>
         <span><kbd>esc</kbd> or <kbd>⌘J</kbd> close</span>
         {#if stub}<span><kbd>/tool</kbd> <kbd>/error</kbd> try the stub</span>{/if}
+        {#if !stub && backend}<button type="button" class="link" onclick={() => (keysOpen = !keysOpen)}>API keys</button>{/if}
       </footer>
     </div>
   </div>
@@ -599,6 +663,66 @@
     color: white;
     font-size: 12px;
     font-weight: 600;
+  }
+  .keys {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0 16px 8px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--fill);
+    font-size: 12.5px;
+  }
+  .keys p {
+    margin: 0;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+  .keys label {
+    display: grid;
+    grid-template-columns: 92px 1fr auto;
+    align-items: center;
+    gap: 8px;
+  }
+  .keys label em {
+    color: var(--text-muted);
+    font-style: normal;
+    font-size: 11px;
+  }
+  .keys input {
+    min-width: 0;
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 0.5px solid var(--ring);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 12.5px;
+  }
+  .keys .actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .keys .restart {
+    margin-left: 0;
+  }
+  .keys .restart:disabled {
+    opacity: 0.5;
+  }
+  .link {
+    padding: 0;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 12px;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+  }
+  .link:hover {
+    color: var(--text);
   }
   .unanswered {
     padding: 7px 10px;
