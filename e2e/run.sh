@@ -34,6 +34,7 @@ for name in $tests; do
   [[ $name =~ ^(.+)-[0-9]+$ ]] && key=${BASH_REMATCH[1]}
   if [[ $name == $key || $name == *-1 ]]; then
     rm -f $OUT/$key.{session,history,prefs,downloads}.json{,.bak,.tmp-*,.unreadable-*}(N)
+    rm -rf $OUT/$key.agents
     # A missing session file is a first launch, which opens the welcome page;
     # suites start from an empty session instead, except the welcome suite.
     [[ $key == welcome ]] || echo '{"tabs":[],"active":null,"sidebarWidth":240,"sidebarCollapsed":false}' > $OUT/$key.session.json
@@ -45,7 +46,7 @@ for name in $tests; do
   [[ -f $E2E/tests/$name.env ]] && suite_env=(${(f)"$(<$E2E/tests/$name.env)"})
   env $suite_env TERNT_TEST=$E2E/tests/$name.js TERNT_SHOTS=$OUT TERNT_SESSION_FILE=$OUT/$key.session.json \
     TERNT_HISTORY_FILE=$OUT/$key.history.json TERNT_PREFS_FILE=$OUT/$key.prefs.json \
-    TERNT_DOWNLOADS_FILE=$OUT/$key.downloads.json $ROOT/src-tauri/target/debug/ternt > $OUT/$name.log 2>&1 &
+    TERNT_DOWNLOADS_FILE=$OUT/$key.downloads.json TERNT_AGENTS_DIR=$OUT/$key.agents $ROOT/src-tauri/target/debug/ternt > $OUT/$name.log 2>&1 &
   pid=$!
   for i in {1..400}; do grep -q "TEST DONE" $OUT/$name.log && break; kill -0 $pid 2>/dev/null || break; sleep 0.25; done
   # Give the app a moment to exit on its own (it saves its session on exit).

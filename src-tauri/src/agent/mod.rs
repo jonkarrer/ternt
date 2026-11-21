@@ -27,6 +27,7 @@ pub mod wire;
 use std::{
     collections::HashMap,
     future::Future,
+    path::PathBuf,
     pin::Pin,
     sync::{
         Arc, Mutex, OnceLock,
@@ -147,8 +148,11 @@ pub fn start(app: &AppHandle) {
         return;
     }
     tauri::async_runtime::spawn(forward(app.clone(), rx, outbox.lagged.clone()));
-    let data = crate::session::data_dir(app)
-        .map(|dir| dir.join("agents"))
+    // The e2e runner gives each suite its own folder: tokidoki locks the folder it
+    // serves, so a test and a `just dev` on the same one would fight over it.
+    let data = std::env::var_os("TERNT_AGENTS_DIR")
+        .map(PathBuf::from)
+        .or_else(|| crate::session::data_dir(app).map(|dir| dir.join("agents")))
         .unwrap_or_else(|| std::env::temp_dir().join("ternt-agents"));
     let sidecar = sidecar::Sidecar::new(app.clone(), outbox, data);
     sidecar.start();
