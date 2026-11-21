@@ -3,7 +3,7 @@
 //   TERNT_SIDECAR=tokidoki e2e/run.sh tokidoki
 //
 // Without an Anthropic key in the environment it checks that the panel asks for one and
-// holds input back. With ANTHROPIC_API_KEY set it also asks the agent one short question
+// holds input back. With FIREWORKS_API_KEY (or ANTHROPIC_API_KEY) set it also asks one short question
 // (one real model call), then restarts the process and checks the conversation survived
 // on disk. Against the stub sidecar it has nothing to test and says so.
 const S = () => t.state();
@@ -28,13 +28,14 @@ const first = S().activeSpace;
 await t.assert((await A.request()).folder === `space-${first}`, "the space's folder name is one tokidoki accepts");
 
 if (!status.hasKey) {
-  await t.until(async () => (await A.text(".keys")).includes("needs an Anthropic API key"), "without a key the panel asks for one");
+  await t.until(async () => (await A.text(".keys")).includes("needs an API key"), "without a key the panel asks for one");
   await t.until(async () => (await t.read("agent", `String(document.querySelector("textarea").disabled)`)) === "true", "and holds input back");
   await t.until(async () => (await t.read("agent", `document.querySelector("textarea").placeholder`)).includes("API key"), "the composer says why");
   await t.shot("tokidoki-needs-key");
-  // tokidoki opens the agent for every method, and can't without a key: the error names it.
-  const refused = await t.invoke("agent_threads", { space: first }).then(() => "", (e) => String(e));
-  await t.assert(refused.includes("ANTHROPIC_API_KEY"), `threads is refused with the reason (${refused})`);
+  // Listing threads needs no model: an empty list, or (older tokidoki, which opened the agent
+  // for every method) an error naming the key.
+  const listed = await t.invoke("agent_threads", { space: first }).then((v) => v, (e) => String(e));
+  await t.assert((Array.isArray(listed) && listed.length === 0) || /API_KEY/.test(listed), `threads without a key: ${JSON.stringify(listed)}`);
   await A.key("Escape");
   await t.quit();
 }

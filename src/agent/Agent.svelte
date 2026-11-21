@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import SpaceIcon from "../lib/SpaceIcon.svelte";
-  import { browser, type AgentKeys, type AgentRequest, type AgentStatus, type AgentTagged } from "../lib/browser";
+  import { browser, type AgentKeyChange, type AgentKeys, type AgentRequest, type AgentStatus, type AgentTagged } from "../lib/browser";
   import type { ThreadSummary } from "./protocol";
   import { apply, emptyView, presenceText, rows, type ThreadView } from "./thread";
 
@@ -26,6 +26,7 @@
   let keys = $state<AgentKeys | null>(null);
   /** The keys card was opened from the footer (it also opens itself when a key is missing). */
   let keysOpen = $state(false);
+  let fireworksDraft = $state("");
   let anthropicDraft = $state("");
   let basetenDraft = $state("");
   let savingKeys = $state(false);
@@ -37,7 +38,7 @@
   const presence = $derived(presenceText(view.live.doing));
   const backend = $derived(status?.state === "running" ? status.backend : request?.backend);
   const stub = $derived(backend === "stub");
-  /** The agent is up but has no Anthropic key, so it can't answer yet. */
+  /** The agent is up but has no key to answer with (Fireworks or Anthropic). */
   const needsKey = $derived(status?.state === "running" && !stub && !status.hasKey);
   /** The process can take an input. */
   const ready = $derived(!status || (status.state === "running" && !needsKey));
@@ -186,17 +187,20 @@
   /** Store what was typed into the keys card (blank fields stay as they are) and restart the agent. */
   async function saveKeys(event?: Event) {
     event?.preventDefault();
-    const anthropic = anthropicDraft.trim() || null;
-    const baseten = basetenDraft.trim() || null;
-    if (!anthropic && !baseten) return;
-    await changeKeys(anthropic, baseten);
+    const change: AgentKeyChange = {};
+    if (fireworksDraft.trim()) change.fireworks = fireworksDraft.trim();
+    if (anthropicDraft.trim()) change.anthropic = anthropicDraft.trim();
+    if (basetenDraft.trim()) change.baseten = basetenDraft.trim();
+    if (!Object.keys(change).length) return;
+    await changeKeys(change);
   }
 
-  async function changeKeys(anthropic: string | null, baseten: string | null) {
+  async function changeKeys(change: AgentKeyChange) {
     savingKeys = true;
     keysError = null;
     try {
-      await browser.agentSetKeys(anthropic, baseten);
+      await browser.agentSetKeys(change);
+      fireworksDraft = "";
       anthropicDraft = "";
       basetenDraft = "";
       keys = await browser.agentKeys();
@@ -328,22 +332,27 @@
       {#if needsKey || keysOpen}
         <form class="keys" data-state="keys" onsubmit={saveKeys}>
           {#if needsKey}
-            <p><b>Tokidoki needs an Anthropic API key</b> to answer. It is kept in your Keychain and handed only to the agent process, never to Ternt's servers (there are none).</p>
+            <p><b>Tokidoki needs an API key</b> to answer: Fireworks AI, or Anthropic. It is kept in your Keychain and handed only to the agent process, never to Ternt's servers (there are none).</p>
           {:else}
             <p>Your keys are kept in your Keychain and handed only to the agent process. Leave a field blank to keep what is saved.</p>
           {/if}
           <label>
+            <span>Fireworks</span>
+            <input type="password" bind:value={fireworksDraft} placeholder={keys?.fireworks ? "saved" : "fw_…"} autocomplete="off" spellcheck="false" />
+            {#if keys?.fireworks}<button type="button" class="link" onclick={() => changeKeys({ fireworks: "" })} disabled={savingKeys}>Remove</button>{/if}
+          </label>
+          <label>
             <span>Anthropic</span>
             <input type="password" bind:value={anthropicDraft} placeholder={keys?.anthropic ? "saved" : "sk-ant-…"} autocomplete="off" spellcheck="false" />
-            {#if keys?.anthropic}<button type="button" class="link" onclick={() => changeKeys("", null)} disabled={savingKeys}>Remove</button>{/if}
+            {#if keys?.anthropic}<button type="button" class="link" onclick={() => changeKeys({ anthropic: "" })} disabled={savingKeys}>Remove</button>{/if}
           </label>
           <label>
             <span>Baseten <em>optional</em></span>
             <input type="password" bind:value={basetenDraft} placeholder={keys?.baseten ? "saved" : "the router's fallback model"} autocomplete="off" spellcheck="false" />
-            {#if keys?.baseten}<button type="button" class="link" onclick={() => changeKeys(null, "")} disabled={savingKeys}>Remove</button>{/if}
+            {#if keys?.baseten}<button type="button" class="link" onclick={() => changeKeys({ baseten: "" })} disabled={savingKeys}>Remove</button>{/if}
           </label>
           <div class="actions">
-            <button class="restart" type="submit" disabled={savingKeys || (!anthropicDraft.trim() && !basetenDraft.trim())}>{savingKeys ? "Saving…" : "Save"}</button>
+            <button class="restart" type="submit" disabled={savingKeys || (!fireworksDraft.trim() && !anthropicDraft.trim() && !basetenDraft.trim())}>{savingKeys ? "Saving…" : "Save"}</button>
             {#if !needsKey}<button type="button" class="link" onclick={() => (keysOpen = false)}>Cancel</button>{/if}
           </div>
           {#if keysError}<div class="unanswered" role="alert">{keysError}</div>{/if}
@@ -372,7 +381,7 @@
           bind:value={draft}
           {onkeydown}
           rows="1"
-          placeholder={ready ? `Ask ${space.name}…` : needsKey ? "Add your Anthropic API key above" : "Waiting for the agent…"}
+          placeholder={ready ? `Ask ${space.name}…` : needsKey ? "Add an API key above" : "Waiting for the agent…"}
           disabled={!ready}
           spellcheck="true"
           aria-label="Message to the {space.name} space's agent"

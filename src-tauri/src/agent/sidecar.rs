@@ -65,7 +65,7 @@ pub enum Status {
         backend: String,
         /// It came back after dying: the panel reloads what it shows.
         restarted: bool,
-        /// It was given an Anthropic key; without one it can't answer.
+        /// It was given a key it can answer with (Fireworks or Anthropic).
         has_key: bool,
     },
     Restarting {
@@ -204,7 +204,7 @@ impl Sidecar {
         let keys = keys::load();
         let has_key = keys
             .iter()
-            .any(|(variable, _)| *variable == keys::ANTHROPIC.variable);
+            .any(|(variable, _)| keys::ANSWERING.contains(variable));
         let mut child = Command::new(&bin)
             .arg("--data")
             .arg(&self.data)

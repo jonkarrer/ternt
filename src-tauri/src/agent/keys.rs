@@ -21,7 +21,12 @@ pub struct Key {
     account: &'static str,
 }
 
-/// Answers and memory. Required: without it the agent can't do anything.
+/// Answers and memory, through Fireworks AI. One of this and `ANTHROPIC` is required.
+pub const FIREWORKS: Key = Key {
+    variable: "FIREWORKS_API_KEY",
+    account: "fireworks",
+};
+/// Answers and memory, through Anthropic directly.
 pub const ANTHROPIC: Key = Key {
     variable: "ANTHROPIC_API_KEY",
     account: "anthropic",
@@ -31,7 +36,9 @@ pub const BASETEN: Key = Key {
     variable: "BASETEN_API_KEY",
     account: "baseten",
 };
-pub const ALL: [Key; 2] = [ANTHROPIC, BASETEN];
+pub const ALL: [Key; 3] = [FIREWORKS, ANTHROPIC, BASETEN];
+/// The keys that let the agent answer at all; one is enough.
+pub const ANSWERING: [&str; 2] = [FIREWORKS.variable, ANTHROPIC.variable];
 
 impl Key {
     /// The key, from the environment or the Keychain; `None` when neither has it.
@@ -81,6 +88,7 @@ pub fn load() -> Vec<(&'static str, String)> {
 #[derive(Clone, Copy, Debug, Default, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Present {
+    pub fireworks: bool,
     pub anthropic: bool,
     pub baseten: bool,
 }
@@ -88,6 +96,7 @@ pub struct Present {
 pub fn present() -> Present {
     let set = |key: &Key| key.read().ok().flatten().is_some();
     Present {
+        fireworks: set(&FIREWORKS),
         anthropic: set(&ANTHROPIC),
         baseten: set(&BASETEN),
     }

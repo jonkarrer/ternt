@@ -220,11 +220,14 @@ export interface AgentTagged {
 }
 
 /** The agent process (src-tauri/src/agent/sidecar.rs): a crash there restarts it, not Ternt. */
-export type AgentKeys = { anthropic: boolean; baseten: boolean };
+/** Which keys are set (never their values). Fireworks or Anthropic answers; Baseten is the router's fallback. */
+export type AgentKeys = { fireworks: boolean; anthropic: boolean; baseten: boolean };
+/** A key change: a missing field leaves that key as it is, "" removes it. */
+export type AgentKeyChange = Partial<Record<keyof AgentKeys, string>>;
 
 export type AgentStatus =
   | { state: "starting" }
-  /** `hasKey`: it was given an Anthropic key (the stub needs none). */
+  /** `hasKey`: it was given a key it can answer with (the stub needs none). */
   | { state: "running"; backend: string; restarted: boolean; hasKey: boolean }
   /** `asked`: restarted on purpose (Restart, a key change), not a crash. */
   | { state: "restarting"; attempt: number; asked: boolean }
@@ -354,8 +357,8 @@ export const browser = {
     listen<AgentStatus>("agent:status", (e) => cb(e.payload)),
   /** Which API keys the agents have (never the values); they live in the Keychain. */
   agentKeys: () => invoke<AgentKeys>("agent_keys"),
-  /** Store keys and restart the agent with them. `null` leaves one as it is, "" removes it. */
-  agentSetKeys: (anthropic: string | null, baseten: string | null) => invoke("agent_set_keys", { anthropic, baseten }),
+  /** Store keys and restart the agent with them. */
+  agentSetKeys: (change: AgentKeyChange) => invoke("agent_set_keys", change),
   updateStatus: () => invoke<UpdateStatus>("update_status"),
   /** Install the update (downloading it first if needed) and relaunch. */
   installUpdate: () => invoke("install_update"),

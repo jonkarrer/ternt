@@ -54,7 +54,7 @@ export const SHORTCUTS: ShortcutGroup[] = [
 export const HOW_TOS: HowTo[] = [
   {
     title: "Ask your space's agent",
-    text: "Press ⌘J, or click Ask <space> at the top of the sidebar. Each space has its own agent with its own memory, so a dev space and a marketing space never mix. Enter sends, Shift+Enter adds a line, Esc closes; the + button starts a new conversation. The first time, paste your Anthropic API key into the panel: it is kept in your Keychain and goes only to the agent process (API keys, in the panel's footer, changes it). In a build with the stand-in agent (marked stub) no key is needed.",
+    text: "Press ⌘J, or click Ask <space> at the top of the sidebar. Each space has its own agent with its own memory, so a dev space and a marketing space never mix. Enter sends, Shift+Enter adds a line, Esc closes; the + button starts a new conversation. The first time, paste an API key into the panel (Fireworks AI or Anthropic): it is kept in your Keychain and goes only to the agent process (API keys, in the panel's footer, changes it). In a build with the stand-in agent (marked stub) no key is needed.",
   },
   {
     title: "Search a site",
