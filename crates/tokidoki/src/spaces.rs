@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use anyhow::{Context as _, Result};
@@ -22,6 +23,9 @@ pub struct Spaces {
     /// Held while one is opened, closed or deleted: a space is never opened while it (or its
     /// folder) is still going away, nor twice at once.
     changing: tokio::sync::Mutex<()>,
+    /// `close_all` was called: nothing opens again. A request still in flight at shutdown
+    /// would otherwise reopen its space after the drain and leave work running.
+    closing: AtomicBool,
 }
 
 impl Spaces {
@@ -31,6 +35,7 @@ impl Spaces {
             root: root.into(),
             open: Mutex::default(),
             changing: tokio::sync::Mutex::default(),
+            closing: AtomicBool::new(false),
         }
     }
 
@@ -81,9 +86,16 @@ impl Spaces {
         open: impl FnOnce(&Path) -> Result<Tokidoki>,
     ) -> Result<Tokidoki> {
         let data = self.data(name)?;
+        // The usual case first, without waiting behind another space's close or delete.
+        if let Some(tokidoki) = self.get(name) {
+            return Ok(tokidoki);
+        }
         let _changing = self.changing.lock().await;
         if let Some(tokidoki) = self.get(name) {
             return Ok(tokidoki);
+        }
+        if self.closing.load(Ordering::Acquire) {
+            return Err(Rejected("shutting down".into()).into());
         }
         let tokidoki = open(&data)?;
         self.lock().insert(name.to_string(), tokidoki.clone());
@@ -104,8 +116,9 @@ impl Spaces {
         }
     }
 
-    /// Stops every open tokidoki: before the program exits.
+    /// Stops every open tokidoki, and lets none open again: before the program exits.
     pub async fn close_all(&self) -> Result<()> {
+        self.closing.store(true, Ordering::Release);
         let _changing = self.changing.lock().await;
         let open: Vec<Tokidoki> = self.lock().drain().map(|(_, tokidoki)| tokidoki).collect();
         // All at once: each stops committing right away, however long another takes to stop.

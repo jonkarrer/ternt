@@ -6,7 +6,6 @@
 //! `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL` to run other models than the provider's
 //! usual. stdout is the protocol and nothing else; what would be logged goes to stderr.
 
-use std::ops::Not;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -44,9 +43,12 @@ async fn run() -> Result<()> {
     let key = std::env::var(provider.key_var())
         .ok()
         .filter(|key| !key.is_empty());
-    let config =
-        move |data: &Path| Config::new(data, provider, key.clone().unwrap_or_default()).with_env();
-    let has_key = config(&data).key.is_empty().not();
+    let has_key = key.is_some();
+    // Only the provider and model settings are the host's to pass; the user, speakers and
+    // system prompt are tokidoki's own (`chat` reads them, a host's environment shouldn't).
+    let config = move |data: &Path| {
+        Config::new(data, provider, key.clone().unwrap_or_default()).with_models_from_env()
+    };
     let about = serde_json::json!({
         "provider": provider.id(),
         "model": config(&data).model,
@@ -71,7 +73,7 @@ async fn run() -> Result<()> {
         served = serving => served,
         // The program is going, and kills this process shortly: stop writing now.
         _ = terminate.recv() => {
-            (tokio::time::timeout(serve::STOP_WITHIN, spaces.close_all()).await).unwrap_or(Ok(()))
+            (tokio::time::timeout(serve::STOP_BUDGET, spaces.close_all()).await).unwrap_or(Ok(()))
         }
     }
 }

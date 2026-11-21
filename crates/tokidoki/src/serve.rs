@@ -25,9 +25,9 @@ use tokio::sync::mpsc;
 
 use crate::{Spaces, Tokidoki};
 
-/// How long agents get to stop once the program says `shutdown`: it waits 300 ms, then
-/// kills. What is cut off resumes at the next start.
-pub const STOP_WITHIN: Duration = Duration::from_millis(150);
+/// How long agents get to stop once the program says `shutdown` (or sends SIGTERM): it
+/// waits 300 ms, then kills. What is cut off resumes at the next start.
+pub const STOP_BUDGET: Duration = Duration::from_millis(150);
 
 /// Opens the agent whose files are in a folder.
 pub type Open = Arc<dyn Fn(&Path) -> Result<Tokidoki> + Send + Sync>;
@@ -69,7 +69,16 @@ pub async fn run(
     });
     let mut requests = input.lines();
     let mut told = false;
-    while let Some(line) = requests.next_line().await? {
+    loop {
+        let line = match requests.next_line().await {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            // Bad bytes from the host (not UTF-8): the same as the host going away.
+            Err(error) => {
+                eprintln!("tokidoki: reading requests: {error}");
+                break;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -89,7 +98,7 @@ pub async fn run(
     }
 
     let closed = match told {
-        true => (tokio::time::timeout(STOP_WITHIN, spaces.close_all()).await).unwrap_or(Ok(())),
+        true => (tokio::time::timeout(STOP_BUDGET, spaces.close_all()).await).unwrap_or(Ok(())),
         false => spaces.close_all().await,
     };
     // What is still to be written is; an agent cut off above may hold the line open.
@@ -116,13 +125,20 @@ struct Server {
 }
 
 impl Server {
+    /// Every request gets exactly one answer, a panic in its handler included: otherwise the
+    /// host waits out its timeout and learns nothing.
     async fn answer(self: Arc<Self>, request: Request) {
         let id = request.id;
-        let answer = match self.handle(request).await {
-            Ok(result) => json!({ "id": id, "result": result }),
-            Err(error) => json!({ "id": id, "error": format!("{error:#}") }),
+        let out = self.out.clone();
+        let handled = tokio::spawn(async move { self.handle(request).await }).await;
+        let answer = match handled {
+            Ok(Ok(result)) => json!({ "id": id, "result": result }),
+            Ok(Err(error)) => json!({ "id": id, "error": format!("{error:#}") }),
+            Err(panicked) => {
+                json!({ "id": id, "error": format!("the request panicked: {panicked}") })
+            }
         };
-        let _ = self.out.send(answer);
+        let _ = out.send(answer);
     }
 
     async fn handle(&self, request: Request) -> Result<Value> {

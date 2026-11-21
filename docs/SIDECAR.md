@@ -34,7 +34,9 @@ tokidoki-serve --data <dir>
   One provider does everything: answering, the memory work, and routing a message to its
   thread. `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL` name other models of that provider.
   The environment is read once, at start: a changed provider, key or model takes a restart.
-  A provider it doesn't know ends the process at once, with a message on stderr.
+  A provider it doesn't know ends the process at once, with a message on stderr. Nothing else
+  in the host's environment is read: `TOKIDOKI_USER`, `TOKIDOKI_SPEAKERS` and `TOKIDOKI_SYSTEM`
+  are `chat`'s, not a host's.
 - Without the provider's key the process still starts and its agents open asleep: `threads`,
   `history` and the memory methods answer from what is on disk, unfinished work waits for a
   start with a key, and `send` answers with an error such as `FIREWORKS_API_KEY is not set`.

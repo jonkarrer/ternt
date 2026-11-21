@@ -1,6 +1,6 @@
 //! The whole system as one library: input in, output out.
 //!
-//! `Tokidoki::open` takes a `Config` (usually `Config::from_env`) and wires the state
+//! `Tokidoki::open` takes a `Config` (`Config::new`; `Config::from_env` for `chat`) and wires the state
 //! database, memory, the router, Experience, the engine and its agent tasks, and the journal.
 //! It resumes whatever a previous process left unfinished. Whatever embeds it calls its
 //! methods with `interface` types and gets `interface` types back: `send` an input, follow
@@ -36,7 +36,7 @@ use tokio::sync::mpsc;
 use tracing::Instrument;
 
 // Everything an embedding program names, so this crate is the only one it depends on.
-pub use agent::{Replay, Settings, Tool, ToolFuture, Tools};
+pub use agent::{Settings, Tool, ToolFuture, Tools};
 pub use inference::{Effort, Vendor};
 pub use interface;
 
@@ -47,7 +47,7 @@ pub const DEFAULT_SYSTEM: &str = "You are tokidoki, a personal assistant. Memory
 what matters is remembered across conversations without any tool, and memories relevant to \
 the conversation are added to it for you. Be direct and concise.";
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     /// Holds `tokidoki.db` (state), `tokidoki.journal.db` and `memory.db`.
     pub data: PathBuf,
@@ -69,6 +69,27 @@ pub struct Config {
     /// Record to the journal (`telemetry`), for `just inspect`. Each open system records to
     /// the journal in its own `data`, however many run in the process.
     pub journal: bool,
+}
+
+/// Never the key: a `{config:?}` anywhere would otherwise put it in the journal and the host's log.
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("data", &self.data)
+            .field("user", &self.user)
+            .field("provider", &self.provider)
+            .field(
+                "key",
+                &if self.key.is_empty() {
+                    "<empty>"
+                } else {
+                    "<set>"
+                },
+            )
+            .field("model", &self.model)
+            .field("router_model", &self.router_model)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Config {
@@ -96,13 +117,8 @@ impl Config {
     /// With what the environment says of the models, the user, the speakers and the system
     /// prompt (see `from_env`).
     pub fn with_env(mut self) -> Self {
+        self = self.with_models_from_env();
         let config = &mut self;
-        if let Some(model) = var("TOKIDOKI_MODEL") {
-            config.model = model;
-        }
-        if let Some(model) = var("TOKIDOKI_ROUTER_MODEL") {
-            config.router_model = model;
-        }
         if let Some(user) = var("TOKIDOKI_USER") {
             config.user = user;
         }
@@ -115,6 +131,18 @@ impl Config {
         }
         if let Some(system) = var("TOKIDOKI_SYSTEM") {
             config.system = Some(system);
+        }
+        self
+    }
+
+    /// With the models the environment names, `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL`:
+    /// the part of `with_env` a host's environment may set.
+    pub fn with_models_from_env(mut self) -> Self {
+        if let Some(model) = var("TOKIDOKI_MODEL") {
+            self.model = model;
+        }
+        if let Some(model) = var("TOKIDOKI_ROUTER_MODEL") {
+            self.router_model = model;
         }
         self
     }
@@ -377,14 +405,14 @@ impl Tokidoki {
 /// What an embedding app calls. Each takes and returns `interface` types, ready to pass on as
 /// JSON; an input it won't take fails with an `interface::Rejected`.
 impl Tokidoki {
-    /// Admits an input, to its thread or wherever the router sends it, and returns at once:
-    /// follow it with `events` or `wait`.
     /// Tell the agent what it is the agent of: the name of the space it lives in, as the host
     /// calls it. Threads started from now on are told; a rename reaches the next new thread.
     pub fn set_label(&self, label: &str) {
         self.inner.agent.set_place(Some(label.to_string()));
     }
 
+    /// Admits an input, to its thread or wherever the router sends it, and returns at once:
+    /// follow it with `events` or `wait`.
     pub async fn send(&self, input: Input) -> Result<Sent> {
         self.admit(&input.from)?;
         if let Some(why) = &self.inner.asleep {

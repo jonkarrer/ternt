@@ -157,7 +157,11 @@ note-passing below is history. Done since: the baseline commit (`8c807b5`), a re
 both providers through ternt (streamed deltas, checkpoint, thread back after a restart), the
 Fireworks default model fixed to one the account serves (`deepseek-v4p1-flash`, cheap by the owner's choice, with live tests),
 request bodies kept out of the stderr warnings, and `label` used: new threads are told their
-space's name. Items 1, 2 and 4 below are therefore done; 3 landed on ternt's side.
+space's name. Items 1, 2 and 4 below are therefore done; 3 landed on ternt's side. Later that evening,
+after a review of both sides: the standalone app (`app/`, with `scripts/` and
+`docs/RELEASING.md`) was retired, since ternt builds, bundles and releases the sidecar (it is
+in git history at `8c807b5` if ever wanted); a request whose handler panics is still answered;
+`close_all` lets nothing reopen; the sidecar reads only the provider and model variables.
 
 In rough order; confirm with the owner before starting any of them.
 

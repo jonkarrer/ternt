@@ -10,12 +10,14 @@ sidecar behaves; the contract between the two is ternt's `docs/AGENT-SIDECAR.md`
 - **Scope: a chat with memory.** No requests from the sidecar back to ternt (tabs, pages,
   terminals), no key per space, nothing shared between spaces, until the owner says so.
 - **Bring your own key, macOS only.** Keys reach the process only through its environment:
-  `TOKIDOKI_PROVIDER` (`fireworks`, ternt's default; `anthropic`; `baseten`) and that
-  provider's key. Never in a file, never in the repo.
+  `TOKIDOKI_PROVIDER` and that provider's key (`fireworks`, which ternt sends by default;
+  `anthropic`, the process's own default when the variable is absent; `baseten`). Never in a
+  file, never in the repo. The sidecar reads nothing else from the host's environment but
+  `TOKIDOKI_MODEL` / `TOKIDOKI_ROUTER_MODEL`.
 - **Sidecar, not in-process.** A crash in an agent must never end the browser.
 - Both repos are developed by the same agent since 2026-11-21: change ternt and tokidoki
-  together when the contract moves, and keep `protocol.ts` copied into ternt
-  (`src/agent/protocol.ts`) after `just types`.
+  together when the contract moves; after `just types` here, `just sync-protocol` in ternt
+  copies the Rust and TypeScript protocol over.
 
 ## Working with the owner
 
@@ -32,7 +34,7 @@ names are sentences (`the_sidecar_ends_when_its_input_does`). `cargo fmt` the fi
 ## Commands
 
 ```sh
-just check                         # fmt, clippy -D warnings, protocol.ts check, app type-check
+just check                         # fmt, clippy -D warnings, protocol.ts check
 just test                          # all tests; `just test inference --live` hits real APIs
 just types                         # regenerate crates/interface/protocol.ts
 just serve                         # the sidecar here, type requests at it

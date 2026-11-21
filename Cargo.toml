@@ -1,7 +1,6 @@
 [workspace]
 resolver = "3"
-# The crates, and the Tauri app that packages them (app/, with its front end).
-members = ["crates/*", "app/src-tauri"]
+members = ["crates/*"]
 
 [workspace.package]
 edition = "2024"
