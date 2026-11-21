@@ -123,7 +123,8 @@ events. The stub answers `unknown method` to all of them.
   space (read a tab, run something in a terminal). Tools need it. The shape that fits the lines
   above: `{"ask":<id>,"space":"space-7","method":"tabs","params":{}}` out of the process, and
   `{"answer":<id>,"result":…}` or `{"answer":<id>,"error":"…"}` back in, with Ternt answering
-  from its own state. Neither side has started on it; it is the next piece of design.
+  from its own state. **Deferred**: the agent is a chat with memory for now, by decision
+  (2026-11-21), and neither side should build this until that changes.
 - **A key per space** (above).
 - **`when_busy: steer`**: Ternt sends it when a thread is mid-answer; tokidoki accepts it but it
   hasn't been exercised against a real model yet.
