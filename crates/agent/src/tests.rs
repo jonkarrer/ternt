@@ -550,7 +550,7 @@ async fn live_tool_loop() {
     let key = std::env::var("ANTHROPIC_API_KEY").expect("set ANTHROPIC_API_KEY");
     let model = Arc::new(ProviderModel {
         provider: Provider::<Anthropic>::anthropic(&key),
-        request: Request::new("claude-opus-5-5").effort(Effort::Low),
+        request: Request::new("claude-haiku-5-5").effort(Effort::Low),
     });
     let weather = TestTool::new("weather", "18C and sunny");
     let spec = weather.spec();
@@ -849,7 +849,7 @@ async fn live_remembers_across_threads() {
 
     let anthropic = std::env::var("ANTHROPIC_API_KEY").expect("set ANTHROPIC_API_KEY");
     let baseten = std::env::var("BASETEN_API_KEY").expect("set BASETEN_API_KEY");
-    let claude = || Request::new("claude-opus-5-5").effort(Effort::Low);
+    let claude = || Request::new("claude-haiku-5-5").effort(Effort::Low);
     let memory = Arc::new(Memory::in_memory().unwrap());
     let router = router::Router::new(
         Provider::<OpenAi>::baseten(&baseten),

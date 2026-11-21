@@ -25,6 +25,12 @@ Step by step: one piece, reported, then the next. Expect a review and a simplify
 chunk of work. Secrets come from Doppler (`doppler run --project ternt --config dev -- …`) or
 the Keychain; never print a key or put one on a command line.
 
+## Tests that call a model
+
+Always on a very cheap model (the owner's rule): `claude-haiku-5-5`, `deepseek-v4p1-flash`,
+`DeepSeek-V4.1-Flash`, which `Config::cheap_models` names and `TOKIDOKI_MODELS=cheap` selects.
+A live test never names a provider's default model.
+
 ## Style
 
 Every `lib.rs` opens with what the crate is for. Comments are plain prose saying why. Test

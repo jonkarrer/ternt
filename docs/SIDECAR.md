@@ -32,7 +32,8 @@ tokidoki-serve --data <dir>
   | `baseten` | `BASETEN_API_KEY` | `deepseek-ai/DeepSeek-V4-Pro` | `deepseek-ai/DeepSeek-V4.1-Flash` |
 
   One provider does everything: answering, the memory work, and routing a message to its
-  thread. `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL` name other models of that provider.
+  thread. `TOKIDOKI_MODELS=cheap` picks the provider's cheapest models (what tests run on);
+  `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL` name models outright.
   The environment is read once, at start: a changed provider, key or model takes a restart.
   A provider it doesn't know ends the process at once, with a message on stderr. Nothing else
   in the host's environment is read: `TOKIDOKI_USER`, `TOKIDOKI_SPEAKERS` and `TOKIDOKI_SYSTEM`

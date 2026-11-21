@@ -135,9 +135,15 @@ impl Config {
         self
     }
 
-    /// With the models the environment names, `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL`:
-    /// the part of `with_env` a host's environment may set.
+    /// With the models the environment names: `TOKIDOKI_MODELS=cheap` for the provider's
+    /// cheapest (tests, always), then `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL` by name.
+    /// The part of `with_env` a host's environment may set.
     pub fn with_models_from_env(mut self) -> Self {
+        if var("TOKIDOKI_MODELS").as_deref() == Some("cheap") {
+            let (model, router_model) = Self::cheap_models(self.provider);
+            self.model = model.into();
+            self.router_model = router_model.into();
+        }
         if let Some(model) = var("TOKIDOKI_MODEL") {
             self.model = model;
         }
@@ -161,6 +167,22 @@ impl Config {
             ),
             Vendor::Baseten => (
                 "deepseek-ai/DeepSeek-V4-Pro",
+                "deepseek-ai/DeepSeek-V4.1-Flash",
+            ),
+        }
+    }
+
+    /// The provider's cheapest models that still do the job: what every test that calls a
+    /// model runs on (`TOKIDOKI_MODELS=cheap`), never the defaults above.
+    pub fn cheap_models(provider: Vendor) -> (&'static str, &'static str) {
+        match provider {
+            Vendor::Anthropic => ("claude-haiku-5-5", "claude-haiku-5-5"),
+            Vendor::Fireworks => (
+                "accounts/fireworks/models/deepseek-v4p1-flash",
+                "accounts/fireworks/models/deepseek-v4p1-flash",
+            ),
+            Vendor::Baseten => (
+                "deepseek-ai/DeepSeek-V4.1-Flash",
                 "deepseek-ai/DeepSeek-V4.1-Flash",
             ),
         }

@@ -681,7 +681,8 @@ pub(crate) mod tests {
     use inference::Effort;
     use inference::providers::Anthropic;
 
-    const MODEL: &str = "claude-opus-5-5";
+    // Tests that call a model run on a cheap one, always.
+    const MODEL: &str = "claude-haiku-5-5";
 
     pub fn me() -> Scope {
         Scope::user("jon")

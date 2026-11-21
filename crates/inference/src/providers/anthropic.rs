@@ -332,7 +332,8 @@ mod tests {
     use crate::providers::Effort;
     use context::Tool;
 
-    const MODEL: &str = "claude-opus-5-5";
+    // Tests that call a model run on a cheap one, always.
+    const MODEL: &str = "claude-haiku-5-5";
 
     fn pong_context() -> Context {
         let mut ctx = Context::new("Be terse.");
