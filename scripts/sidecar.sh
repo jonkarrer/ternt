@@ -37,7 +37,12 @@ case $flavor in
   tokidoki)
     src=${TOKIDOKI_SRC:-${root:h}/tokidoki}
     [[ -f $src/Cargo.toml ]] || { echo "sidecar: no tokidoki checkout at $src (set TOKIDOKI_SRC)" >&2; exit 1; }
-    package=tokidoki; bin=tokidoki-serve; manifest=$src/Cargo.toml; out=$src/target ;;
+    package=tokidoki; bin=tokidoki-serve; manifest=$src/Cargo.toml; out=$src/target
+    # A release names the tokidoki commit it was built from, so it must be a commit.
+    if [[ -n $release ]] && [[ -n $(git -C $src status --porcelain) ]]; then
+      echo "sidecar: the tokidoki tree at $src has uncommitted changes; commit them before a release" >&2; exit 1
+    fi
+    commit=$(git -C $src rev-parse --short HEAD 2>/dev/null) ;;
   *) echo "sidecar: unknown flavor '$flavor' (stub or tokidoki)" >&2; exit 2 ;;
 esac
 
@@ -63,9 +68,11 @@ if [[ -n $release ]]; then
   if otool -L binaries/ternt-agent-universal-apple-darwin | grep -E '^\s+/(nix|opt|usr/local)/'; then
     echo "sidecar: links non-system libraries (see above)" >&2; exit 1
   fi
-  echo "sidecar ($flavor): binaries/ternt-agent-{aarch64,x86_64,universal}-apple-darwin"
+  # For the release notes (scripts/publish.sh).
+  echo "$flavor${commit:+ @ $commit}" > binaries/SIDECAR
+  echo "sidecar ($flavor${commit:+ @ $commit}): binaries/ternt-agent-{aarch64,x86_64,universal}-apple-darwin"
 else
   cargo build -q --manifest-path $manifest -p $package --bin $bin
   cp $out/debug/$bin binaries/ternt-agent-$host
-  echo "sidecar ($flavor): binaries/ternt-agent-$host (debug)"
+  echo "sidecar ($flavor${commit:+ @ $commit}): binaries/ternt-agent-$host (debug)"
 fi

@@ -44,7 +44,9 @@
         return status.reason;
       default:
         if (status.backend === "stub") return "A stand-in agent is running (this build has no tokidoki); no key is needed.";
-        return status.hasKey ? `Running with your ${chosen.name} key.` : `Running, waiting for a ${chosen.name} key.`;
+        if (!status.hasKey) return `Running, waiting for a ${chosen.name} key.`;
+        const model = status.model?.replace(/^accounts\/fireworks\/models\//, "");
+        return model ? `Running with your ${chosen.name} key, answering with ${model}.` : `Running with your ${chosen.name} key.`;
     }
   });
 

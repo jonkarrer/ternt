@@ -40,6 +40,9 @@ pub struct Ready {
     /// `stub` or `tokidoki`.
     pub backend: String,
     pub version: String,
+    /// The model that answers, when the process says (tokidoki does).
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// A line from the sidecar.

@@ -67,6 +67,8 @@ pub enum Status {
         restarted: bool,
         /// Who answers (Settings → Agent): `fireworks` or `anthropic`.
         provider: String,
+        /// The model that answers, if the process said.
+        model: Option<String>,
         /// It was given that provider's key; without one it can't answer.
         has_key: bool,
     },
@@ -235,9 +237,9 @@ impl Sidecar {
         }
 
         let mut lines = BufReader::new(stdout).lines();
-        let backend = match tokio::time::timeout(READY_TIMEOUT, lines.next_line()).await {
+        let (backend, model) = match tokio::time::timeout(READY_TIMEOUT, lines.next_line()).await {
             Ok(Ok(Some(line))) => match serde_json::from_str(&line) {
-                Ok(Frame::Ready { ready }) => ready.backend,
+                Ok(Frame::Ready { ready }) => (ready.backend, ready.model),
                 _ => {
                     let _ = child.start_kill();
                     return Err(format!(
@@ -255,6 +257,7 @@ impl Sidecar {
             backend,
             restarted,
             provider: provider.as_str().into(),
+            model,
             has_key,
         });
 
@@ -488,12 +491,13 @@ mod tests {
             backend: "stub".into(),
             restarted: true,
             provider: "fireworks".into(),
+            model: None,
             has_key: false,
         })
         .unwrap();
         assert_eq!(
             json,
-            serde_json::json!({ "state": "running", "backend": "stub", "restarted": true, "provider": "fireworks", "hasKey": false })
+            serde_json::json!({ "state": "running", "backend": "stub", "restarted": true, "provider": "fireworks", "model": null, "hasKey": false })
         );
         let json = serde_json::to_value(Status::Restarting {
             attempt: 0,

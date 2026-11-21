@@ -100,9 +100,9 @@ memory go with it. It must succeed for a space that was never opened or has no f
 
 All types are `tokidoki::interface` (`crates/interface/protocol.ts` in TypeScript;
 `src/agent/protocol.ts` is Ternt's copy, `src-tauri/src/agent/protocol.rs` the same in Rust).
-`label` is the space's current name, informational: an agent may use it to know what its space
-is called. tokidoki reads it and does nothing with it yet, so reopening an agent on a rename
-achieves nothing today; Ternt keeps sending it.
+`label` is the space's current name. tokidoki tells each new thread what space it is the agent
+of, after the system prompt; threads already started keep what they were told, so a rename
+reaches the next new conversation.
 
 An agent opens on the first method naming its space (`Spaces::open`), and stays open until
 `close`, `delete` or exit. Ternt may name spaces it has never named before at any time.

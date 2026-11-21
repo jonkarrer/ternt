@@ -185,8 +185,10 @@ Two programs speak it: tokidoki's `tokidoki-serve`, the real agent, and the stub
 `src-tauri/agent/`, a streamed canned reply with the same shape of events a real turn has (`/tool`
 adds a pretend tool call, `/error` a failed turn, `/crash` kills the process so you can watch it
 come back). `just sidecar tokidoki` (or `TERNT_SIDECAR=tokidoki`) builds the real one from a
-tokidoki checkout beside this repo (`TOKIDOKI_SRC` to point elsewhere); the stub is the default,
-and what the e2e suites run against. `TERNT_SIDECAR=tokidoki e2e/run.sh tokidoki` runs the panel
+tokidoki checkout beside this repo (`TOKIDOKI_SRC` to point elsewhere); the stub is the default
+for development and what the e2e suites run against. **Releases ship tokidoki** (`just upload`
+builds it from the checkout, refuses an uncommitted one, and names its commit in the release
+notes); `TERNT_SIDECAR=stub just upload` would ship the stub. `TERNT_SIDECAR=tokidoki e2e/run.sh tokidoki` runs the panel
 against the real agent (one model call if `ANTHROPIC_API_KEY` is set).
 
 The agent is **bring your own key**: Settings → Agent picks the provider (Fireworks AI or Anthropic)

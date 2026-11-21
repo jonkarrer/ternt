@@ -58,6 +58,7 @@ async fn main() {
         ready: Ready {
             backend: "stub".into(),
             version: env!("CARGO_PKG_VERSION").into(),
+            model: None,
         },
     });
 

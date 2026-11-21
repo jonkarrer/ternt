@@ -230,7 +230,7 @@ export type AgentKeyChange = Partial<Record<keyof AgentKeys, string>>;
 export type AgentStatus =
   | { state: "starting" }
   /** `provider` answers (Settings → Agent); `hasKey`: its key was given (the stub needs none). */
-  | { state: "running"; backend: string; restarted: boolean; provider: string; hasKey: boolean }
+  | { state: "running"; backend: string; restarted: boolean; provider: string; model: string | null; hasKey: boolean }
   /** `asked`: restarted on purpose (Restart, a key change), not a crash. */
   | { state: "restarting"; attempt: number; asked: boolean }
   | { state: "down"; reason: string };

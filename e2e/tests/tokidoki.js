@@ -23,6 +23,7 @@ if (status.backend !== "tokidoki") {
   await t.quit();
 }
 await t.assert(status.restarted === false, "tokidoki is up, on its first start");
+await t.assert(typeof status.model === "string" && status.model.length > 0, `it says which model answers (${status.model})`);
 await t.until(async () => (await A.text(".badge")) === "", "no stub badge for the real agent");
 const first = S().activeSpace;
 await t.assert((await A.request()).folder === `space-${first}`, "the space's folder name is one tokidoki accepts");
