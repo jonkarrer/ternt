@@ -189,10 +189,11 @@ tokidoki checkout beside this repo (`TOKIDOKI_SRC` to point elsewhere); the stub
 and what the e2e suites run against. `TERNT_SIDECAR=tokidoki e2e/run.sh tokidoki` runs the panel
 against the real agent (one model call if `ANTHROPIC_API_KEY` is set).
 
-The agent needs the user's **API key**, Fireworks AI or Anthropic. The panel asks for it the first time and keeps it
-in the macOS Keychain (`src-tauri/src/agent/keys.rs`); Ternt hands it to the sidecar through its
-environment and nothing else ever sees it. A key already in Ternt's environment wins, which is how
-to run `just dev tokidoki` without touching the Keychain.
+The agent is **bring your own key**: Settings → Agent picks the provider (Fireworks AI or Anthropic)
+and takes the key, which is kept in the macOS Keychain (`src-tauri/src/agent/keys.rs`). Ternt hands
+the chosen provider's key to the sidecar through its environment and nothing else ever sees it. A
+key already in Ternt's environment wins, which is how development runs with the team's keys:
+`doppler run -- just dev tokidoki`.
 
 - `src-tauri/src/agent/protocol.rs` mirrors tokidoki's `interface` types (`src/agent/protocol.ts`
   is its generated TypeScript, copied from the tokidoki repo). The panel is written against the

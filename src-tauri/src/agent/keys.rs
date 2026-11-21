@@ -1,11 +1,14 @@
-//! The user's API keys for the agents. They live in the macOS Keychain, never in a file or
-//! the repo, and reach the agent only through the sidecar's environment (set on the process
-//! in `sidecar.rs`; see docs/AGENT-SIDECAR.md). A variable already in Ternt's own
+//! The user's API keys for the agents: bring your own. They live in the macOS Keychain, never
+//! in a file or the repo, and reach the agent only through the sidecar's environment (set on
+//! the process in `sidecar.rs`; see docs/AGENT-SIDECAR.md). The process gets the key of the
+//! provider chosen in Settings (`prefs::AgentProvider`) and nothing for the other. A variable already in Ternt's own
 //! environment wins: development (`ANTHROPIC_API_KEY=… just dev`), where a rebuilt debug
 //! binary would otherwise be asked to confirm Keychain access at every launch.
 
 use keyring::Entry;
 use serde::Serialize;
+
+use crate::prefs::AgentProvider;
 
 /// The Keychain service the keys are filed under. Debug builds keep their own, so trying a
 /// key in `just dev` never replaces the one the installed app uses.
@@ -36,9 +39,14 @@ pub const BASETEN: Key = Key {
     variable: "BASETEN_API_KEY",
     account: "baseten",
 };
-pub const ALL: [Key; 3] = [FIREWORKS, ANTHROPIC, BASETEN];
-/// The keys that let the agent answer at all; one is enough.
-pub const ANSWERING: [&str; 2] = [FIREWORKS.variable, ANTHROPIC.variable];
+
+/// The key a provider answers with.
+pub fn answering(provider: AgentProvider) -> &'static Key {
+    match provider {
+        AgentProvider::Fireworks => &FIREWORKS,
+        AgentProvider::Anthropic => &ANTHROPIC,
+    }
+}
 
 impl Key {
     /// The key, from the environment or the Keychain; `None` when neither has it.
@@ -70,10 +78,12 @@ impl Key {
     }
 }
 
-/// Every key that is set, as (variable, value): the sidecar's environment. A key that
-/// can't be read is logged and left out, so the process still starts.
-pub fn load() -> Vec<(&'static str, String)> {
-    ALL.iter()
+/// The sidecar's environment for `provider`: its key and the router's, as (variable, value).
+/// The other provider's key stays out. A key that can't be read is logged and left out, so
+/// the process still starts.
+pub fn load(provider: AgentProvider) -> Vec<(&'static str, String)> {
+    [answering(provider), &BASETEN]
+        .into_iter()
         .filter_map(|key| match key.read() {
             Ok(value) => value.map(|value| (key.variable, value)),
             Err(error) => {

@@ -20,16 +20,19 @@ ternt-agent --data <dir>
   space's folder name, `space-<id>`, so a renamed space keeps its agent.
 - A space's folder name is lowercase letters, digits, `-` and `_`, at most 64 characters (tokidoki
   rejects anything else). `space-<id>` always fits.
-- Keys come from the environment: `FIREWORKS_API_KEY` or `ANTHROPIC_API_KEY` to answer with (one
-  is enough; Fireworks is the one Ternt leads with), and `BASETEN_API_KEY` (optional). Ternt sets
-  them on the process, and nowhere else, from the user's Keychain (service `com.jokar.ternt`,
-  accounts `fireworks`, `anthropic` and `baseten`; `.dev` in debug builds), where the panel's
-  *API keys* card puts them (`src-tauri/src/agent/keys.rs`). A variable already in
+- **The provider and its key come from the environment.** `TOKIDOKI_PROVIDER` is `fireworks` or
+  `anthropic`: who the user chose in Settings → Agent. With it comes that provider's key and only
+  that one, `FIREWORKS_API_KEY` or `ANTHROPIC_API_KEY`, plus `BASETEN_API_KEY` (optional, the
+  router's). Ternt is bring-your-own-key: the keys live in the user's Keychain (service
+  `com.jokar.ternt`, accounts `fireworks`, `anthropic` and `baseten`; `.dev` in debug builds),
+  put there by Settings → Agent (`src-tauri/src/agent/keys.rs`), and reach the process this way
+  and no other. Changing the provider or its key restarts the process. A variable already in
   Ternt's own environment wins, for development. Saving a key restarts the process, since the
   environment is fixed at start. **Without an Anthropic key the process must still start and say
   it is ready**; it answers requests that need the model with an error. Ternt knows whether it
-  gave a key it can answer with (`hasKey` in the panel's status) and asks for one instead of
-  sending. Which provider the process uses when it has both keys is its own choice.
+  gave the provider's key (`hasKey` in the panel's status) and points at Settings instead of
+  sending. A variable already in Ternt's own environment wins over the Keychain, for development
+  (`doppler run -- just dev tokidoki`).
 - One environment means one Anthropic key for every space. A key per space (a work account for a
   work space) is not designed: it would need a key in the request that opens the space.
 - tokidoki holds `<dir>/.lock` while it runs: a second process on the same folder exits with code 1

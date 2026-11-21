@@ -16,11 +16,11 @@ await t.assert(profileNames() === "Default", "a fresh session has only the Defau
 
 await t.invoke("menu_action", { id: "settings" });
 await t.until(async () => (await windows()).includes("settings"), "Settings opens a window");
-await t.until(async () => (await read(`document.querySelectorAll(".page-tab").length`)) === "6", "six pages");
+await t.until(async () => (await read(`document.querySelectorAll(".page-tab").length`)) === "7", "seven pages");
 await t.assert(
   (await read(`[...document.querySelectorAll(".page-tab")].map((b) => b.textContent.trim()).join(",")`)) ===
-    "Account,General,Profiles,Links,Shortcuts,Advanced",
-  "pages in order: Account, General, Profiles, Links, Shortcuts, Advanced",
+    "Account,Agent,General,Profiles,Links,Shortcuts,Advanced",
+  "pages in order: Account, Agent, General, Profiles, Links, Shortcuts, Advanced",
 );
 
 // Account: name and email, saved in prefs
@@ -39,6 +39,15 @@ await t.assert(
 );
 await t.shot("settings-account", "settings");
 await click(`.page-tab:nth-child(2)`);
+await t.until(async () => (await read(`document.querySelector("select.provider")?.value`)) === "fireworks", "Agent shows the provider, Fireworks by default");
+await t.until(async () => (await read(`document.querySelector("main").textContent`)).includes("stand-in agent"), "and that the stub is running");
+await t.assert((await read(`document.querySelector("input.key")?.placeholder`)) === "fw_…", "with a field for that provider's key");
+await t.eval("settings", `const s = document.querySelector("select.provider"); s.value = "anthropic"; s.dispatchEvent(new Event("change", { bubbles: true }))`);
+await t.until(async () => (await t.invoke("get_prefs")).agentProvider === "anthropic", "choosing Anthropic is saved");
+await t.until(async () => (await read(`document.querySelector("input.key")?.placeholder`)) === "sk-ant-…", "and the key field follows");
+await t.until(async () => { const s = await t.invoke("agent_status"); return s.state === "running" && s.provider === "anthropic"; }, "the agent restarts for the new provider", 15000);
+await t.shot("settings-agent", "settings");
+await click(`.page-tab:nth-child(3)`);
 await t.until(async () => (await read(`document.querySelector("main").textContent`)).includes("Version"), "General shows the version");
 await t.until(async () => (await read(`String(document.querySelector("input.unload")?.checked)`)) === "true", "unloading idle tabs is on by default");
 await t.sleep(200);
@@ -54,7 +63,7 @@ await t.sleep(200);
 await t.assert((await windows()).filter((w) => w === "settings").length === 1, "only one Settings window");
 
 // Profiles: Default first; a new space adds its own, named after it
-await click(`.page-tab:nth-child(3)`);
+await click(`.page-tab:nth-child(4)`);
 const listed = () => read(`[...document.querySelectorAll(".profile .name")].map((n) => n.textContent.trim()).join(",")`);
 await t.until(async () => (await listed()) === "Default", "Profiles lists Default");
 await t.until(async () => (await read(`document.querySelector(".detail .title")?.textContent.trim()`)) === "Default", "Default's page is shown");
@@ -86,7 +95,7 @@ await t.until(async () => (await listed()) === "Default", "only Default is left"
 await t.until(async () => (await read(`document.querySelectorAll(".detail .space-glyph").length`)) === "2", "Default now lists Home and Work");
 
 // Links: where links from other apps go, and the default browser
-await click(`.page-tab:nth-child(4)`);
+await click(`.page-tab:nth-child(5)`);
 await t.until(async () => (await read(`document.querySelector("main").textContent`)).includes("default browser"), "Links shows the default browser");
 await t.until(async () => (await read(`document.querySelector("input[type=radio]:checked")?.parentElement.textContent`)).includes("Little Ternt"), "Little Ternt is the default choice");
 await t.eval("settings", `document.querySelectorAll("input[type=radio]")[1].click()`);

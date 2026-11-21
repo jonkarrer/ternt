@@ -65,7 +65,9 @@ pub enum Status {
         backend: String,
         /// It came back after dying: the panel reloads what it shows.
         restarted: bool,
-        /// It was given a key it can answer with (Fireworks or Anthropic).
+        /// Who answers (Settings → Agent): `fireworks` or `anthropic`.
+        provider: String,
+        /// It was given that provider's key; without one it can't answer.
         has_key: bool,
     },
     Restarting {
@@ -200,14 +202,16 @@ impl Sidecar {
         let _ = std::fs::create_dir_all(&self.data);
         // Only an exit of the process started here can be one `restart` asked for.
         self.asked.store(false, Ordering::Release);
-        // The user's keys reach the agent this way and no other.
-        let keys = keys::load();
+        // The user's provider and key reach the agent this way and no other.
+        let provider = crate::prefs::get(&self.app).agent_provider;
+        let keys = keys::load(provider);
         let has_key = keys
             .iter()
-            .any(|(variable, _)| keys::ANSWERING.contains(variable));
+            .any(|(variable, _)| *variable == keys::answering(provider).variable);
         let mut child = Command::new(&bin)
             .arg("--data")
             .arg(&self.data)
+            .env("TOKIDOKI_PROVIDER", provider.as_str())
             .envs(keys)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -250,6 +254,7 @@ impl Sidecar {
         self.set_status(Status::Running {
             backend,
             restarted,
+            provider: provider.as_str().into(),
             has_key,
         });
 
@@ -482,12 +487,13 @@ mod tests {
         let json = serde_json::to_value(Status::Running {
             backend: "stub".into(),
             restarted: true,
+            provider: "fireworks".into(),
             has_key: false,
         })
         .unwrap();
         assert_eq!(
             json,
-            serde_json::json!({ "state": "running", "backend": "stub", "restarted": true, "hasKey": false })
+            serde_json::json!({ "state": "running", "backend": "stub", "restarted": true, "provider": "fireworks", "hasKey": false })
         );
         let json = serde_json::to_value(Status::Restarting {
             attempt: 0,

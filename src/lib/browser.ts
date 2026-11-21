@@ -176,6 +176,8 @@ export interface Prefs {
   linkRules: LinkRule[];
   /** Sites allowed the camera and microphone (origins); the rest ask. */
   mediaSites: string[];
+  /** Who answers in the agent panel (Settings → Agent); the agent gets that provider's key. */
+  agentProvider: "fireworks" | "anthropic";
 }
 
 export interface LinkRule {
@@ -227,8 +229,8 @@ export type AgentKeyChange = Partial<Record<keyof AgentKeys, string>>;
 
 export type AgentStatus =
   | { state: "starting" }
-  /** `hasKey`: it was given a key it can answer with (the stub needs none). */
-  | { state: "running"; backend: string; restarted: boolean; hasKey: boolean }
+  /** `provider` answers (Settings → Agent); `hasKey`: its key was given (the stub needs none). */
+  | { state: "running"; backend: string; restarted: boolean; provider: string; hasKey: boolean }
   /** `asked`: restarted on purpose (Restart, a key change), not a crash. */
   | { state: "restarting"; attempt: number; asked: boolean }
   | { state: "down"; reason: string };
@@ -335,6 +337,9 @@ export const browser = {
     listen<BrowserState>("browser:state", (e) => cb(e.payload)),
   onPaletteOpen: (cb: (request: PaletteRequest) => void): Promise<UnlistenFn> =>
     listen<PaletteRequest>("palette:open", (e) => cb(e.payload)),
+  /** The Settings window: prefs changed (by any window). */
+  onPrefsChanged: (cb: (prefs: Prefs) => void): Promise<UnlistenFn> =>
+    listen<Prefs>("prefs:changed", (e) => cb(e.payload)),
 
   // The agent panel; `space` scopes every call to one space's agent.
   agentRequest: () => invoke<AgentRequest | null>("agent_request"),

@@ -279,6 +279,13 @@ pub fn forget(app: &AppHandle, space: u32) {
     });
 }
 
+/// Start the agent process over (the provider changed in Settings).
+pub fn restart(app: &AppHandle) {
+    if let Some(sidecar) = app.state::<Host>().sidecar.get() {
+        sidecar.restart();
+    }
+}
+
 /// Stop the agent process (before exit).
 pub fn shutdown(app: &AppHandle) {
     let host = app.state::<Host>();

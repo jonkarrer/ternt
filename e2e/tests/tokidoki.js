@@ -27,10 +27,26 @@ await t.until(async () => (await A.text(".badge")) === "", "no stub badge for th
 const first = S().activeSpace;
 await t.assert((await A.request()).folder === `space-${first}`, "the space's folder name is one tokidoki accepts");
 
+let status2 = status;
 if (!status.hasKey) {
-  await t.until(async () => (await A.text(".keys")).includes("needs an API key"), "without a key the panel asks for one");
+  await t.until(async () => (await A.text(".keys")).includes("API key"), "without a key for the provider the panel points at Settings");
+  // Another provider's key may be around (Doppler has the Anthropic one): switching the
+  // provider in Settings restarts the agent with that key.
+  const have = await t.invoke("agent_keys");
+  const other = status.provider === "fireworks" ? "anthropic" : "fireworks";
+  if (have[other]) {
+    const prefs = await t.invoke("get_prefs");
+    await t.invoke("set_prefs", { prefs: { ...prefs, agentProvider: other } });
+    status2 = await t.until(async () => {
+      const s = await t.invoke("agent_status");
+      return s.state === "running" && s.provider === other ? s : null;
+    }, `switching the provider to ${other} restarts the agent with its key`, 20000);
+    await t.assert(status2.hasKey && status2.restarted === false, "which it has, and the restart isn't a crash");
+  }
+}
+if (!status2.hasKey) {
   await t.until(async () => (await t.read("agent", `String(document.querySelector("textarea").disabled)`)) === "true", "and holds input back");
-  await t.until(async () => (await t.read("agent", `document.querySelector("textarea").placeholder`)).includes("API key"), "the composer says why");
+  await t.until(async () => (await t.read("agent", `document.querySelector("textarea").placeholder`)).includes("Settings"), "the composer says where to go");
   await t.shot("tokidoki-needs-key");
   // Listing threads needs no model: an empty list, or (older tokidoki, which opened the agent
   // for every method) an error naming the key.
