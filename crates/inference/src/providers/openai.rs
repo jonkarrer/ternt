@@ -633,6 +633,20 @@ mod tests {
         pong(Provider::baseten(&key("BASETEN_API_KEY")), BASETEN_MODEL).await;
     }
 
+    /// The model tokidoki answers with on Fireworks (`tokidoki::Config::models`): vendors
+    /// retire names, and a wrong one is a 404 on every call.
+    const FIREWORKS_MODEL: &str = "accounts/fireworks/models/kimi-k3p1-pro";
+
+    #[tokio::test]
+    #[ignore = "calls Fireworks"]
+    async fn fireworks() {
+        pong(
+            Provider::fireworks(&key("FIREWORKS_API_KEY")),
+            FIREWORKS_MODEL,
+        )
+        .await;
+    }
+
     fn has_thinking(message: &Message) -> bool {
         message
             .content

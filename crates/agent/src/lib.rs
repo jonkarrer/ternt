@@ -31,7 +31,7 @@ pub use tool::{ToolCall, ToolCallInput, ToolOutput};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::Result;
 use context::Context;
@@ -131,20 +131,43 @@ impl Tools {
 }
 
 /// What a new thread starts with, set in the commit that admits its first input.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct NewThreads {
     pub system: Option<String>,
     pub tools: Vec<context::Tool>,
+    /// What this agent is the agent of (a ternt space's name), told to new threads after
+    /// `system`. Set late and changed on a rename, so it lives behind a lock.
+    pub place: Mutex<Option<String>>,
 }
 
 impl NewThreads {
+    /// The system prompt a thread started now gets: `system`, then where this agent lives.
+    pub fn system_now(&self) -> Option<String> {
+        let place = self.place.lock().unwrap_or_else(PoisonError::into_inner);
+        match (&self.system, place.as_deref()) {
+            (None, None) => None,
+            (system, None) => system.clone(),
+            (system, Some(place)) => {
+                let mut text = system.clone().unwrap_or_default();
+                if !text.is_empty() {
+                    text.push_str("\n\n");
+                }
+                text.push_str(&format!(
+                    "You are the agent of the user's \u{201c}{place}\u{201d} space: one part of their life or work \
+                     that they keep apart from the rest. What you remember here is about that part."
+                ));
+                Some(text)
+            }
+        }
+    }
+
     fn set_up(&self, tx: &mut Tx, thread: &str) -> Result<()> {
         let thread = tx.thread(thread)?;
         if !thread.checkpoints().is_empty() {
             return Ok(());
         }
-        if let Some(system) = &self.system {
-            thread.set_system(system.clone())?;
+        if let Some(system) = self.system_now() {
+            thread.set_system(system)?;
         }
         for tool in &self.tools {
             thread.register(tool.clone())?;
@@ -369,6 +392,19 @@ impl Agent {
         }
     }
 
+    /// Tell the agent what it is the agent of (a ternt space's name). Threads started from
+    /// now on are told; existing ones keep what they were told.
+    pub fn set_place(&self, place: Option<String>) {
+        let place = place
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty());
+        *self
+            .new_threads
+            .place
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = place;
+    }
+
     pub fn engine(&self) -> &Engine {
         &self.engine
     }
@@ -539,3 +575,31 @@ fn new_thread(tx: &mut Tx) -> Result<String> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod place_tests {
+    use super::*;
+
+    #[test]
+    fn new_threads_are_told_their_place_after_the_system_prompt() {
+        let new_threads = NewThreads {
+            system: Some("Be brief.".into()),
+            ..NewThreads::default()
+        };
+        assert_eq!(new_threads.system_now().as_deref(), Some("Be brief."));
+        *new_threads.place.lock().unwrap() = Some("dev".into());
+        let system = new_threads.system_now().unwrap();
+        assert!(
+            system.starts_with(
+                "Be brief.\n\nYou are the agent of the user's \u{201c}dev\u{201d} space"
+            )
+        );
+        let bare = NewThreads::default();
+        assert_eq!(bare.system_now(), None);
+        *bare.place.lock().unwrap() = Some("  ".into());
+        assert!(
+            bare.system_now().unwrap().contains("\u{201c}  \u{201d}"),
+            "trimming is set_place's job"
+        );
+    }
+}

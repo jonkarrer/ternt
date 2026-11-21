@@ -650,7 +650,15 @@ mod replay_tests {
 
         let entries = traced.entries(&Filter::default()).unwrap();
         let messages: Vec<&str> = entries.iter().map(|e| e.message.as_str()).collect();
-        assert_eq!(messages, ["model call", "model call failed"]);
+        // A failed call's request is its own entry, kept out of the warning (which a host
+        // may print) but in the journal.
+        assert_eq!(
+            messages,
+            ["model call", "model call failed", "the request that failed"]
+        );
+        assert!(
+            entries[2].fields["request"].is_object() || entries[2].fields["request"].is_string()
+        );
         assert_eq!(entries[0].fields["replayed"], true);
         assert_eq!(entries[0].fields["stop"], "Done");
         assert_eq!(entries[1].fields["replayed"], false);

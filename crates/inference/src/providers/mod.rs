@@ -249,15 +249,17 @@ impl<A: Api> Provider<A> {
                 Ok(res)
             }
             Err(error) => {
+                // The error only: the request holds the user's words, and a host
+                // (ternt) keeps this process's stderr in its own log.
                 tracing::warn!(
                     provider = self.name,
                     model = %req.model,
                     ms,
                     replayed,
                     error = %format!("{error:#}"),
-                    request = request.as_str(),
                     "model call failed"
                 );
+                tracing::debug!(request = request.as_str(), "the request that failed");
                 Err(error)
             }
         }

@@ -124,8 +124,10 @@ impl Config {
     pub fn models(provider: Vendor) -> (&'static str, &'static str) {
         match provider {
             Vendor::Anthropic => ("claude-opus-5-5", "claude-haiku-5-5"),
+            // Checked against the account's /v1/models on 2026-11-21: deepseek-v4-pro,
+            // the first choice, isn't served there.
             Vendor::Fireworks => (
-                "accounts/fireworks/models/deepseek-v4-pro",
+                "accounts/fireworks/models/kimi-k3p1-pro",
                 "accounts/fireworks/models/deepseek-v4p1-flash",
             ),
             Vendor::Baseten => (
@@ -296,6 +298,7 @@ impl Tokidoki {
         let new_threads = NewThreads {
             system: parts.system,
             tools: parts.tools.specs(),
+            place: Default::default(),
         };
         let live = Live::default();
         // Whatever changes memory (answering, dreaming, the user) is shown as it happens.
@@ -375,6 +378,12 @@ impl Tokidoki {
 impl Tokidoki {
     /// Admits an input, to its thread or wherever the router sends it, and returns at once:
     /// follow it with `events` or `wait`.
+    /// Tell the agent what it is the agent of: the name of the space it lives in, as the host
+    /// calls it. Threads started from now on are told; a rename reaches the next new thread.
+    pub fn set_label(&self, label: &str) {
+        self.inner.agent.set_place(Some(label.to_string()));
+    }
+
     pub async fn send(&self, input: Input) -> Result<Sent> {
         self.admit(&input.from)?;
         if let Some(why) = &self.inner.asleep {

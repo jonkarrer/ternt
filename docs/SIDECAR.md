@@ -28,7 +28,7 @@ tokidoki-serve --data <dir>
   | `TOKIDOKI_PROVIDER` | key | answers with | routes with |
   | --- | --- | --- | --- |
   | `anthropic` (the default) | `ANTHROPIC_API_KEY` | `claude-opus-5-5` | `claude-haiku-5-5` |
-  | `fireworks` | `FIREWORKS_API_KEY` | `accounts/fireworks/models/deepseek-v4-pro` | `accounts/fireworks/models/deepseek-v4p1-flash` |
+  | `fireworks` | `FIREWORKS_API_KEY` | `accounts/fireworks/models/kimi-k3p1-pro` | `accounts/fireworks/models/deepseek-v4p1-flash` |
   | `baseten` | `BASETEN_API_KEY` | `deepseek-ai/DeepSeek-V4-Pro` | `deepseek-ai/DeepSeek-V4.1-Flash` |
 
   One provider does everything: answering, the memory work, and routing a message to its
@@ -70,7 +70,7 @@ In ternt's contract:
 
 | method | params | result |
 | --- | --- | --- |
-| `send` | `{ "input": Input, "label": str }` | `Sent`, as soon as the input is placed |
+| `send` | `{ "input": Input, "label": str }` | `Sent`, as soon as the input is placed. `label` is the space's name as the host calls it: threads started from then on are told it after the system prompt |
 | `threads` | | `[ThreadSummary]`, most recently active first |
 | `history` | `{ "thread": id, "since": n }` | `[Event]`: the thread's checkpoints from `n` |
 | `abort` | `{ "thread": id }` | `true` if an answer was stopped |
@@ -97,7 +97,6 @@ these still sees what an agent learns.
   other keys, the model variables and the ready line's `provider`, `model` and `has_key`
   are tokidoki's additions.
 
-- **`label` is read and not used.** The agent isn't told what its space is called yet.
 - **One provider and key for every space.** The environment holds one, so a space can't
   have its own (a work account, say). That would take a key in the request that opens it.
 - **Nothing flows the other way.** The process never asks the host for anything, so an

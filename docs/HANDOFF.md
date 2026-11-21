@@ -97,7 +97,7 @@ Also:
 | `TOKIDOKI_PROVIDER` | key | answers with | routes with |
 | --- | --- | --- | --- |
 | `anthropic` (default) | `ANTHROPIC_API_KEY` | `claude-opus-5-5` | `claude-haiku-5-5` |
-| `fireworks` | `FIREWORKS_API_KEY` | `accounts/fireworks/models/deepseek-v4-pro` | `accounts/fireworks/models/deepseek-v4p1-flash` |
+| `fireworks` | `FIREWORKS_API_KEY` | `accounts/fireworks/models/kimi-k3p1-pro` | `accounts/fireworks/models/deepseek-v4p1-flash` |
 | `baseten` | `BASETEN_API_KEY` | `deepseek-ai/DeepSeek-V4-Pro` | `deepseek-ai/DeepSeek-V4.1-Flash` |
 
 `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL` override the defaults (`Config::models`).
@@ -151,6 +151,13 @@ The ignored tests are the live ones: `just test inference --live` runs them with
 from `.env`. Running those is the cheapest way to retire most of the list above.
 
 ## What to do next
+
+Update 2026-11-21, later the same day: ternt's owner handed both repos to one agent, so the
+note-passing below is history. Done since: the baseline commit (`8c807b5`), a real-key run on
+both providers through ternt (streamed deltas, checkpoint, thread back after a restart), the
+Fireworks default model fixed to one the account serves (`kimi-k3p1-pro`, with a live test),
+request bodies kept out of the stderr warnings, and `label` used: new threads are told their
+space's name. Items 1, 2 and 4 below are therefore done; 3 landed on ternt's side.
 
 In rough order; confirm with the owner before starting any of them.
 

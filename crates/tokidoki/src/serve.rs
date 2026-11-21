@@ -136,7 +136,12 @@ impl Server {
         let agent = self.agent(&space).await?;
         let owner = Speaker::owner();
         Ok(match request.method.as_str() {
-            "send" => json!(agent.send(param(&params, "input")?).await?),
+            "send" => {
+                if let Some(label) = params["label"].as_str() {
+                    agent.set_label(label);
+                }
+                json!(agent.send(param(&params, "input")?).await?)
+            }
             "threads" => json!(agent.threads()?),
             "history" => {
                 let since = params["since"].as_u64().unwrap_or(0) as usize;

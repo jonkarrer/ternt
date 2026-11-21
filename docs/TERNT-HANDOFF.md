@@ -20,7 +20,7 @@ their key for it. Tokidoki's side is done; ternt's panel and Keychain work are n
 - **Read once at start.** Changing the provider, key or a model takes the same restart
   ternt already does when a key is saved.
 - **The ready line now says what is running:**
-  `{"ready":{"backend":"tokidoki","version":"0.1.0","provider":"fireworks","model":"accounts/fireworks/models/deepseek-v4-pro","has_key":false}}`.
+  `{"ready":{"backend":"tokidoki","version":"0.1.0","provider":"fireworks","model":"accounts/fireworks/models/kimi-k3p1-pro","has_key":false}}`.
   Ternt's `Ready` type ignores the new fields today; the panel can show them.
 - **No key:** the process starts, agents open asleep (see the reply below), and `send`
   fails with `<THE KEY'S VARIABLE> is not set`.
@@ -34,7 +34,7 @@ their key for it. Tokidoki's side is done; ternt's panel and Keychain work are n
 | provider | answers | routes |
 | --- | --- | --- |
 | `anthropic` | `claude-opus-5-5` | `claude-haiku-5-5` |
-| `fireworks` | `accounts/fireworks/models/deepseek-v4-pro` | `accounts/fireworks/models/deepseek-v4p1-flash` |
+| `fireworks` | `accounts/fireworks/models/kimi-k3p1-pro` | `accounts/fireworks/models/deepseek-v4p1-flash` |
 | `baseten` | `deepseek-ai/DeepSeek-V4-Pro` | `deepseek-ai/DeepSeek-V4.1-Flash` |
 
 The Fireworks and Baseten names come from their public docs and have **not been run with

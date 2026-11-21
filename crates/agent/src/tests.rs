@@ -1171,6 +1171,7 @@ async fn new_threads_start_with_the_system_prompt_and_tools() {
     let new_threads = NewThreads {
         system: Some("Be brief.".into()),
         tools: specs,
+        place: Default::default(),
     };
     let agent = Agent::new(engine, new_threads);
     let id = agent.submit("t1", input("Hello")).unwrap();
