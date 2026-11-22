@@ -476,6 +476,27 @@ impl Memory {
         Ok(())
     }
 
+    /// Everything in `scope` gone, for good: every item with its history, and the episodes
+    /// and resume notes of the threads it covers. Cards stay: they describe threads that still
+    /// exist and are rewritten from them. A blank slate for one user, nobody else's.
+    pub fn wipe(&self, scope: &Scope) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let ids: Vec<i64> = tx
+            .prepare("DELETE FROM items WHERE scope = ?1 RETURNING id")?
+            .query_map([scope.as_str()], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        tx.execute("DELETE FROM episodes WHERE scope = ?1", [scope.as_str()])?;
+        tx.execute("DELETE FROM resumes WHERE scope = ?1", [scope.as_str()])?;
+        tx.commit()?;
+        tracing::info!(%scope, removed = ids.len(), "memory wiped");
+        self.index.remove(&ids)?;
+        if !ids.is_empty() {
+            self.changed(Change::Forgotten { ids });
+        }
+        Ok(())
+    }
+
     /// Current versions in `scopes` relevant to `query`, best first, as ranked by the index.
     pub fn search(&self, query: &str, scopes: &[Scope], limit: usize) -> Result<Vec<Hit>> {
         let mut hits = Vec::new();
@@ -896,6 +917,48 @@ mod tests {
         memory.forget(fact.id).unwrap();
         assert!(memory.history(fixed.id).unwrap().is_empty());
         assert!(memory.search("deploys", &[me()], 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn wipe_leaves_one_scope_blank_and_the_others_alone() {
+        let memory = Memory::in_memory().unwrap();
+        let fact = memory.write(Write::fact(me(), "Likes tea.")).unwrap();
+        let fixed = memory
+            .replace(fact.id, Write::fact(me(), "Likes coffee."))
+            .unwrap();
+        let procedure = Write::procedure(me(), "Brew", "asked for coffee", vec!["grind".into()]);
+        memory.write(procedure).unwrap();
+        memory
+            .add_episode("t1", me(), 0, 3, "Talked about coffee.")
+            .unwrap();
+        let ann = Scope::user("ann");
+        let anns = memory
+            .write(Write::fact(ann.clone(), "Likes tea."))
+            .unwrap();
+        let hers = std::slice::from_ref(&ann);
+        let changes = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let seen = changes.clone();
+        memory.watch(move |change| seen.lock().unwrap().push(change));
+
+        memory.wipe(&me()).unwrap();
+        assert!(memory.list(&[me()], 10).unwrap().is_empty());
+        assert!(memory.history(fixed.id).unwrap().is_empty());
+        assert!(memory.episodes("t1").unwrap().is_empty());
+        assert!(memory.search("coffee", &[me()], 5).unwrap().is_empty());
+        assert_eq!(memory.search("tea", hers, 5).unwrap()[0].item, anns);
+        assert_eq!(memory.list(hers, 10).unwrap(), vec![anns]);
+        let changes = changes.lock().unwrap();
+        assert_eq!(changes.len(), 1);
+        let Change::Forgotten { ids } = &changes[0] else {
+            panic!("{changes:?}");
+        };
+        let mut ids = ids.clone();
+        ids.sort_unstable();
+        assert_eq!(ids.len(), 3, "both versions of the fact and the procedure");
+        assert!(ids.contains(&fact.id) && ids.contains(&fixed.id));
+        // Wiping nothing is nothing to watch.
+        memory.wipe(&me()).unwrap();
+        assert_eq!(memory.list(&[me()], 10).unwrap(), vec![]);
     }
 
     #[test]

@@ -171,6 +171,7 @@ impl Server {
                 json!(agent.revise(&owner, param(&params, "id")?, &text)?)
             }
             "forget" => json!(agent.forget(&owner, param(&params, "id")?)?),
+            "wipe" => json!(agent.wipe(&owner)?),
             "feedback" => json!(agent.feedback(param(&params, "feedback")?)?),
             other => bail!("unknown method {other}"),
         })

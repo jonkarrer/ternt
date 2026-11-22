@@ -413,6 +413,24 @@ async fn memory_is_read_and_changed_by_its_owner() {
         ids: vec![fact.id, revised.id],
     };
     assert_eq!(change(&mut events).await, forgotten);
+
+    // A wipe takes everything at once, and only the owner may ask for it.
+    let a = tokidoki.remember(&owner, "Likes tea").unwrap();
+    let b = tokidoki.remember(&owner, "Lives in Kyoto").unwrap();
+    assert!(tokidoki.wipe(&Speaker::new("stranger")).is_err());
+    tokidoki.wipe(&owner).unwrap();
+    assert!(tokidoki.memories(&owner).unwrap().is_empty());
+    let mut wiped = Vec::new();
+    for _ in 0..3 {
+        if let MemoryChange::Forgotten { ids } = change(&mut events).await {
+            wiped.extend(ids);
+            if wiped.len() == 2 {
+                break;
+            }
+        }
+    }
+    wiped.sort_unstable();
+    assert_eq!(wiped, vec![a.id, b.id]);
 }
 
 /// A folder to work in, removed when dropped.
@@ -633,6 +651,10 @@ async fn the_sidecar_speaks_the_line_protocol() {
         assert!(answer["error"].is_string(), "{answer}");
     }
 
+    sidecar
+        .write(json!({ "id": 11, "method": "wipe", "space": "space-7" }))
+        .await;
+    assert_eq!(sidecar.read().await, json!({ "id": 11, "result": null }));
     sidecar
         .write(json!({ "id": 9, "method": "close", "space": "space-7" }))
         .await;

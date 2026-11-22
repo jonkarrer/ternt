@@ -78,18 +78,19 @@ In ternt's contract:
 | `history` | `{ "thread": id, "since": n }` | `[Event]`: the thread's checkpoints from `n` |
 | `abort` | `{ "thread": id }` | `true` if an answer was stopped |
 | `close` | | `null`; the agent opens again on its next request |
+| `memories` | | `[Memory]`, newest first: what Settings → Agent → Memory lists |
+| `revise` | `{ "id": n, "text": str }` | the `Memory` that replaced it (facts only) |
+| `forget` | `{ "id": n }` | `null` |
+| `wipe` | | `null`: every memory gone (facts, procedures, episodes); the conversations stay |
+| `delete` | | `null`: the agent stopped and **all its files removed, for good** |
 | `shutdown` | | `null`, then the process ends |
 
 Beyond it, for the host to use when it has somewhere to show them:
 
 | method | params | result |
 | --- | --- | --- |
-| `memories` | | `[Memory]`, newest first |
 | `remember` | `{ "text": str }` | the `Memory` it now has |
-| `revise` | `{ "id": n, "text": str }` | the `Memory` that replaced it |
-| `forget` | `{ "id": n }` | `null` |
 | `feedback` | `{ "feedback": Feedback }` | `null`: "that was wrong", kept for debugging |
-| `delete` | | `null`: the agent stopped and **all its files removed, for good** |
 
 Memory changes arrive as `Event::Memory` whoever made them, so a host that never calls
 these still sees what an agent learns.

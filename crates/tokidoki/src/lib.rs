@@ -5,8 +5,8 @@
 //! It resumes whatever a previous process left unfinished. Whatever embeds it calls its
 //! methods with `interface` types and gets `interface` types back: `send` an input, follow
 //! `events` (or `wait`), read `threads` and `history`, `abort`, give `feedback`; and see what
-//! it remembers (`memories`), tell it something (`remember`), correct it (`revise`) or have it
-//! `forget`. Where inputs come from and where outputs go is the embedding code's business,
+//! it remembers (`memories`), tell it something (`remember`), correct it (`revise`), have it
+//! `forget` one thing or `wipe` all of it. Where inputs come from and where outputs go is the embedding code's business,
 //! not tokidoki's.
 //!
 //! Who may speak is decided here: every input names its `Speaker`, and only the configured
@@ -513,6 +513,16 @@ impl Tokidoki {
         self.current(id)?;
         self.inner.memory.forget(id)?;
         tracing::info!(id, speaker = %from.id, "memory forgotten by the user");
+        Ok(())
+    }
+
+    /// Forgets everything it has learned: every fact and procedure, and its summaries of
+    /// past conversations. The conversations themselves stay. There is no undoing it.
+    pub fn wipe(&self, from: &Speaker) -> Result<()> {
+        let _recorded = self.span().entered();
+        self.admit(from)?;
+        self.inner.memory.wipe(&self.inner.scope)?;
+        tracing::info!(speaker = %from.id, "memory wiped by the user");
         Ok(())
     }
 
