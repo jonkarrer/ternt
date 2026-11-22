@@ -93,12 +93,19 @@ with its space on the way to the panel.
 | `threads`  |                                     | `[ThreadSummary]`, newest first  |
 | `history`  | `{ "thread": id, "since": n }`      | `[Event]`: checkpoints from `n`  |
 | `abort`    | `{ "thread": id }`                  | `true` if a turn was stopped     |
+| `memories` |                                     | `[Memory]`, newest first         |
+| `revise`   | `{ "id": n, "text": str }`          | the `Memory` that replaced it (facts only) |
+| `forget`   | `{ "id": n }`                       | `null`; the memory and its history removed |
+| `wipe`     |                                     | `null`; everything the agent learned removed (facts, procedures, episodes), its conversations kept |
 | `delete`   |                                     | `null`; the agent stopped and **all its files removed, for good** |
 | `close`    |                                     | `null`; the agent may be reopened|
 | `shutdown` |                                     | `null`, then exit                |
 
-Ternt calls `delete` when the user deletes a space (`agent::forget`), so the conversations and
-memory go with it. It must succeed for a space that was never opened or has no files. Ternt
+Settings → Agent → Memory lists a space's facts through `memories`, edits one with `revise`,
+removes one with `forget`, and Wipe calls `wipe`; it reads the list again when the window is
+focused rather than following `memory` events (the panel's forwarder only delivers events while
+the panel shows). Ternt calls `delete` when the user deletes a space (`agent::forget`), so the
+conversations and memory go with it. It must succeed for a space that was never opened or has no files. Ternt
 doesn't call `close` or `shutdown` today: it signals instead (below), and agents stay open for
 the life of the process.
 
@@ -113,18 +120,15 @@ An agent opens on the first method naming its space (`Spaces::open`), and stays 
 
 ### Served by tokidoki, not called by Ternt yet
 
-For when the panel has somewhere to show them. All take `space` like the others.
+All take `space` like the others.
 
 | method     | params                        | result                                  |
 |------------|-------------------------------|-----------------------------------------|
-| `memories` |                               | `[Memory]`, newest first                |
 | `remember` | `{ "text": str }`             | the `Memory` it now has                 |
-| `revise`   | `{ "id": n, "text": str }`    | the `Memory` that replaced it           |
-| `forget`   | `{ "id": n }`                 | `null`                                  |
 | `feedback` | `{ "feedback": Feedback }`    | `null`; "that was wrong", kept for debugging |
 
-Memory changes arrive as `memory` events whoever made them, so a memory view is these plus the
-events. The stub answers `unknown method` to all of them.
+Memory changes arrive as `memory` events whoever made them. The stub answers `unknown method`
+to these two; it serves the memory methods above with one pretend fact per answered question.
 
 ## Not in the contract yet
 

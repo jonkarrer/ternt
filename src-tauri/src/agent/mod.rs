@@ -369,6 +369,34 @@ pub async fn agent_abort(app: AppHandle, space: u32, thread: String) -> Result<b
     sidecar(&app)?.abort(space, thread).await
 }
 
+/// What a space's agent remembers (Settings → Agent → Memory).
+#[tauri::command]
+pub async fn agent_memories(app: AppHandle, space: u32) -> Result<Vec<Memory>, String> {
+    sidecar(&app)?.memories(space).await
+}
+
+/// The user edited a memory: the one that replaces it comes back.
+#[tauri::command]
+pub async fn agent_revise(
+    app: AppHandle,
+    space: u32,
+    id: i64,
+    text: String,
+) -> Result<Memory, String> {
+    sidecar(&app)?.revise(space, id, text).await
+}
+
+#[tauri::command]
+pub async fn agent_forget(app: AppHandle, space: u32, id: i64) -> Result<(), String> {
+    sidecar(&app)?.forget(space, id).await
+}
+
+/// Everything the space's agent has learned, gone; its conversations stay.
+#[tauri::command]
+pub async fn agent_wipe(app: AppHandle, space: u32) -> Result<(), String> {
+    sidecar(&app)?.wipe(space).await
+}
+
 /// Where the agent process stands (the panel asks on open; `agent:status`
 /// carries changes).
 #[tauri::command]

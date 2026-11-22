@@ -445,6 +445,31 @@ impl Sidecar {
         self.ask(space, "abort", json!({ "thread": thread })).await
     }
 
+    /// What the agent remembers, newest first (Settings → Agent → Memory).
+    pub async fn memories(&self, space: u32) -> Result<Vec<Memory>, String> {
+        self.ask(space, "memories", Value::Null).await
+    }
+
+    /// The user's correction of a memory: the one that replaces it.
+    pub async fn revise(&self, space: u32, id: i64, text: String) -> Result<Memory, String> {
+        self.ask(space, "revise", json!({ "id": id, "text": text }))
+            .await
+    }
+
+    /// Remove one memory, with its history, for good.
+    pub async fn forget(&self, space: u32, id: i64) -> Result<(), String> {
+        self.ask::<Value>(space, "forget", json!({ "id": id }))
+            .await
+            .map(|_| ())
+    }
+
+    /// Remove everything the agent has learned; its conversations stay.
+    pub async fn wipe(&self, space: u32) -> Result<(), String> {
+        self.ask::<Value>(space, "wipe", Value::Null)
+            .await
+            .map(|_| ())
+    }
+
     /// The agent stopped and its files removed, for good.
     pub async fn delete(&self, space: u32) -> Result<(), String> {
         self.ask::<Value>(space, "delete", Value::Null)

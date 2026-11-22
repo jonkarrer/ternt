@@ -195,7 +195,9 @@ The agent is **bring your own key**: Settings → Agent picks the provider (Fire
 and takes the key, which is kept in the macOS Keychain (`src-tauri/src/agent/keys.rs`). Ternt hands
 the chosen provider's key to the sidecar through its environment and nothing else ever sees it. A
 key already in Ternt's environment wins, which is how development runs with the team's keys:
-`doppler run -- just dev tokidoki`.
+`doppler run -- just dev tokidoki`. The same page has a **Memory** section: what each space's agent
+has learned, fact by fact, to correct or forget, and a Wipe that forgets all of it (the
+conversations stay).
 
 - `src-tauri/src/agent/protocol.rs` mirrors tokidoki's `interface` types (`src/agent/protocol.ts`
   is its generated TypeScript, copied from the tokidoki repo). The panel is written against the

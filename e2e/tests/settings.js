@@ -46,7 +46,38 @@ await t.eval("settings", `const s = document.querySelector("select.provider"); s
 await t.until(async () => (await t.invoke("get_prefs")).agentProvider === "anthropic", "choosing Anthropic is saved");
 await t.until(async () => (await read(`document.querySelector("input.key")?.placeholder`)) === "sk-ant-…", "and the key field follows");
 await t.until(async () => { const s = await t.invoke("agent_status"); return s.state === "running" && s.provider === "anthropic"; }, "the agent restarts for the new provider", 15000);
+
+// Memory: what the space's agent learned, listed per space; edit, forget, wipe
+const space = S().activeSpace;
+const memoryTexts = () => read(`[...document.querySelectorAll(".memory .text")].map((el) => el.textContent).join("|")`);
+const remembered = () => t.invoke("agent_memories", { space });
+await t.until(async () => (await read(`document.querySelector("select.space")?.value`)) === String(space), "Memory shows the active space");
+await t.until(async () => (await read(`document.querySelector("main .empty")?.textContent`)) === "Nothing remembered yet.", "with nothing remembered yet");
+await t.assert((await read(`String(document.querySelector("button.wipe").disabled)`)) === "true", "and nothing to wipe");
+await t.invoke("agent_send", { space, text: "remember the stub", thread: null });
+await t.until(async () => (await remembered()).length === 1, "the stub learns one fact per answered question", 10000);
+await t.eval("settings", `window.dispatchEvent(new Event("focus"))`);
+await t.until(async () => (await memoryTexts()).includes("remember the stub"), "coming back to Settings lists it");
+await click(".memory button.edit");
+await t.until(async () => ((await read(`document.querySelector("input.memory-text")?.value`)) ?? "").includes("remember the stub"), "Edit opens the fact's text");
+await t.eval("settings", `(() => { const i = document.querySelector("input.memory-text"); i.value = "Likes tea"; i.dispatchEvent(new Event("input", { bubbles: true })); i.form.requestSubmit(); })()`);
+await t.until(async () => (await memoryTexts()) === "Likes tea", "saving replaces the fact");
+await t.until(async () => { const m = await remembered(); return m.length === 1 && m[0].text === "Likes tea" && m[0].version === 2; }, "as a new version at the agent");
+await t.invoke("agent_send", { space, text: "and another", thread: null });
+await t.until(async () => (await remembered()).length === 2, "a second fact", 10000);
+await t.eval("settings", `window.dispatchEvent(new Event("focus"))`);
+await t.until(async () => (await read(`document.querySelectorAll(".memory").length`)) === "2", "both listed, newest first");
+await t.assert((await memoryTexts()).startsWith("In the ") && (await memoryTexts()).endsWith("|Likes tea"), `newest first: ${await memoryTexts()}`);
 await t.shot("settings-agent", "settings");
+await click(".memory button.forget");
+await t.until(async () => (await memoryTexts()) === "Likes tea", "Forget removes one");
+await t.until(async () => (await remembered()).length === 1, "at the agent too");
+await click("button.wipe");
+await t.until(async () => (await read(`document.querySelector(".count").textContent`)).includes("no undo"), "Wipe asks first");
+await click("button.wipe-confirm");
+await t.until(async () => (await read(`document.querySelector("main .empty")?.textContent`)) === "Nothing remembered yet.", "and then forgets everything");
+await t.until(async () => (await remembered()).length === 0, "the agent has nothing left");
+await t.until(async () => (await t.invoke("agent_threads", { space })).length === 2, "the conversations stay");
 await click(`.page-tab:nth-child(3)`);
 await t.until(async () => (await read(`document.querySelector("main").textContent`)).includes("Version"), "General shows the version");
 await t.until(async () => (await read(`String(document.querySelector("input.unload")?.checked)`)) === "true", "unloading idle tabs is on by default");

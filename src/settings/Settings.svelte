@@ -64,7 +64,7 @@
         <Account {browserState} onprofiles={() => (page = "profiles")} />
       {/if}
     {:else if page === "agent"}
-      <Agent />
+      <Agent spaces={browserState?.spaces ?? []} activeSpace={browserState?.activeSpace ?? null} />
     {:else if page === "general"}
       <General />
     {:else if page === "profiles"}

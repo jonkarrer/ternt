@@ -5,7 +5,8 @@
 //! sidecar forgets every conversation (tokidoki resumes from its files).
 //!
 //! Inputs starting with `/tool` also run a pretend tool; `/error` goes
-//! unanswered.
+//! unanswered. Every answered question leaves one pretend memory behind, so
+//! Settings → Agent → Memory has something to list, edit, forget and wipe.
 
 use std::{
     collections::HashMap,
@@ -39,6 +40,8 @@ struct Inner {
     next: u64,
     /// The turn under way on a thread.
     running: HashMap<String, JoinHandle<()>>,
+    /// What the stub "learned", newest last; ids come from `next` too.
+    memories: Vec<Memory>,
 }
 
 struct Thread {
@@ -192,6 +195,46 @@ fn checkpoint(inner: &Mutex<Inner>, outbox: &Outbox, space: &str, thread: &str, 
     }
 }
 
+/// The stub learns one fact from every question it answers, and says so.
+fn learn(
+    inner: &Mutex<Inner>,
+    outbox: &Outbox,
+    space: &str,
+    label: &str,
+    thread: &str,
+    asked: &str,
+) {
+    let asked: String = asked.trim().chars().take(80).collect();
+    if asked.is_empty() {
+        return;
+    }
+    let memory = {
+        let mut inner = inner.lock().unwrap();
+        let id = inner.next as i64 + 1;
+        inner.next += 1;
+        let seq = inner.thread(thread).map_or(0, |t| t.log.len());
+        let memory = Memory {
+            id,
+            kind: MemoryKind::Fact,
+            text: format!("In the {label} space, you asked: “{asked}”"),
+            version: 1,
+            at: now_ms(),
+            source: Some(MemorySource {
+                thread: thread.to_string(),
+                seq,
+            }),
+        };
+        inner.memories.push(memory.clone());
+        memory
+    };
+    outbox.push(
+        space,
+        Event::Memory {
+            change: MemoryChange::Learned { memory },
+        },
+    );
+}
+
 /// Send `base` (its id, thread and text) with a new status.
 fn send_status(
     outbox: &Outbox,
@@ -289,7 +332,8 @@ impl Stub {
         );
         send_status(&outbox, &space, &base, Status::Placed, None, None);
 
-        let reply = script(&self.label.lock().unwrap(), &text);
+        let label = self.label.lock().unwrap().clone();
+        let reply = script(&label, &text);
         let task_thread = thread.clone();
         let task_base = base.clone();
         let task = tokio::spawn(async move {
@@ -384,6 +428,7 @@ impl Stub {
                         Some(answer.clone()),
                         None,
                     );
+                    learn(&inner, &outbox, &space, &label, &thread, &base.text);
                 }
                 Err(reason) => {
                     checkpoint(&inner, &outbox, &space, &thread, Change::TurnEnded);
@@ -438,6 +483,82 @@ impl Stub {
             self.outbox.push(&self.space, ended);
         }
         true
+    }
+}
+
+impl Stub {
+    /// Newest first, as tokidoki lists them.
+    pub fn memories(&self) -> Vec<Memory> {
+        let inner = self.inner.lock().unwrap();
+        inner.memories.iter().rev().cloned().collect()
+    }
+
+    /// A new version of the memory `id`, which must be current, replaces it.
+    pub fn revise(&self, id: i64, text: &str) -> Result<Memory, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("a memory needs some text".into());
+        }
+        let (memory, was) = {
+            let mut inner = self.inner.lock().unwrap();
+            let next = inner.next as i64 + 1;
+            inner.next += 1;
+            let old = inner
+                .memories
+                .iter_mut()
+                .find(|m| m.id == id)
+                .ok_or_else(|| format!("memory {id} has changed or is gone"))?;
+            let was = old.text.clone();
+            old.id = next;
+            old.text = text.to_string();
+            old.version += 1;
+            old.at = now_ms();
+            (old.clone(), was)
+        };
+        self.outbox.push(
+            &self.space,
+            Event::Memory {
+                change: MemoryChange::Revised {
+                    memory: memory.clone(),
+                    replaces: id,
+                    was,
+                },
+            },
+        );
+        Ok(memory)
+    }
+
+    pub fn forget(&self, id: i64) -> Result<(), String> {
+        let mut inner = self.inner.lock().unwrap();
+        let before = inner.memories.len();
+        inner.memories.retain(|m| m.id != id);
+        if inner.memories.len() == before {
+            return Err(format!("memory {id} has changed or is gone"));
+        }
+        drop(inner);
+        self.outbox.push(
+            &self.space,
+            Event::Memory {
+                change: MemoryChange::Forgotten { ids: vec![id] },
+            },
+        );
+        Ok(())
+    }
+
+    /// Everything learned, gone; the conversations stay.
+    pub fn wipe(&self) {
+        let ids: Vec<i64> = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.memories.drain(..).map(|m| m.id).collect()
+        };
+        if !ids.is_empty() {
+            self.outbox.push(
+                &self.space,
+                Event::Memory {
+                    change: MemoryChange::Forgotten { ids },
+                },
+            );
+        }
     }
 }
 

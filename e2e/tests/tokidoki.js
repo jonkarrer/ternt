@@ -79,5 +79,12 @@ await t.assert(again.restarted === false, "an asked-for restart isn't reported a
 await t.until(async () => (await t.read("agent", `document.querySelector(".status")?.dataset.state ?? ""`)) === "", "no crash banner");
 await t.until(async () => (await userRows()).length === 1 && (await assistantRows()).some(([, x]) => /pong/i.test(x)), "the conversation is back from disk", 15000);
 await t.until(async () => (await t.invoke("agent_threads", { space: first })).length === 1, "and listed");
+
+// Memory is read and wiped without a model call (what it learned from one "pong" is its business)
+const remembered = await t.invoke("agent_memories", { space: first });
+await t.assert(Array.isArray(remembered) && remembered.every((m) => m.kind === "fact" || m.kind === "procedure"), `it lists what it remembers (${remembered.length})`);
+await t.invoke("agent_wipe", { space: first });
+await t.assert((await t.invoke("agent_memories", { space: first })).length === 0, "wipe leaves nothing");
+await t.assert((await t.invoke("agent_threads", { space: first })).length === 1, "but keeps the conversation");
 await A.key("Escape");
 await t.quit();

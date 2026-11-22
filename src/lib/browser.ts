@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { EventCallback, UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import type { Event as AgentEvent, Sent, ThreadSummary } from "../agent/protocol";
+import type { Event as AgentEvent, Memory, Sent, ThreadSummary } from "../agent/protocol";
 
 /** Events sent to this webview. (The global `listen` also gets every event
  *  sent to any other webview: each state update arrived once per target.) */
@@ -352,6 +352,13 @@ export const browser = {
   /** A thread's checkpoints from `since` on. */
   agentHistory: (space: number, thread: string, since: number) => invoke<AgentEvent[]>("agent_history", { space, thread, since }),
   agentAbort: (space: number, thread: string) => invoke<boolean>("agent_abort", { space, thread }),
+  /** What a space's agent remembers, newest first (Settings → Agent → Memory). */
+  agentMemories: (space: number) => invoke<Memory[]>("agent_memories", { space }),
+  /** Correct a memory; the one that replaces it comes back (a new id). */
+  agentRevise: (space: number, id: number, text: string) => invoke<Memory>("agent_revise", { space, id, text }),
+  agentForget: (space: number, id: number) => invoke("agent_forget", { space, id }),
+  /** Everything the space's agent has learned, gone; its conversations stay. */
+  agentWipe: (space: number) => invoke("agent_wipe", { space }),
   onAgentOpen: (cb: (request: AgentRequest) => void): Promise<UnlistenFn> =>
     listen<AgentRequest>("agent:open", (e) => cb(e.payload)),
   /** The panel was hidden (Esc, ⌘J, the command bar opening). */

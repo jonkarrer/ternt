@@ -12,6 +12,10 @@
 //! | `threads`  |                                      | `[ThreadSummary]`     |
 //! | `history`  | `{ "thread": id, "since": n }`       | `[Event]` checkpoints |
 //! | `abort`    | `{ "thread": id }`                   | `bool`                |
+//! | `memories` |                                      | `[Memory]`, newest first |
+//! | `revise`   | `{ "id": n, "text": str }`           | the `Memory` replacing it |
+//! | `forget`   | `{ "id": n }`                        | `null`                |
+//! | `wipe`     |                                      | `null`, every memory gone |
 //! | `delete`   |                                      | `null`, files removed |
 //! | `close`    |                                      | `null`                |
 //! | `shutdown` |                                      | `null`, then exit     |

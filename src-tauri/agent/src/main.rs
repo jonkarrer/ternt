@@ -148,6 +148,20 @@ fn handle(
             let thread = params["thread"].as_str().ok_or("a thread is required")?;
             Ok(json!(agent.abort(thread)))
         }
+        "memories" => Ok(json!(agent.memories())),
+        "revise" => {
+            let id = params["id"].as_i64().ok_or("an id is required")?;
+            let text = params["text"].as_str().ok_or("some text is required")?;
+            agent.revise(id, text).map(|memory| json!(memory))
+        }
+        "forget" => {
+            let id = params["id"].as_i64().ok_or("an id is required")?;
+            agent.forget(id).map(|()| Value::Null)
+        }
+        "wipe" => {
+            agent.wipe();
+            Ok(Value::Null)
+        }
         other => Err(format!("unknown method {other}")),
     }
 }
