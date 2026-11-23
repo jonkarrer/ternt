@@ -216,9 +216,9 @@ git push origin HEAD:main $tag
 # see a latest.json whose update archive isn't there yet.
 notes="Download **Ternt_${version}_universal.dmg**, open it and drag Ternt to Applications. Installed copies update themselves: they download it in the background and install it when they quit."
 sidecar=$(cat $ROOT/src-tauri/binaries/SIDECAR 2>/dev/null)
-[[ $sidecar == tokidoki* ]] && notes="$notes
+[[ $sidecar == tokidoki ]] && notes="$notes
 
-Agent: tokidoki ${sidecar#tokidoki }, bring your own key (Settings → Agent)."
+Agent: tokidoki, bring your own key (Settings → Agent)."
 release=$(TAG=$tag NAME="Ternt $version" NOTES=$notes bun -e \
   'const e = process.env; console.log(JSON.stringify({ tag_name: e.TAG, name: e.NAME, body: e.NOTES, draft: true }))' |
   github POST /repos/$REPO/releases --data-binary @-) || fail "couldn't create the release (does the token have Contents: read and write?); fix it and run just upload-resume"

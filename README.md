@@ -171,8 +171,9 @@ name and email, kept on this Mac, and a summary of your profiles), **General** (
 
 ## Agent (Tokidoki)
 
-Every space gets its own AI agent: [tokidoki](https://github.com/jonkarrer/tokidoki), an agent with
-durable execution and long-term memory. Press ⌘J or click **Ask <space>** at the top of the sidebar:
+Every space gets its own AI agent: tokidoki (`tokidoki/`, Ternt's copy, forked 2026-11-23 from
+[jonkarrer/tokidoki](https://github.com/jonkarrer/tokidoki)), an agent with durable execution and
+long-term memory. Press ⌘J or click **Ask <space>** at the top of the sidebar:
 a panel opens over the page with that space's conversations. Agents share nothing, so what the dev
 space's agent learns never reaches the marketing space's.
 
@@ -184,11 +185,10 @@ dying). The protocol, JSON lines over stdin and stdout, is in [docs/AGENT-SIDECA
 Two programs speak it: tokidoki's `tokidoki-serve`, the real agent, and the stub in
 `src-tauri/agent/`, a streamed canned reply with the same shape of events a real turn has (`/tool`
 adds a pretend tool call, `/error` a failed turn, `/crash` kills the process so you can watch it
-come back). `just sidecar tokidoki` (or `TERNT_SIDECAR=tokidoki`) builds the real one from a
-tokidoki checkout beside this repo (`TOKIDOKI_SRC` to point elsewhere); the stub is the default
-for development and what the e2e suites run against. **Releases ship tokidoki** (`just upload`
-builds it from the checkout, refuses an uncommitted one, and names its commit in the release
-notes); `TERNT_SIDECAR=stub just upload` would ship the stub. `TERNT_SIDECAR=tokidoki e2e/run.sh tokidoki` runs the panel
+come back). `just sidecar tokidoki` (or `TERNT_SIDECAR=tokidoki`) builds the real one from
+`tokidoki/` (`TOKIDOKI_SRC` to point at another tree); the stub is the default for development
+and what the e2e suites run against. **Releases ship tokidoki** (`just upload` builds it from the
+tree, refusing uncommitted changes there); `TERNT_SIDECAR=stub just upload` would ship the stub. `TERNT_SIDECAR=tokidoki e2e/run.sh tokidoki` runs the panel
 against the real agent (one model call if `ANTHROPIC_API_KEY` is set).
 
 The agent is **bring your own key**: Settings → Agent → Keys takes your Fireworks AI and Anthropic
@@ -201,7 +201,7 @@ section: what the space's agent has learned, fact by fact, to correct or forget,
 forgets all of it (the conversations stay).
 
 - `src-tauri/src/agent/protocol.rs` mirrors tokidoki's `interface` types (`src/agent/protocol.ts`
-  is its generated TypeScript, copied from the tokidoki repo). The panel is written against the
+  is its generated TypeScript, copied from `tokidoki/` by `just sync-protocol`). The panel is written against the
   real wire format.
 - `src-tauri/src/agent/mod.rs` owns the `Agent` boundary (`send`, `threads`, `history`, `abort`),
   one lazily opened agent per space (folder `agents/space-<id>`), the panel webview, and the

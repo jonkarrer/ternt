@@ -4,7 +4,7 @@ A program that wants agents without having them in its own process runs `tokidok
 talks to it over its stdin and stdout. Ternt does: an agent per space, and a crash in one
 ends the sidecar, never the browser.
 
-**The contract is ternt's**: `docs/AGENT-SIDECAR.md` in the ternt repo. This page says how
+**The contract is ternt's**: `docs/AGENT-SIDECAR.md` at the repo root. This page says how
 tokidoki meets it, and what it does beyond it. `crates/tokidoki/src/serve.rs` is the
 implementation; `crates/tokidoki/src/bin/serve.rs` is the process around it.
 

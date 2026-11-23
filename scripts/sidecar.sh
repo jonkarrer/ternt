@@ -6,8 +6,8 @@
 #
 #   stub       src-tauri/agent: canned replies, no key needed (the default; the
 #              e2e suites are written against it)
-#   tokidoki   tokidoki-serve, the real agent, built from the tokidoki repo at
-#              $TOKIDOKI_SRC (default: ../tokidoki, beside this repo)
+#   tokidoki   tokidoki-serve, the real agent, built from tokidoki/ in this repo
+#              ($TOKIDOKI_SRC points at another tree)
 #   --release  both Apple targets plus a universal binary (scripts/publish.sh),
 #              with Apple's toolchain so it links only system libraries
 #
@@ -35,14 +35,13 @@ done
 case $flavor in
   stub) package=ternt-agent; bin=ternt-agent; manifest=Cargo.toml; out=target ;;
   tokidoki)
-    src=${TOKIDOKI_SRC:-${root:h}/tokidoki}
-    [[ -f $src/Cargo.toml ]] || { echo "sidecar: no tokidoki checkout at $src (set TOKIDOKI_SRC)" >&2; exit 1; }
+    src=${TOKIDOKI_SRC:-$root/tokidoki}
+    [[ -f $src/Cargo.toml ]] || { echo "sidecar: no tokidoki tree at $src (set TOKIDOKI_SRC)" >&2; exit 1; }
     package=tokidoki; bin=tokidoki-serve; manifest=$src/Cargo.toml; out=$src/target
-    # A release names the tokidoki commit it was built from, so it must be a commit.
-    if [[ -n $release ]] && [[ -n $(git -C $src status --porcelain) ]]; then
+    # A release is built from a commit, the agent included.
+    if [[ -n $release ]] && [[ -n $(git -C $src status --porcelain .) ]]; then
       echo "sidecar: the tokidoki tree at $src has uncommitted changes; commit them before a release" >&2; exit 1
-    fi
-    commit=$(git -C $src rev-parse --short HEAD 2>/dev/null) ;;
+    fi ;;
   *) echo "sidecar: unknown flavor '$flavor' (stub or tokidoki)" >&2; exit 2 ;;
 esac
 
@@ -69,10 +68,10 @@ if [[ -n $release ]]; then
     echo "sidecar: links non-system libraries (see above)" >&2; exit 1
   fi
   # For the release notes (scripts/publish.sh).
-  echo "$flavor${commit:+ @ $commit}" > binaries/SIDECAR
-  echo "sidecar ($flavor${commit:+ @ $commit}): binaries/ternt-agent-{aarch64,x86_64,universal}-apple-darwin"
+  echo "$flavor" > binaries/SIDECAR
+  echo "sidecar ($flavor): binaries/ternt-agent-{aarch64,x86_64,universal}-apple-darwin"
 else
   cargo build -q --manifest-path $manifest -p $package --bin $bin
   cp $out/debug/$bin binaries/ternt-agent-$host
-  echo "sidecar ($flavor${commit:+ @ $commit}): binaries/ternt-agent-$host (debug)"
+  echo "sidecar ($flavor): binaries/ternt-agent-$host (debug)"
 fi

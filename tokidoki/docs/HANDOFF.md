@@ -1,3 +1,8 @@
+> **2026-11-23:** tokidoki was forked into Ternt's repo (this copy). The design account below
+> still holds; the working rules in it (two agents, notes traded through `docs/TERNT-HANDOFF.md`
+> and `docs/FROM-TERNT.md`, "don't edit the ternt repo") predate the fork and no longer apply:
+> Ternt and its tokidoki are one repo, developed together.
+
 # Tokidoki: handoff to the next owner
 
 Written 2026-11-21 by the agent that did the work described here, for an agent picking the

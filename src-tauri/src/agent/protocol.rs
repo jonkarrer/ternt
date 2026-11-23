@@ -1,6 +1,6 @@
-//! Tokidoki's protocol, copied from crates/interface/src/protocol.rs in the tokidoki
-//! repo (commit 7f34352) by scripts/sync-protocol.sh; don't edit it here. The same
-//! types as TypeScript are src/agent/protocol.ts. The sidecar's stub compiles this file too.
+//! Tokidoki's protocol, copied from tokidoki/crates/interface/src/protocol.rs by
+//! scripts/sync-protocol.sh; don't edit it here. The same types as TypeScript are
+//! src/agent/protocol.ts. The sidecar's stub compiles this file too.
 #![allow(dead_code)] // Ternt uses what it needs of tokidoki's API.
 
 //! What goes in and comes out. How it travels is not tokidoki's concern: whatever carries it

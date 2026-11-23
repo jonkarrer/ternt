@@ -10,21 +10,23 @@ default:
 dev flavor="": (sidecar flavor)
     bun tauri dev
 
-# Build the agent sidecar into src-tauri/binaries; Ternt needs it to compile. `stub` (default) or `tokidoki` (from ../tokidoki)
+# Build the agent sidecar into src-tauri/binaries; Ternt needs it to compile. `stub` (default) or `tokidoki` (from tokidoki/)
 sidecar *args:
     scripts/sidecar.sh {{args}}
 
-# Copy tokidoki's protocol (Rust and TypeScript) from ../tokidoki after it changes there
+# Copy tokidoki's protocol (Rust and TypeScript) from tokidoki/ into the host code after it changes
 sync-protocol:
     scripts/sync-protocol.sh
 
-# Typecheck + lint — must be clean before commit
+# Typecheck + lint — must be clean before commit (Ternt, then the agent in tokidoki/)
 check: sidecar
     bun run check && cd src-tauri && cargo clippy -q --workspace --all-targets -- -D warnings
+    cd tokidoki && just check
 
-# Unit tests, type check and clippy (about a second); `just test-e2e` for the rest
+# Unit tests (Ternt's, then the agent's); `just test-e2e` for the rest
 test:
     bun run test:unit
+    cd tokidoki && just test
 
 # Format the tree (Rust; the Svelte/TS side has no formatter configured yet)
 fmt:
