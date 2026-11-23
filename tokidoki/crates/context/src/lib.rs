@@ -1,6 +1,8 @@
 //! Everything that gets pushed into inference: system prompt, registered tools, message history.
 //! Vendor-neutral: each provider format translates this to its own wire shape.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -25,6 +27,36 @@ impl Context {
 
     pub fn push(&mut self, message: Message) {
         self.messages.push(message);
+    }
+
+    /// Calls of tools that aren't offered (any more), and their results, as plain text.
+    /// A history that calls a tool the request doesn't declare is refused by some providers
+    /// and answered with nothing by others; said in words, it is just what happened.
+    pub fn retell_unoffered_calls(&mut self) {
+        let mut retold: HashMap<String, String> = HashMap::new();
+        for message in &mut self.messages {
+            for block in &mut message.content {
+                let text = match block {
+                    Block::ToolCall { id, name, input }
+                        if !self.tools.iter().any(|t| t.name == *name) =>
+                    {
+                        retold.insert(id.clone(), name.clone());
+                        format!("(I used the {name} tool, which I don't have now, with {input}.)")
+                    }
+                    Block::ToolResult {
+                        call_id,
+                        content,
+                        is_error,
+                    } => match retold.get(call_id) {
+                        Some(name) if *is_error => format!("(The {name} tool failed: {content})"),
+                        Some(name) => format!("(The {name} tool returned:)\n{content}"),
+                        None => continue,
+                    },
+                    _ => continue,
+                };
+                *block = Block::Text { text };
+            }
+        }
     }
 }
 
@@ -157,5 +189,43 @@ mod tests {
         assert_eq!(ctx.messages[1].text(), "Checking.");
         let calls: Vec<_> = ctx.messages[1].tool_calls().collect();
         assert_eq!(calls, [("c1", "weather", &json!({ "city": "Paris" }))]);
+    }
+
+    #[test]
+    fn calls_of_a_tool_no_longer_offered_are_retold_as_text() {
+        let tool = |name: &str| Tool {
+            name: name.into(),
+            description: String::new(),
+            input_schema: json!({ "type": "object" }),
+        };
+        let call = |id: &str, name: &str| Message {
+            role: Role::Assistant,
+            content: vec![Block::ToolCall {
+                id: id.into(),
+                name: name.into(),
+                input: json!({ "q": "x" }),
+            }],
+        };
+        let mut ctx = Context::default();
+        ctx.register(tool("weather"));
+        ctx.push(call("c1", "search"));
+        ctx.push(Message::tool_result("c1", "three pages"));
+        ctx.push(call("c2", "weather"));
+        ctx.push(Message::tool_result("c2", "18C"));
+        let kept = ctx.messages[2..].to_vec();
+
+        ctx.retell_unoffered_calls();
+
+        assert_eq!(
+            ctx.messages[0].text(),
+            r#"(I used the search tool, which I don't have now, with {"q":"x"}.)"#
+        );
+        assert_eq!(ctx.messages[0].tool_calls().count(), 0);
+        assert_eq!(
+            ctx.messages[1].text(),
+            "(The search tool returned:)\nthree pages"
+        );
+        assert_eq!(ctx.messages[1].role, Role::User);
+        assert_eq!(ctx.messages[2..], kept);
     }
 }

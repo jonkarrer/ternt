@@ -161,16 +161,26 @@ impl NewThreads {
         }
     }
 
+    /// Before an input is admitted: a thread's first gets it its system prompt, and every
+    /// one leaves it offering the tools this agent has now. A tool switched on or off since
+    /// the thread began is then there, or gone, from the next thing said in it.
     fn set_up(&self, tx: &mut Tx, thread: &str) -> Result<()> {
         let thread = tx.thread(thread)?;
-        if !thread.checkpoints().is_empty() {
-            return Ok(());
-        }
-        if let Some(system) = self.system_now() {
+        if thread.checkpoints().is_empty()
+            && let Some(system) = self.system_now()
+        {
             thread.set_system(system)?;
         }
+        let had = thread.context().tools.clone();
+        for tool in &had {
+            if !self.tools.iter().any(|t| t.name == tool.name) {
+                thread.remove_tool(&tool.name)?;
+            }
+        }
         for tool in &self.tools {
-            thread.register(tool.clone())?;
+            if !had.contains(tool) {
+                thread.register(tool.clone())?;
+            }
         }
         Ok(())
     }

@@ -45,20 +45,21 @@ default_provider, tools: {}}`. `configure` takes `{provider?, tools?}` and answe
 ## Next: tools, starting with Exa web search
 
 The owner asked for basic tools that can be toggled in Settings → Agent, per space, with web
-search through Exa first. The plumbing is in place (`Setup.tools`, `configure`, the `tools`
-map in the ready line); no tool exists yet, so any tool name is refused as unknown.
+search through Exa first. `EXA_API_KEY` is in Doppler (`ternt` / `dev`).
 
-**Blocked on a key for the live parts:** `EXA_API_KEY` is not in Doppler (`ternt` / `dev`).
-The owner was asked and has not answered. The tool can be built against a mocked test first.
+Step 3, the tool, is **built and not yet committed** (2026-11-23), all in `tokidoki/`:
 
-Step 3, the tool, in `tokidoki/`:
-
-- A new crate with one tool, `web_search`: Exa `/search` with highlights; arguments `query`,
-  `num_results` (at most 10), optional recency; 15 second timeout; safe to replay, since
-  tokidoki resumes interrupted work.
-- Register it in `tools(setup)` in `bin/serve.rs`; read the key in `Keys::from_env()`.
-- Ready line reports `tools: {web_search: <key present>}`.
-- A live test gated on the key, on a cheap model.
+- `crates/tools`: `web_search`, Exa `/search` with highlights; `query`, `num_results` (at
+  most 10), optional `days`; 15 second timeout; replay-safe. Mocked tests, and a live one
+  (`doppler run --project ternt --config dev -- just test tools --live`, no model called).
+- `bin/serve.rs` registers it for a space that asks, when the key is there; the ready line
+  says `tools: {web_search: <key present>}`. A tool whose key is missing is left out rather
+  than failing the space.
+- A thread now offers the tools its agent has at each message (`NewThreads::set_up`), so a
+  switch reaches conversations already going. Calls of a tool no longer offered are sent to
+  the model as plain text (`Context::retell_unoffered_calls`); without that Anthropic
+  answered with nothing.
+- Checked by driving the sidecar on the cheapest models, both providers: off, on, off.
 
 Step 4, Settings:
 

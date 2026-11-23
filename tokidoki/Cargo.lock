@@ -1591,6 +1591,7 @@ dependencies = [
  "state",
  "telemetry",
  "tokio",
+ "tools",
  "tracing",
 ]
 
@@ -1643,6 +1644,19 @@ dependencies = [
  "futures-sink",
  "libc",
  "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
+name = "tools"
+version = "0.1.0"
+dependencies = [
+ "agent",
+ "anyhow",
+ "context",
+ "reqwest",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

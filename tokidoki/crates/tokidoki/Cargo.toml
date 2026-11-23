@@ -19,6 +19,7 @@ serde_json.workspace = true
 state.workspace = true
 telemetry.workspace = true
 tokio.workspace = true
+tools.workspace = true
 tracing.workspace = true
 
 

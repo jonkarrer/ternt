@@ -13,7 +13,8 @@ sidecar behaves; the contract is `../docs/AGENT-SIDECAR.md`.
   requests from the sidecar back to Ternt (tabs, pages, terminals), nothing shared between
   spaces, until the owner says so.
 - **Bring your own key, macOS only.** Keys reach the process only through its environment
-  (`ANTHROPIC_API_KEY`, `FIREWORKS_API_KEY`, `BASETEN_API_KEY`, whichever the host has). Never
+  (`ANTHROPIC_API_KEY`, `FIREWORKS_API_KEY`, `BASETEN_API_KEY`, whichever the host has, and
+  `EXA_API_KEY` for the `web_search` tool, in `crates/tools`). Never
   in a file, never in the repo. The sidecar reads nothing else from the host's environment
   but `TOKIDOKI_PROVIDER` (the default provider) and `TOKIDOKI_MODEL` / `TOKIDOKI_ROUTER_MODEL`.
 - **Provider and tools are per space** (owner, 2026-11-23): the host says them with

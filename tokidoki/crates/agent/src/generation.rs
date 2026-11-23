@@ -136,7 +136,9 @@ impl<M: Model> Generation<M> {
         if rt.restarts() > 0 {
             return self.retry(rt, round, attempt, "interrupted by a restart".into());
         }
-        let (ctx, seq) = rt.thread(|t| (t.context().clone(), t.checkpoints().len()))?;
+        let (mut ctx, seq) = rt.thread(|t| (t.context().clone(), t.checkpoints().len()))?;
+        // What is sent, not what is kept: the thread still holds the calls as they were made.
+        ctx.retell_unoffered_calls();
         let thread = rt.thread_id();
         let show = |delta| self.live.delta(thread, seq, delta);
         let reply = tokio::select! {

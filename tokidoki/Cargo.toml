@@ -29,3 +29,4 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "reg
 telemetry = { path = "crates/telemetry" }
 interface = { path = "crates/interface" }
 agent = { path = "crates/agent" }
+tools = { path = "crates/tools" }

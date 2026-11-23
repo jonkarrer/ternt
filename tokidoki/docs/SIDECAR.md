@@ -60,14 +60,14 @@ JSON, one object per line.
 ```
 {"ready":{"backend":"tokidoki","version":"0.1.0",                      the first line out
           "providers":{"anthropic":true,"fireworks":false,"baseten":false},
-          "default_provider":"anthropic","tools":{}}}
+          "default_provider":"anthropic","tools":{"web_search":true}}}
 {"id":12,"method":"send","space":"space-7","params":{"input":{...}}}    a request, in
 {"id":12,"result":{...}}   or   {"id":12,"error":"..."}                 its answer, out
 {"space":"space-7","event":{...}}                                       an event, out
 ```
 
-`ready` says which providers the process has a key for, and which tools it can offer (none
-yet). An agent opens on the first request that names its space. Requests are answered as each
+`ready` says which providers the process has a key for, and the tools it knows, each `true`
+if it has what the tool needs to run (see Tools). An agent opens on the first request that names its space. Requests are answered as each
 finishes, in any order. A space's events come in the order they happened, and each is an
 `interface::Event` (`crates/interface/protocol.ts` in TypeScript). A line that isn't a
 request is reported on stderr and skipped.
@@ -100,6 +100,20 @@ Beyond it, for the host to use when it has somewhere to show them:
 
 Memory changes arrive as `Event::Memory` whoever made them, so a host that never calls
 these still sees what an agent learns.
+
+## Tools
+
+A space has the tools `configure` names, from those `ready` lists. One whose key the process
+lacks is left out: the space opens all the same, and `configure` answers with the tools the
+agent really has. A name the process doesn't know is an error.
+
+| tool | needs | what it does |
+| --- | --- | --- |
+| `web_search` | `EXA_API_KEY` | Searches the web through Exa: up to 10 pages, each with its address, date and most relevant passages; optionally only pages from the last so many days. 15 seconds at most. Safe to run again after a crash |
+
+A thread offers the model the tools its agent has when something is said in it, so a tool
+switched on or off reaches the conversations already going, from their next message. While a
+tool runs, the thread's activity is `Doing::Tool` with its name.
 
 ## Where tokidoki and the contract don't quite meet
 

@@ -39,6 +39,7 @@ use tracing::Instrument;
 pub use agent::{Settings, Tool, ToolFuture, Tools};
 pub use inference::{Effort, Vendor};
 pub use interface;
+pub use tools;
 
 /// Events as they happen, until dropped.
 pub type Events = mpsc::Receiver<interface::Event>;

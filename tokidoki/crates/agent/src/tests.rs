@@ -296,6 +296,61 @@ async fn runs_tools_between_requests() {
     assert_eq!(script.seen()[1].messages.len(), 3);
 }
 
+/// A thread offers the tools the agent has when something is said in it, not those it had
+/// when the thread began: a tool can be switched on or off between two messages.
+#[tokio::test]
+async fn a_thread_offers_the_tools_the_agent_has_now() {
+    let store = store();
+    let script = Script::new(vec![
+        Reply::Text("one"),
+        Reply::Text("two"),
+        Reply::Text("three"),
+    ]);
+    let offered = |n: usize| -> Vec<String> {
+        let tools = &script.seen()[n].tools;
+        tools.iter().map(|t| t.name.clone()).collect()
+    };
+    let with = |names: &[&'static str]| {
+        let mut tools = Tools::new();
+        for name in names {
+            tools.add(TestTool::new(name, "ok"));
+        }
+        let new_threads = NewThreads {
+            tools: tools.specs(),
+            ..NewThreads::default()
+        };
+        let mut registry = Registry::new();
+        register(
+            &mut registry,
+            script.clone(),
+            tools,
+            None,
+            fast(),
+            Live::default(),
+        );
+        let engine = Engine::open(store.clone(), registry, EngineSettings::default()).unwrap();
+        engine.resume();
+        Agent::new(engine, new_threads)
+    };
+
+    let agent = with(&[]);
+    let id = agent.submit("t1", input("hi")).unwrap();
+    settled(&agent, &id).await;
+    assert!(offered(0).is_empty());
+    agent.engine().close().unwrap();
+
+    let agent = with(&["search", "weather"]);
+    let id = agent.submit("t1", input("again")).unwrap();
+    settled(&agent, &id).await;
+    assert_eq!(offered(1), ["search", "weather"]);
+    agent.engine().close().unwrap();
+
+    let agent = with(&["weather"]);
+    let id = agent.submit("t1", input("and again")).unwrap();
+    settled(&agent, &id).await;
+    assert_eq!(offered(2), ["weather"]);
+}
+
 #[tokio::test]
 async fn a_request_id_submits_once() {
     let script = Script::new(vec![Reply::Text("hello")]);

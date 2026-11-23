@@ -3,7 +3,7 @@
 //! Each space's agent keeps its files in `<dir>/<space>`. The host says per space, with
 //! `configure`, whose models it runs on and which tools it has; the keys are the process's,
 //! from its environment: `ANTHROPIC_API_KEY`, `FIREWORKS_API_KEY`, `BASETEN_API_KEY`, whichever
-//! the host has. A space never configured runs on `TOKIDOKI_PROVIDER` (`anthropic` unless
+//! the host has, and `EXA_API_KEY` for web search. A space never configured runs on `TOKIDOKI_PROVIDER` (`anthropic` unless
 //! set). `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL` run other models than a provider's
 //! usual. stdout is the protocol and nothing else; what would be logged goes to stderr.
 
@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result, bail};
 use tokidoki::serve::{self, Open};
+use tokidoki::tools::WebSearch;
 use tokidoki::{Config, Setup, Spaces, Tokidoki, Tools, Vendor};
 use tokio::io::BufReader;
 use tokio::signal::unix::{SignalKind, signal};
@@ -27,33 +28,55 @@ async fn main() {
     std::process::exit(served.is_err().into());
 }
 
-/// The keys the host gave, one per provider it has one for.
-struct Keys(Vec<(Vendor, String)>);
+/// The keys the host gave: one per provider it has one for, and the tools' own.
+struct Keys {
+    providers: Vec<(Vendor, String)>,
+    exa: Option<String>,
+}
 
 impl Keys {
     /// Read once: the environment is the host's settings as they were when it started this.
     fn from_env() -> Self {
-        let keys = Vendor::ALL.into_iter().filter_map(|vendor| {
-            let key = std::env::var(vendor.key_var()).ok()?;
-            (!key.is_empty()).then_some((vendor, key))
-        });
-        Self(keys.collect())
+        let var = |name: &str| std::env::var(name).ok().filter(|key| !key.is_empty());
+        Self {
+            providers: Vendor::ALL
+                .into_iter()
+                .filter_map(|vendor| Some((vendor, var(vendor.key_var())?)))
+                .collect(),
+            exa: var(WebSearch::KEY_VAR),
+        }
     }
 
     fn get(&self, vendor: Vendor) -> Option<&str> {
-        self.0
+        self.providers
             .iter()
             .find(|(v, _)| *v == vendor)
             .map(|(_, key)| key.as_str())
     }
-}
 
-/// The process's tools by name, those `setup.tools` asks for. None yet.
-fn tools(setup: &Setup) -> Result<Tools> {
-    if let Some(name) = setup.tools.first() {
-        bail!("unknown tool {name}");
+    /// The tools this process knows, and whether it has what each needs to run: `ready`
+    /// tells the host, which offers the user only those it can.
+    fn tools(&self) -> serde_json::Value {
+        serde_json::json!({ WebSearch::NAME: self.exa.is_some() })
     }
-    Ok(Tools::new())
+
+    /// Those of them `setup` asks for. One whose key is missing is left out, so the space
+    /// still opens and `configure` answers with the tools it really has; a name this
+    /// process doesn't know is the host's mistake.
+    fn tools_for(&self, setup: &Setup) -> Result<Tools> {
+        let mut tools = Tools::new();
+        for name in &setup.tools {
+            match name.as_str() {
+                WebSearch::NAME => {
+                    if let Some(key) = &self.exa {
+                        tools.add(WebSearch::new(key));
+                    }
+                }
+                _ => bail!("unknown tool {name}"),
+            }
+        }
+        Ok(tools)
+    }
 }
 
 async fn run() -> Result<()> {
@@ -80,7 +103,7 @@ async fn run() -> Result<()> {
     let about = serde_json::json!({
         "providers": providers,
         "default_provider": default.provider.id(),
-        "tools": {},
+        "tools": keys.tools(),
     });
     // Only the provider, tools and model settings are the host's to pass; the user, speakers
     // and system prompt are tokidoki's own (`chat` reads them, a host's environment shouldn't).
@@ -90,7 +113,7 @@ async fn run() -> Result<()> {
         let config = Config::new(data, setup.provider, key.unwrap_or_default().to_string())
             .with_models_from_env();
         match key {
-            Some(_) => Tokidoki::open(config, tools(setup)?),
+            Some(_) => Tokidoki::open(config, keys.tools_for(setup)?),
             None => {
                 Tokidoki::open_asleep(config, format!("{} is not set", setup.provider.key_var()))
             }
