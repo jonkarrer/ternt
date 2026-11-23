@@ -17,7 +17,7 @@ mod events;
 pub mod serve;
 mod spaces;
 
-pub use spaces::Spaces;
+pub use spaces::{Setup, Spaces};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -240,6 +240,16 @@ pub struct Parts<M> {
     pub journal: Option<telemetry::Recording>,
 }
 
+/// What a tokidoki runs on, for whoever embeds it to show (`Tokidoki::about`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct About {
+    pub provider: Vendor,
+    /// The model that answers.
+    pub model: String,
+    /// The tools its new threads get, by name.
+    pub tools: Vec<String>,
+}
+
 /// The running system; cheap to clone.
 #[derive(Clone)]
 pub struct Tokidoki {
@@ -255,6 +265,7 @@ struct Inner {
     store: Arc<Sqlite>,
     speakers: Vec<String>,
     journal: Option<telemetry::Recording>,
+    about: About,
     /// Why it runs nothing, when it doesn't (`open_asleep`).
     asleep: Option<String>,
 }
@@ -322,6 +333,11 @@ impl Tokidoki {
             provider: provider(),
             request: answers(),
         });
+        let about = About {
+            provider: config.provider,
+            model: config.model.clone(),
+            tools: tools.specs().into_iter().map(|t| t.name).collect(),
+        };
         let parts = Parts {
             store,
             model,
@@ -335,15 +351,20 @@ impl Tokidoki {
             speakers: config.speakers,
             journal,
         };
-        Self::assemble(parts, asleep)
+        Self::assemble(parts, asleep, about)
     }
 
     /// Puts given parts together (another model, a test double), and resumes.
     pub fn build<M: Model>(parts: Parts<M>) -> Result<Self> {
-        Self::assemble(parts, None)
+        let about = About {
+            provider: Vendor::Anthropic,
+            model: "built".into(),
+            tools: parts.tools.specs().into_iter().map(|t| t.name).collect(),
+        };
+        Self::assemble(parts, None, about)
     }
 
-    fn assemble<M: Model>(parts: Parts<M>, asleep: Option<String>) -> Result<Self> {
+    fn assemble<M: Model>(parts: Parts<M>, asleep: Option<String>, about: About) -> Result<Self> {
         // The engine keeps the span it is opened in, for everything it runs.
         let _recorded = span_of(&parts.journal).entered();
         let new_threads = NewThreads {
@@ -380,9 +401,20 @@ impl Tokidoki {
                 store: parts.store,
                 speakers: parts.speakers,
                 journal: parts.journal,
+                about,
                 asleep,
             }),
         })
+    }
+
+    /// What it runs on.
+    pub fn about(&self) -> &About {
+        &self.inner.about
+    }
+
+    /// Why it takes no input, if it doesn't (`open_asleep`: no key for its provider).
+    pub fn asleep(&self) -> Option<&str> {
+        self.inner.asleep.as_deref()
     }
 
     /// Stops running work (it resumes when the system is opened again), waits until it has

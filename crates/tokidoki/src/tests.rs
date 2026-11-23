@@ -506,6 +506,58 @@ async fn spaces_are_separate_tokidokis() {
     spaces.close_all().await.unwrap();
 }
 
+/// A space runs as `configure` last said: the setup is kept for later opens, a changed one
+/// reopens the space on the new provider with what it had, and a deleted space forgets it.
+#[tokio::test]
+async fn a_space_runs_as_it_was_configured() {
+    let root = Scratch::new("configure");
+    let spaces = Spaces::new(&root.0).with_default(Setup {
+        provider: Vendor::Fireworks,
+        tools: Vec::new(),
+    });
+    let open = |data: &std::path::Path, setup: &Setup| {
+        Tokidoki::open(
+            Config::new(data, setup.provider, "no-key".into()),
+            Tools::new(),
+        )
+    };
+    let owner = Speaker::owner();
+
+    let dev = spaces.open_with("dev", open).await.unwrap();
+    assert_eq!(dev.about().provider, Vendor::Fireworks);
+    dev.remember(&owner, "Uses Rust").unwrap();
+    let anthropic = Setup {
+        provider: Vendor::Anthropic,
+        tools: vec!["x".into()],
+    };
+    let switched = spaces
+        .configure("dev", anthropic.clone(), open)
+        .await
+        .unwrap();
+    assert!(
+        dev.is_closed(),
+        "a changed setup closes the agent that ran the old one"
+    );
+    assert_eq!(switched.about().provider, Vendor::Anthropic);
+    assert_eq!(
+        switched.memories(&owner).unwrap().len(),
+        1,
+        "with what it had"
+    );
+    let same = spaces
+        .configure("dev", anthropic.clone(), open)
+        .await
+        .unwrap();
+    assert!(!switched.is_closed() && Arc::ptr_eq(&same.inner, &switched.inner));
+    spaces.close("dev").await.unwrap();
+    assert_eq!(spaces.setup("dev"), anthropic, "kept while closed");
+    let reopened = spaces.open_with("dev", open).await.unwrap();
+    assert_eq!(reopened.about().provider, Vendor::Anthropic);
+    spaces.delete("dev").await.unwrap();
+    assert_eq!(spaces.setup("dev").provider, Vendor::Fireworks);
+    spaces.close_all().await.unwrap();
+}
+
 /// Opened asleep (no key to run with), a tokidoki shows what it has and takes no input.
 #[tokio::test]
 async fn asleep_it_can_be_read_and_takes_no_input() {
@@ -521,7 +573,12 @@ async fn asleep_it_can_be_read_and_takes_no_input() {
     awake.close().await.unwrap();
 
     let why = Some("no key".to_string());
-    let asleep = Tokidoki::assemble(parts(Vec::new(), store()).0, why).unwrap();
+    let about = About {
+        provider: Vendor::Anthropic,
+        model: "built".into(),
+        tools: Vec::new(),
+    };
+    let asleep = Tokidoki::assemble(parts(Vec::new(), store()).0, why, about).unwrap();
     let threads = asleep.threads().unwrap();
     assert_eq!(threads.len(), 1);
     assert_eq!(threads[0].id, sent.thread);
@@ -548,11 +605,21 @@ impl Sidecar {
         let root = Scratch::new(name);
         let (to, input) = tokio::io::duplex(1 << 16);
         let (output, from) = tokio::io::duplex(1 << 16);
-        let open: serve::Open = Arc::new(move |_| Ok(start(replies()).0));
+        // The test double has no files: a reopen starts empty, which is how the tests below
+        // see that `configure` reopened a space. Its `about` says what setup it was given.
+        let open: serve::Open = Arc::new(move |_, setup: &Setup| {
+            let (parts, _) = parts(replies(), Sqlite::memory().unwrap());
+            let about = About {
+                provider: setup.provider,
+                model: "built".into(),
+                tools: setup.tools.clone(),
+            };
+            Tokidoki::assemble(parts, None, about)
+        });
         let served = tokio::spawn(serve::run(
             Arc::new(Spaces::new(&root.0)),
             open,
-            json!({ "provider": "anthropic" }),
+            json!({ "default_provider": "anthropic" }),
             tokio::io::BufReader::new(input),
             output,
         ));
@@ -598,7 +665,7 @@ async fn the_sidecar_speaks_the_line_protocol() {
     let mut sidecar = Sidecar::start("sidecar", || vec![Reply::Streamed("Hello there.")]);
     let ready = sidecar.read().await;
     assert_eq!(ready["ready"]["backend"], "tokidoki");
-    assert_eq!(ready["ready"]["provider"], "anthropic");
+    assert_eq!(ready["ready"]["default_provider"], "anthropic");
 
     sidecar
         .write(json!({ "id": 1, "method": "threads", "space": "space-7" }))
@@ -655,6 +722,36 @@ async fn the_sidecar_speaks_the_line_protocol() {
         .write(json!({ "id": 11, "method": "wipe", "space": "space-7" }))
         .await;
     assert_eq!(sidecar.read().await, json!({ "id": 11, "result": null }));
+
+    // `configure` says how a space runs: the same setup leaves it as it is, another reopens
+    // it (the double keeps nothing, so its thread is gone; tokidoki's are on disk).
+    let configure = |id, params: Value| json!({ "id": id, "method": "configure", "space": "space-7", "params": params });
+    sidecar.write(configure(12, json!({}))).await;
+    let same = sidecar.read().await;
+    assert_eq!(same["result"]["provider"], "anthropic");
+    assert_eq!(same["result"]["has_key"], true);
+    assert_eq!(same["result"]["tools"], json!([]));
+    sidecar
+        .write(json!({ "id": 13, "method": "threads", "space": "space-7" }))
+        .await;
+    assert_eq!(sidecar.read().await["result"].as_array().unwrap().len(), 1);
+    sidecar
+        .write(configure(
+            14,
+            json!({ "provider": "fireworks", "tools": ["b", "a", "a"] }),
+        ))
+        .await;
+    let changed = sidecar.read().await;
+    assert_eq!(changed["result"]["provider"], "fireworks");
+    assert_eq!(changed["result"]["tools"], json!(["a", "b"]));
+    sidecar
+        .write(json!({ "id": 15, "method": "threads", "space": "space-7" }))
+        .await;
+    assert_eq!(sidecar.read().await, json!({ "id": 15, "result": [] }));
+    sidecar
+        .write(configure(16, json!({ "provider": "openai" })))
+        .await;
+    assert!(sidecar.read().await["error"].is_string());
     sidecar
         .write(json!({ "id": 9, "method": "close", "space": "space-7" }))
         .await;

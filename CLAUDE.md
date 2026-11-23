@@ -7,13 +7,15 @@ sidecar behaves; the contract between the two is ternt's `docs/AGENT-SIDECAR.md`
 
 ## Standing decisions
 
-- **Scope: a chat with memory.** No requests from the sidecar back to ternt (tabs, pages,
-  terminals), no key per space, nothing shared between spaces, until the owner says so.
-- **Bring your own key, macOS only.** Keys reach the process only through its environment:
-  `TOKIDOKI_PROVIDER` and that provider's key (`fireworks`, which ternt sends by default;
-  `anthropic`, the process's own default when the variable is absent; `baseten`). Never in a
-  file, never in the repo. The sidecar reads nothing else from the host's environment but
-  `TOKIDOKI_MODEL` / `TOKIDOKI_ROUTER_MODEL`.
+- **Scope: a chat with memory, and tools that need no browser** (web search first). No
+  requests from the sidecar back to ternt (tabs, pages, terminals), no key per space, nothing
+  shared between spaces, until the owner says so.
+- **Bring your own key, macOS only.** Keys reach the process only through its environment
+  (`ANTHROPIC_API_KEY`, `FIREWORKS_API_KEY`, `BASETEN_API_KEY`, whichever the host has). Never
+  in a file, never in the repo. The sidecar reads nothing else from the host's environment
+  but `TOKIDOKI_PROVIDER` (the default provider) and `TOKIDOKI_MODEL` / `TOKIDOKI_ROUTER_MODEL`.
+- **Provider and tools are per space** (the owner's decision, 2026-11-23): the host says them
+  with `configure`; keys stay per process. Since 2026-11-23.
 - **Sidecar, not in-process.** A crash in an agent must never end the browser.
 - Both repos are developed by the same agent since 2026-11-21: change ternt and tokidoki
   together when the contract moves; after `just types` here, `just sync-protocol` in ternt

@@ -1,9 +1,10 @@
 //! `tokidoki-serve --data <dir>`: tokidoki as a sidecar process (`tokidoki::serve`).
 //!
-//! Each space's agent keeps its files in `<dir>/<space>`. Whose models they run on comes from
-//! the environment: `TOKIDOKI_PROVIDER` (`anthropic`, the default, `fireworks` or `baseten`)
-//! and that provider's key (`ANTHROPIC_API_KEY`, `FIREWORKS_API_KEY`, `BASETEN_API_KEY`);
-//! `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL` to run other models than the provider's
+//! Each space's agent keeps its files in `<dir>/<space>`. The host says per space, with
+//! `configure`, whose models it runs on and which tools it has; the keys are the process's,
+//! from its environment: `ANTHROPIC_API_KEY`, `FIREWORKS_API_KEY`, `BASETEN_API_KEY`, whichever
+//! the host has. A space never configured runs on `TOKIDOKI_PROVIDER` (`anthropic` unless
+//! set). `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL` run other models than a provider's
 //! usual. stdout is the protocol and nothing else; what would be logged goes to stderr.
 
 use std::path::{Path, PathBuf};
@@ -11,7 +12,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result, bail};
 use tokidoki::serve::{self, Open};
-use tokidoki::{Config, Spaces, Tokidoki, Tools};
+use tokidoki::{Config, Setup, Spaces, Tokidoki, Tools, Vendor};
 use tokio::io::BufReader;
 use tokio::signal::unix::{SignalKind, signal};
 
@@ -26,6 +27,35 @@ async fn main() {
     std::process::exit(served.is_err().into());
 }
 
+/// The keys the host gave, one per provider it has one for.
+struct Keys(Vec<(Vendor, String)>);
+
+impl Keys {
+    /// Read once: the environment is the host's settings as they were when it started this.
+    fn from_env() -> Self {
+        let keys = Vendor::ALL.into_iter().filter_map(|vendor| {
+            let key = std::env::var(vendor.key_var()).ok()?;
+            (!key.is_empty()).then_some((vendor, key))
+        });
+        Self(keys.collect())
+    }
+
+    fn get(&self, vendor: Vendor) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(v, _)| *v == vendor)
+            .map(|(_, key)| key.as_str())
+    }
+}
+
+/// The process's tools by name, those `setup.tools` asks for. None yet.
+fn tools(setup: &Setup) -> Result<Tools> {
+    if let Some(name) = setup.tools.first() {
+        bail!("unknown tool {name}");
+    }
+    Ok(Tools::new())
+}
+
 async fn run() -> Result<()> {
     let data = match std::env::args().skip(1).collect::<Vec<_>>().as_slice() {
         [flag, dir] if flag == "--data" => PathBuf::from(dir),
@@ -38,29 +68,36 @@ async fn run() -> Result<()> {
         bail!("another tokidoki is serving {}", data.display());
     }
 
-    // Read once: the environment is the host's settings as they were when it started this.
-    let provider = Config::provider_from_env()?;
-    let key = std::env::var(provider.key_var())
-        .ok()
-        .filter(|key| !key.is_empty());
-    let has_key = key.is_some();
-    // Only the provider and model settings are the host's to pass; the user, speakers and
-    // system prompt are tokidoki's own (`chat` reads them, a host's environment shouldn't).
-    let config = move |data: &Path| {
-        Config::new(data, provider, key.clone().unwrap_or_default()).with_models_from_env()
+    let keys = Keys::from_env();
+    let default = Setup {
+        provider: Config::provider_from_env()?,
+        tools: Vec::new(),
     };
+    let providers: serde_json::Map<String, serde_json::Value> = Vendor::ALL
+        .iter()
+        .map(|v| (v.id().to_string(), keys.get(*v).is_some().into()))
+        .collect();
     let about = serde_json::json!({
-        "provider": provider.id(),
-        "model": config(&data).model,
-        "has_key": has_key,
+        "providers": providers,
+        "default_provider": default.provider.id(),
+        "tools": {},
     });
-    // Without the key an agent runs nothing, and what it has can still be read.
-    let open = move |data: &Path| match has_key {
-        true => Tokidoki::open(config(data), Tools::new()),
-        false => Tokidoki::open_asleep(config(data), format!("{} is not set", provider.key_var())),
+    // Only the provider, tools and model settings are the host's to pass; the user, speakers
+    // and system prompt are tokidoki's own (`chat` reads them, a host's environment shouldn't).
+    // Without the provider's key an agent runs nothing, and what it has can still be read.
+    let open = move |data: &Path, setup: &Setup| {
+        let key = keys.get(setup.provider);
+        let config = Config::new(data, setup.provider, key.unwrap_or_default().to_string())
+            .with_models_from_env();
+        match key {
+            Some(_) => Tokidoki::open(config, tools(setup)?),
+            None => {
+                Tokidoki::open_asleep(config, format!("{} is not set", setup.provider.key_var()))
+            }
+        }
     };
 
-    let spaces = Arc::new(Spaces::new(&data));
+    let spaces = Arc::new(Spaces::new(&data).with_default(default));
     let serving = serve::run(
         spaces.clone(),
         Arc::new(open) as Open,

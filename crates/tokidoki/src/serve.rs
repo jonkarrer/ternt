@@ -8,7 +8,8 @@
 //!   {"id":12,"result":{...}}  or  {"id":12,"error":"..."}                  its answer, out
 //!   {"space":"space-7","event":{...}}                                      an event, out
 //!
-//! One agent per space (`Spaces`), opened by the first request that names it. Requests are
+//! One agent per space (`Spaces`), opened by the first request that names it, as `configure`
+//! said it should run (its provider, its tools) or as the process's default. Requests are
 //! answered as each finishes, in any order; a space's events are in the order they happened.
 
 use std::path::Path;
@@ -23,14 +24,14 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
-use crate::{Spaces, Tokidoki};
+use crate::{Setup, Spaces, Tokidoki};
 
 /// How long agents get to stop once the program says `shutdown` (or sends SIGTERM): it
 /// waits 300 ms, then kills. What is cut off resumes at the next start.
 pub const STOP_BUDGET: Duration = Duration::from_millis(150);
 
-/// Opens the agent whose files are in a folder.
-pub type Open = Arc<dyn Fn(&Path) -> Result<Tokidoki> + Send + Sync>;
+/// Opens the agent whose files are in a folder, to run as a setup says.
+pub type Open = Arc<dyn Fn(&Path, &Setup) -> Result<Tokidoki> + Send + Sync>;
 
 #[derive(Debug, Deserialize)]
 struct Request {
@@ -147,6 +148,20 @@ impl Server {
         match request.method.as_str() {
             "close" => return self.spaces.close(&space).await.map(|()| Value::Null),
             "delete" => return self.spaces.delete(&space).await.map(|()| Value::Null),
+            "configure" => {
+                let mut setup = self.spaces.setup(&space);
+                if let Some(provider) = params["provider"].as_str() {
+                    setup.provider = provider.parse().context("params.provider")?;
+                }
+                if !params["tools"].is_null() {
+                    setup.tools = param(&params, "tools")?;
+                    setup.tools.sort();
+                    setup.tools.dedup();
+                }
+                let open = self.opener(&space);
+                let agent = self.spaces.configure(&space, setup, open).await?;
+                return Ok(describe(&agent));
+            }
             _ => {}
         }
         let agent = self.agent(&space).await?;
@@ -179,8 +194,13 @@ impl Server {
 
     /// The space's agent, opened if it isn't, its events on their way out from the start.
     async fn agent(&self, space: &str) -> Result<Tokidoki> {
-        let open = |data: &Path| {
-            let agent = (self.open)(data)?;
+        self.spaces.open_with(space, self.opener(space)).await
+    }
+
+    /// Opens a space's agent with its events on their way out from the start.
+    fn opener<'a>(&'a self, space: &'a str) -> impl FnOnce(&Path, &Setup) -> Result<Tokidoki> + 'a {
+        move |data: &Path, setup: &Setup| {
+            let agent = (self.open)(data, setup)?;
             let (mut events, out, space) = (agent.events(), self.out.clone(), space.to_string());
             tokio::spawn(async move {
                 while let Some(event) = events.recv().await {
@@ -190,9 +210,20 @@ impl Server {
                 }
             });
             Ok(agent)
-        };
-        self.spaces.open_with(space, open).await
+        }
     }
+}
+
+/// What `configure` answers: how the agent runs now.
+fn describe(agent: &Tokidoki) -> Value {
+    let about = agent.about();
+    json!({
+        "provider": about.provider.id(),
+        "model": about.model,
+        "tools": about.tools,
+        "has_key": agent.asleep().is_none(),
+        "asleep": agent.asleep(),
+    })
 }
 
 /// One of a request's `params`.

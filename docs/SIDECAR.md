@@ -23,24 +23,27 @@ tokidoki-serve --data <dir>
   unfinished work), `memory.db` (what it knows), `tokidoki.journal.db` (what it did, for
   `just inspect --data <dir>/<space>`). Nothing is shared between spaces. A space's name is
   lowercase letters, digits, `-` and `_`.
-- The provider is the user's choice, and comes from the environment with their key for it:
+- **Which provider a space runs on is the host's choice per space**, said with `configure`
+  (below); **the keys are the process's**, from its environment, whichever the host has:
 
-  | `TOKIDOKI_PROVIDER` | key | answers with | routes with |
+  | provider | key | answers with | routes with |
   | --- | --- | --- | --- |
-  | `anthropic` (the default) | `ANTHROPIC_API_KEY` | `claude-opus-5-5` | `claude-haiku-5-5` |
+  | `anthropic` | `ANTHROPIC_API_KEY` | `claude-opus-5-5` | `claude-haiku-5-5` |
   | `fireworks` | `FIREWORKS_API_KEY` | `accounts/fireworks/models/deepseek-v4p1-flash` | `accounts/fireworks/models/deepseek-v4p1-flash` |
   | `baseten` | `BASETEN_API_KEY` | `deepseek-ai/DeepSeek-V4-Pro` | `deepseek-ai/DeepSeek-V4.1-Flash` |
 
-  One provider does everything: answering, the memory work, and routing a message to its
-  thread. `TOKIDOKI_MODELS=cheap` picks the provider's cheapest models (what tests run on);
-  `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL` name models outright.
-  The environment is read once, at start: a changed provider, key or model takes a restart.
-  A provider it doesn't know ends the process at once, with a message on stderr. Nothing else
-  in the host's environment is read: `TOKIDOKI_USER`, `TOKIDOKI_SPEAKERS` and `TOKIDOKI_SYSTEM`
-  are `chat`'s, not a host's.
-- Without the provider's key the process still starts and its agents open asleep: `threads`,
-  `history` and the memory methods answer from what is on disk, unfinished work waits for a
-  start with a key, and `send` answers with an error such as `FIREWORKS_API_KEY is not set`.
+  A space's provider does everything for it: answering, the memory work, and routing a
+  message to its thread. A space never configured runs on `TOKIDOKI_PROVIDER` (`anthropic`
+  unless set). `TOKIDOKI_MODELS=cheap` picks each provider's cheapest models (what tests run
+  on); `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL` name models outright, for every provider.
+  The environment is read once, at start: a changed key or model takes a restart; a changed
+  provider or tool set for a space takes only another `configure`. Nothing else in the host's
+  environment is read: `TOKIDOKI_USER`, `TOKIDOKI_SPEAKERS` and `TOKIDOKI_SYSTEM` are
+  `chat`'s, not a host's.
+- Without its provider's key an agent opens asleep: `threads`, `history` and the memory
+  methods answer from what is on disk, unfinished work waits for a start with a key, and
+  `send` answers with an error such as `FIREWORKS_API_KEY is not set`. `configure` says so
+  too (`has_key: false`, `asleep: "FIREWORKS_API_KEY is not set"`).
 - A thread begun on one provider goes on under another: what was said is kept, and the
   earlier model's thinking is left out of what the new one is sent.
 - stdout carries the protocol and nothing else. Warnings go to stderr.
@@ -56,13 +59,15 @@ JSON, one object per line.
 
 ```
 {"ready":{"backend":"tokidoki","version":"0.1.0",                      the first line out
-          "provider":"anthropic","model":"claude-opus-5-5","has_key":true}}
+          "providers":{"anthropic":true,"fireworks":false,"baseten":false},
+          "default_provider":"anthropic","tools":{}}}
 {"id":12,"method":"send","space":"space-7","params":{"input":{...}}}    a request, in
 {"id":12,"result":{...}}   or   {"id":12,"error":"..."}                 its answer, out
 {"space":"space-7","event":{...}}                                       an event, out
 ```
 
-An agent opens on the first request that names its space. Requests are answered as each
+`ready` says which providers the process has a key for, and which tools it can offer (none
+yet). An agent opens on the first request that names its space. Requests are answered as each
 finishes, in any order. A space's events come in the order they happened, and each is an
 `interface::Event` (`crates/interface/protocol.ts` in TypeScript). A line that isn't a
 request is reported on stderr and skipped.
@@ -73,6 +78,7 @@ In ternt's contract:
 
 | method | params | result |
 | --- | --- | --- |
+| `configure` | `{ "provider": str?, "tools": [str]? }` | `{ provider, model, tools, has_key, asleep }`: how the space's agent runs from now on. A part left out keeps its value. Nothing changed: the agent stays as it is; something did: it is stopped and opened again so (its work resumes). The host calls this before a space's first other request and whenever its settings change; a space never configured runs on the process's default provider with no tools |
 | `send` | `{ "input": Input, "label": str }` | `Sent`, as soon as the input is placed. `label` is the space's name as the host calls it: threads started from then on are told it after the system prompt |
 | `threads` | | `[ThreadSummary]`, most recently active first |
 | `history` | `{ "thread": id, "since": n }` | `[Event]`: the thread's checkpoints from `n` |
@@ -97,14 +103,8 @@ these still sees what an agent learns.
 
 ## Where tokidoki and the contract don't quite meet
 
-- **The provider.** The contract knows one key, Anthropic's. `TOKIDOKI_PROVIDER`, the two
-  other keys, the model variables and the ready line's `provider`, `model` and `has_key`
-  are tokidoki's additions.
-
-- **One provider and key for every space.** The environment holds one, so a space can't
-  have its own (a work account, say). That would take a key in the request that opens it.
 - **Nothing flows the other way.** The process never asks the host for anything, so an
-  agent can't yet act on its space (tabs, terminals). Tools will need requests from the
+  agent can't yet act on its space (tabs, terminals). Such tools will need requests from the
   process to the host, answered like the host's own.
-- **Deleting a space.** The contract has no way to say a space is gone; `delete` above is
-  what it would call.
+- **Keys are per process, not per space.** A space picks its provider; it can't bring its
+  own key for it (a work account, say). That would take a key in `configure`.
