@@ -18,16 +18,21 @@
 //!    (coverage, and BM25 over every card) agreeing on one thread.
 //! 4. Nothing in common: the input shares no word with any card and doesn't look back at
 //!    anything, so it's a new thread.
-//! 5. Classifier: a trained model run locally (e.g. a fine-tuned BERT), when one is set.
+//! 5. Classifier: something far cheaper than a chat model, when one is set: Jev (`jev`), or a
+//!    trained model run locally. Taken only when it is sure.
 //! 6. Model: a fast model, only for what's left: inputs with some evidence for a thread, or
 //!    that look back at something no card matches.
 
 pub mod cues;
+pub mod jev;
 pub mod search;
 
 pub use cues::{RouteCue, RouteDetector, RouteSignal};
+pub use jev::JevClassifier;
 
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -151,12 +156,21 @@ impl Route {
     }
 }
 
-/// A trained classifier run locally, between search and the model: cheap per input once
-/// trained. The router's logged decisions (`Event::Routed` in each thread) are its training data.
+/// A classifier's answer: the candidate the input continues (`None` for a new thread) and a
+/// confidence 0–1; `None` altogether when it can't tell.
+pub type Classified = Option<(Option<String>, f32)>;
+
+/// What decides between search and the model, cheap per input: Jev (`JevClassifier`), or a
+/// classifier trained on the router's logged decisions (`Event::Routed` in each thread) and
+/// run locally. It may call out, so it answers later; a failure is "can't tell", and the
+/// model decides.
 pub trait Classifier: Send + Sync {
-    /// The candidate this input continues (`None` for a new thread) and a confidence 0–1;
-    /// `None` when it can't tell.
-    fn classify(&self, input: &Input, candidates: &[&ThreadView]) -> Option<(Option<String>, f32)>;
+    fn classify<'a>(
+        &'a self,
+        input: &'a Input,
+        last: Option<&'a ThreadView>,
+        candidates: &'a [&'a ThreadView],
+    ) -> Pin<Box<dyn Future<Output = Classified> + Send + 'a>>;
 }
 
 pub struct Router<A> {
@@ -376,11 +390,15 @@ impl<A: Api> Router<A> {
             .collect();
 
         // 5. Classifier.
-        if let Some((choice, confidence)) = self
-            .classifier
-            .as_ref()
-            .and_then(|c| c.classify(input, &candidates))
-            .filter(|(_, confidence)| *confidence >= self.classifier_min)
+        let classified = match &self.classifier {
+            Some(classifier) => classifier.classify(input, last, &candidates).await,
+            None => None,
+        };
+        if let Some((choice, confidence)) = &classified {
+            tracing::debug!(to = ?choice, confidence, min = self.classifier_min, "route classifier");
+        }
+        if let Some((choice, confidence)) =
+            classified.filter(|(_, confidence)| *confidence >= self.classifier_min)
         {
             let reason = format!("classified ({confidence:.2})");
             return Ok(match choice {
@@ -449,18 +467,18 @@ fn still_on_subject(store: &dyn Checkpointer, thread: &ThreadView, text: &str) -
 }
 
 /// What routing knows about a thread: its title and card.
-fn card_doc(view: &ThreadView) -> String {
+pub(crate) fn card_doc(view: &ThreadView) -> String {
     match &view.card {
         Some(card) => format!("{}\n{}", view.info.title, card.text),
         None => view.info.title.clone(),
     }
 }
 
-fn elapsed(now: SystemTime, at: SystemTime) -> Duration {
+pub(crate) fn elapsed(now: SystemTime, at: SystemTime) -> Duration {
     now.duration_since(at).unwrap_or_default()
 }
 
-fn ago(d: Duration) -> String {
+pub(crate) fn ago(d: Duration) -> String {
     let minutes = d.as_secs() / 60;
     match minutes {
         m if m < 60 => format!("{m} min ago"),
@@ -749,8 +767,13 @@ mod tests {
     struct Always(Option<&'static str>);
 
     impl Classifier for Always {
-        fn classify(&self, _: &Input, _: &[&ThreadView]) -> Option<(Option<String>, f32)> {
-            Some((self.0.map(String::from), 0.9))
+        fn classify<'a>(
+            &'a self,
+            _: &'a Input,
+            _: Option<&'a ThreadView>,
+            _: &'a [&'a ThreadView],
+        ) -> Pin<Box<dyn Future<Output = Classified> + Send + 'a>> {
+            Box::pin(async { Some((self.0.map(String::from), 0.9)) })
         }
     }
 
@@ -774,6 +797,56 @@ mod tests {
             )
             .await,
             Route::cont("kyoto", By::Classifier, "classified (0.90)")
+        );
+    }
+
+    const JAPAN: &str = "Which hotel did we pick for Japan?";
+
+    /// The ambiguous input again, with Jev as the classifier: it is asked one choice
+    /// question over the candidates, by number, and a sure answer is taken.
+    #[tokio::test]
+    async fn jev_decides_before_the_model() {
+        let (base, sent) = inference::jev::testing::server(
+            "200 OK",
+            r#"{"model":"jev-1.14.0","answers":{"choice":{"type":"choice","choice":"2","confidence":0.94}},"usage":{}}"#,
+        )
+        .await;
+        let mut router = router("unused");
+        router.classifier = Some(Box::new(JevClassifier(inference::Jev::at(base, "k"))));
+        let store = store_with(&[KYOTO, METABASE]);
+        let later = Duration::from_secs(3 * 3600);
+        let route = route(&router, &store, input(JAPAN, Some("metabase"), later)).await;
+
+        let sent = sent.lock().unwrap()[0].1.clone();
+        assert_eq!(sent["state"]["message"], JAPAN);
+        let criteria = sent["questions"]["choice"]["criteria"].as_object().unwrap();
+        assert_eq!(criteria.len(), 3, "two threads and new: {criteria:?}");
+        assert!(criteria.contains_key("new"));
+        // The thread the user was last in is offered, and said to be where they were.
+        let last = sent["state"]["the_user_was_last_in"].as_str().unwrap();
+        assert!(criteria[last].as_str().unwrap().contains("Metabase"));
+        let chosen = if last == "2" { "metabase" } else { "kyoto" };
+        assert_eq!(
+            route,
+            Route::cont(chosen, By::Classifier, "classified (0.94)")
+        );
+    }
+
+    /// Jev itself on that input: it picks the Kyoto thread, and is sure enough to be taken.
+    #[tokio::test]
+    #[ignore = "calls TypeSafe"]
+    async fn jev_routes_to_the_thread_a_message_looks_back_at() {
+        let key = std::env::var(inference::Jev::KEY_VAR).expect("set TYPESAFE_API_KEY");
+        let mut router = router("unused");
+        router.classifier = Some(Box::new(JevClassifier(inference::Jev::new(key))));
+        let store = store_with(&[KYOTO, METABASE]);
+        let later = Duration::from_secs(3 * 3600);
+        let started = std::time::Instant::now();
+        let route = route(&router, &store, input(JAPAN, Some("metabase"), later)).await;
+        println!("{route:?} in {:?}", started.elapsed());
+        assert_eq!(
+            (route.target, route.by),
+            (Target::Continue("kyoto".into()), By::Classifier)
         );
     }
 

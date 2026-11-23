@@ -30,14 +30,14 @@ use inference::providers::AnyApi;
 use inference::{Provider, Request};
 use interface::{Feedback, Input, Rejected, Sent, Speaker, Submission, ThreadSummary};
 use memory::{Body, Memory, Scope, Write};
-use router::Router;
+use router::{JevClassifier, Router};
 use state::{Checkpointer, Sqlite};
 use tokio::sync::mpsc;
 use tracing::Instrument;
 
 // Everything an embedding program names, so this crate is the only one it depends on.
 pub use agent::{Settings, Tool, ToolFuture, Tools};
-pub use inference::{Effort, Vendor};
+pub use inference::{Effort, Jev, Vendor};
 pub use interface;
 pub use tools;
 
@@ -66,6 +66,9 @@ pub struct Config {
     pub effort: Effort,
     /// The router's fast model, its last resort.
     pub router_model: String,
+    /// The user's TypeSafe key, when they have one: Jev then routes what the rules and the
+    /// search leave open, and the fast model only what Jev isn't sure of.
+    pub jev: Option<String>,
     pub agent: agent::Settings,
     /// Record to the journal (`telemetry`), for `just inspect`. Each open system records to
     /// the journal in its own `data`, however many run in the process.
@@ -96,7 +99,8 @@ impl std::fmt::Debug for Config {
 impl Config {
     /// From the environment: `TOKIDOKI_PROVIDER` (`anthropic`, the default, `fireworks` or
     /// `baseten`) and that provider's key (`ANTHROPIC_API_KEY`, `FIREWORKS_API_KEY`,
-    /// `BASETEN_API_KEY`: required); `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL` (default:
+    /// `BASETEN_API_KEY`: required); `TYPESAFE_API_KEY` for Jev, if there is one;
+    /// `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL` (default:
     /// the provider's, `Config::models`); `TOKIDOKI_DATA` (default `data`), `TOKIDOKI_USER`
     /// (default `owner`), `TOKIDOKI_SPEAKERS` (comma-separated IDs, default `owner`),
     /// `TOKIDOKI_SYSTEM`.
@@ -104,7 +108,9 @@ impl Config {
         let provider = Self::provider_from_env()?;
         let key = var(provider.key_var())
             .with_context(|| format!("{} is not set", provider.key_var()))?;
-        Ok(Self::new(telemetry::data_dir(), provider, key).with_env())
+        let mut config = Self::new(telemetry::data_dir(), provider, key).with_env();
+        config.jev = var(inference::Jev::KEY_VAR);
+        Ok(config)
     }
 
     /// The provider `TOKIDOKI_PROVIDER` names: Anthropic when it names none.
@@ -203,6 +209,7 @@ impl Config {
             model: model.into(),
             effort: Effort::Low,
             router_model: router_model.into(),
+            jev: None,
             agent: agent::Settings::default(),
             journal: true,
         }
@@ -315,12 +322,15 @@ impl Tokidoki {
         let scope = Scope::user(&config.user);
         let answers = || Request::new(config.model.clone()).effort(config.effort);
         let provider = || Provider::of(config.provider, &config.key);
-        let router = Router::new(
+        let mut router = Router::new(
             provider(),
             Request::new(config.router_model.clone()).thinking(false),
             memory.clone(),
             vec![scope.clone()],
         );
+        if let Some(key) = &config.jev {
+            router.classifier = Some(Box::new(JevClassifier(Jev::new(key))));
+        }
         let experience = Experience::new(
             provider(),
             answers(),
@@ -330,6 +340,10 @@ impl Tokidoki {
                 write: scope.clone(),
             },
         );
+        let experience = match &config.jev {
+            Some(key) => experience.with_jev(Jev::new(key)),
+            None => experience,
+        };
         let model = Arc::new(ProviderModel {
             provider: provider(),
             request: answers(),

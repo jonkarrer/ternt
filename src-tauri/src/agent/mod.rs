@@ -452,6 +452,7 @@ pub async fn agent_set_keys(
     fireworks: Option<String>,
     anthropic: Option<String>,
     exa: Option<String>,
+    typesafe: Option<String>,
 ) -> Result<(), String> {
     if let Some(key) = fireworks {
         keys::FIREWORKS.write(key.trim())?;
@@ -461,6 +462,9 @@ pub async fn agent_set_keys(
     }
     if let Some(key) = exa {
         keys::EXA.write(key.trim())?;
+    }
+    if let Some(key) = typesafe {
+        keys::TYPESAFE.write(key.trim())?;
     }
     restart(&app);
     Ok(())

@@ -14,9 +14,15 @@ sidecar behaves; the contract is `../docs/AGENT-SIDECAR.md`.
   spaces, until the owner says so.
 - **Bring your own key, macOS only.** Keys reach the process only through its environment
   (`ANTHROPIC_API_KEY`, `FIREWORKS_API_KEY`, `BASETEN_API_KEY`, whichever the host has, and
-  `EXA_API_KEY` for the `web_search` tool, in `crates/tools`). Never
+  `EXA_API_KEY` for the `web_search` tool, in `crates/tools`, and `TYPESAFE_API_KEY` for
+  Jev, which routes ahead of the fast model: `inference::jev`, `router::jev`). Never
   in a file, never in the repo. The sidecar reads nothing else from the host's environment
   but `TOKIDOKI_PROVIDER` (the default provider) and `TOKIDOKI_MODEL` / `TOKIDOKI_ROUTER_MODEL`.
+- **Jev is the default for small decisions** (owner, 2026-11-23): what to route where,
+  what to recall, what is worth keeping, and whatever else is a typed judgement rather
+  than writing. It judges, a chat model writes; everything must still work without its key.
+  Routing (`router::jev`) and memory (`experience::sift` and `experience::place` each turn,
+  `experience::screen` each dream) use it so far.
 - **Provider and tools are per space** (owner, 2026-11-23): the host says them with
   `configure`; keys stay per process.
 - **Sidecar, not in-process.** A crash in an agent must never end the browser.

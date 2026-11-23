@@ -6,6 +6,14 @@
 //!   retain / refine  decided by the model: one call with every such signal and the memories
 //!                    related to them, so it can correct a memory instead of duplicating it.
 //!
+//! With Jev (`sift`), a turn's opening message is judged first: which memories would help
+//! answer it, whatever words they use, and whether it says something worth keeping that no
+//! pattern caught. Jev's recall replaces the search's for that message; its retain is one
+//! more signal for the model. A dream (`screen`) likewise asks the model for an episode only
+//! when Jev finds something happened in the turns, and shows it only the memories Jev
+//! suspects of repeating or contradicting each other. And what a signal means for memory
+//! (`place`) is Jev's choice when it is sure, leaving the model only the wording.
+//!
 //! Nothing here may break a turn: a decision that fails becomes `Ignore` with the reason.
 
 use std::collections::{HashMap, HashSet};
@@ -15,12 +23,15 @@ use anyhow::{Context as _, Result, ensure};
 use attention::{Attention, Intent, Signal};
 use context::{Block, Context, Message, Role};
 use inference::providers::Api;
-use inference::{Provider, Request};
+use inference::{Jev, Provider, Request};
 use memory::{Body, Card, Episode, Item, Memory, Scope, Source, Write};
 use serde_json::{Value, json};
 use state::{Checkpoint, Event, Recalled, Thread};
 
+mod place;
+mod screen;
 pub mod settle;
+mod sift;
 pub use settle::RESUME_HANDOFF;
 
 /// Recall brings at most this many memories per query.
@@ -113,6 +124,14 @@ pub struct Experience<A> {
     provider: Provider<A>,
     request: Request,
     scopes: Scopes,
+    /// Makes the small judgements, when the user has a TypeSafe key (`with_jev`): each turn's
+    /// opening message (`sift`), and which memories a dream should look at (`screen`).
+    jev: Option<Jev>,
+    /// The newest memory a dream has screened: pairs of older ones aren't screened again.
+    screened: std::sync::Mutex<i64>,
+    /// Per thread, the turn end up to which Jev found nothing worth an episode: not asked
+    /// again until more turns finish.
+    uneventful: std::sync::Mutex<HashMap<String, usize>>,
     /// Dreaming summarizes once this many finished turns have no episode yet.
     pub summarize_after_turns: usize,
     /// Dreaming compacts once the context holds more messages than this.
@@ -135,10 +154,20 @@ impl<A: Api> Experience<A> {
             provider,
             request,
             scopes,
+            jev: None,
+            screened: std::sync::Mutex::new(0),
+            uneventful: Default::default(),
             summarize_after_turns: 3,
             compact_after_messages: 40,
             keep_recent_messages: 10,
         }
+    }
+
+    /// With Jev sifting each turn's opening message (`sift`) and screening memories for
+    /// each dream's cleanup (`screen`).
+    pub fn with_jev(mut self, jev: Jev) -> Self {
+        self.jev = Some(jev);
+        self
     }
 
     pub fn memory(&self) -> &Memory {
@@ -151,15 +180,32 @@ impl<A: Api> Experience<A> {
     #[tracing::instrument(skip_all)]
     pub async fn consider(&self, thread: &mut Thread) -> Result<Outcome> {
         let upto = thread.checkpoints().len();
-        let signals = self.attention.attend(thread, thread.considered_upto());
+        let mut signals = self.attention.attend(thread, thread.considered_upto());
         if signals.is_empty() {
             return Ok(Outcome::default());
         }
+        let mut outcome = Outcome::default();
+        let mut in_context = recalled_in_context(thread);
+        // Jev's view of the message that opened the turn. Failing, it is as if there were
+        // no Jev: the search recalls, the patterns alone say what to keep.
+        let sifted = match &self.jev {
+            Some(jev) => (self.sift(jev, &signals, &in_context).await).unwrap_or_else(|error| {
+                outcome.failed.push(format!("sifting: {error:#}"));
+                None
+            }),
+            None => None,
+        };
+        signals.extend(sifted.as_ref().and_then(|s| s.retain(&signals)));
+        let sifted_text = sifted.as_ref().map(|s| s.text.as_str());
 
         let (recalls, judged): (Vec<&Signal>, Vec<&Signal>) =
             signals.iter().partition(|s| s.intent == Intent::Recall);
         let mut planned = Vec::new();
-        for signal in recalls {
+        // What Jev judged isn't searched for as well.
+        for signal in recalls
+            .into_iter()
+            .filter(|s| Some(s.text.as_str()) != sifted_text)
+        {
             let recall = Decision::Recall {
                 query: signal.text.clone(),
             };
@@ -167,7 +213,6 @@ impl<A: Api> Experience<A> {
                 planned.push(recall);
             }
         }
-        let mut outcome = Outcome::default();
         if !judged.is_empty() {
             match self.decide(&judged, &thread.id).await {
                 Ok(decisions) => planned.extend(decisions),
@@ -175,7 +220,15 @@ impl<A: Api> Experience<A> {
             }
         }
 
-        let mut in_context = recalled_in_context(thread);
+        if let Some(sifted) = sifted {
+            outcome
+                .decisions
+                .push(Decision::Recall { query: sifted.text });
+            let fresh = |item: &Item| in_context.insert(item.id);
+            outcome
+                .recalled
+                .extend(sifted.relevant.into_iter().filter(fresh));
+        }
         for decision in planned {
             match self.execute(&decision, &mut in_context, &mut outcome) {
                 Ok(()) => outcome.decisions.push(decision),
@@ -241,9 +294,18 @@ impl<A: Api> Experience<A> {
         )?))
     }
 
-    /// One model call for every retain/refine signal, with the memories related to them.
+    /// What to do about the retain/refine signals: placed by Jev when there is one
+    /// (`place`), else decided by the model.
     #[tracing::instrument(skip_all)]
     async fn decide(&self, signals: &[&Signal], thread: &str) -> Result<Vec<Decision>> {
+        match &self.jev {
+            Some(jev) => self.place(jev, signals, thread).await,
+            None => self.decide_by_model(signals, thread).await,
+        }
+    }
+
+    /// One model call for every retain/refine signal, with the memories related to them.
+    async fn decide_by_model(&self, signals: &[&Signal], thread: &str) -> Result<Vec<Decision>> {
         let scopes = self.scopes.searched();
         let mut related: HashMap<i64, Item> = HashMap::new();
         for signal in signals {
@@ -316,8 +378,15 @@ impl<A: Api> Experience<A> {
         if ends.len() < self.summarize_after_turns {
             return Ok(None);
         }
-        let messages = messages(&thread.checkpoints()[start..=end]);
-        let summary = self.ask(SUMMARIZE_PROMPT, transcript(messages)).await?;
+        let turns = transcript(messages(&thread.checkpoints()[start..=end]));
+        // Small talk gets no episode: with Jev, the model is asked only when something
+        // happened. The turns stay unsummarized, and are judged again with the next ones.
+        if let Some(jev) = &self.jev
+            && !self.eventful(jev, &thread.id, end, &turns).await
+        {
+            return Ok(None);
+        }
+        let summary = self.ask(SUMMARIZE_PROMPT, turns).await?;
         Ok(Some(self.memory.add_episode(
             &thread.id,
             self.scopes.write.clone(),
@@ -348,6 +417,20 @@ impl<A: Api> Experience<A> {
         }
         if remaining.len() < 2 {
             return Ok(refined);
+        }
+        // With Jev, the model sees only the memories Jev suspects of saying the same thing or
+        // contradicting each other: usually none, and then it isn't asked at all. Failing,
+        // it sees them all, as without Jev.
+        if let Some(jev) = &self.jev {
+            match self.suspects(jev, &remaining).await {
+                Ok(suspects) => remaining = suspects,
+                Err(error) => {
+                    tracing::warn!(%error, "Jev couldn't screen memories; the model reads them all")
+                }
+            }
+            if remaining.is_empty() {
+                return Ok(refined);
+            }
         }
 
         let payload: Vec<Value> = remaining.iter().map(describe).collect();
@@ -707,7 +790,7 @@ pub(crate) mod tests {
     }
 
     /// Experience over a model nobody answers.
-    fn unreachable() -> Experience<Anthropic> {
+    pub fn unreachable() -> Experience<Anthropic> {
         experience_with(Provider::new(
             Anthropic,
             "Nowhere",

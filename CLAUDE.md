@@ -14,10 +14,12 @@ file is what isn't in the code.
 - **Scope of the agent: a chat with memory, plus tools that need no browser** (web search
   first). No requests from the sidecar back to Ternt until the owner says so.
 - **Bring your own key; provider and tools per space** (owner, 2026-11-23). Settings → Agent →
-  Keys keeps the Fireworks AI, Anthropic and Exa (web search) keys in the Keychain; the sidecar gets every key
+  Keys keeps the Fireworks AI, Anthropic, Exa (web search) and TypeSafe (Jev, routing) keys in the Keychain; the sidecar gets every key
   through its environment and nothing else does. Each space picks its provider (Fireworks
   default) and tools, kept with the space and sent as `configure`; no key per space.
   Development uses the team keys: `doppler run -- just dev tokidoki`.
+- **Jev (TypeSafe) makes the agent's small decisions** when its key is there (owner,
+  2026-11-23): routing and memory so far, more to come. See `tokidoki/CLAUDE.md`.
 - **Secrets** come from Doppler (`doppler run --project ternt --config dev -- …`) or the
   Keychain. Never print a key, never put one on a command line, never commit the updater key.
 

@@ -232,7 +232,7 @@ export interface AgentTagged {
 /** Which keys are set (never their values). Fireworks or Anthropic answers; Exa is web search's. */
 /** Where a key is: nowhere, the Keychain, or Ternt's own environment (development; Settings can't remove it). */
 export type KeySource = "none" | "keychain" | "environment";
-export type AgentKeys = { fireworks: KeySource; anthropic: KeySource; exa: KeySource };
+export type AgentKeys = { fireworks: KeySource; anthropic: KeySource; exa: KeySource; typesafe: KeySource };
 /** A key change: a missing field leaves that key as it is, "" removes it. */
 export type AgentKeyChange = Partial<Record<keyof AgentKeys, string>>;
 

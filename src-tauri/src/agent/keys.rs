@@ -2,7 +2,8 @@
 //! in a file or the repo, and reach the agent only through the sidecar's environment (set on
 //! the process in `sidecar.rs`; see docs/AGENT-SIDECAR.md). The process gets every key the
 //! user has; which one a space's agent uses follows from that space's provider
-//! (`setup.rs`), and a tool's key (Exa, for web search) serves every space with that tool on. A variable already in Ternt's own environment wins: development
+//! (`setup.rs`), a tool's key (Exa, for web search) serves every space with that tool on, and
+//! TypeSafe's (Jev, which routes messages to their conversations) serves every space. A variable already in Ternt's own environment wins: development
 //! (`doppler run -- just dev tokidoki`), where a rebuilt debug binary would otherwise be asked
 //! to confirm Keychain access at every launch.
 
@@ -37,6 +38,13 @@ pub const ANTHROPIC: Key = Key {
 pub const EXA: Key = Key {
     variable: "EXA_API_KEY",
     account: "exa",
+};
+
+/// Jev (TypeSafe), which decides which conversation a message belongs to, in every space,
+/// ahead of the provider's fast model. Optional: without it the provider routes.
+pub const TYPESAFE: Key = Key {
+    variable: "TYPESAFE_API_KEY",
+    account: "typesafe",
 };
 
 /// Where a key is, if anywhere.
@@ -83,7 +91,7 @@ impl Key {
 /// The sidecar's environment: every key the user has, as (variable, value). A key that can't
 /// be read is logged and left out, so the process still starts.
 pub fn load() -> Vec<(&'static str, String)> {
-    [&FIREWORKS, &ANTHROPIC, &EXA]
+    [&FIREWORKS, &ANTHROPIC, &EXA, &TYPESAFE]
         .into_iter()
         .filter_map(|key| match key.read() {
             Ok(value) => value.map(|(value, _)| (key.variable, value)),
@@ -102,6 +110,7 @@ pub struct Present {
     pub fireworks: Source,
     pub anthropic: Source,
     pub exa: Source,
+    pub typesafe: Source,
 }
 
 pub fn present() -> Present {
@@ -116,5 +125,6 @@ pub fn present() -> Present {
         fireworks: source(&FIREWORKS),
         anthropic: source(&ANTHROPIC),
         exa: source(&EXA),
+        typesafe: source(&TYPESAFE),
     }
 }

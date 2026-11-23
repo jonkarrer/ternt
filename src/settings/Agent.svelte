@@ -32,9 +32,17 @@
     },
   ];
   /** Every key Settings keeps: the providers', then the tools'. */
-  const KEYS: { id: keyof AgentKeys; name: string; keyHint: string; where: string }[] = [
+  const KEYS: { id: keyof AgentKeys; name: string; keyHint: string; where: string; what?: string }[] = [
     ...PROVIDERS,
     { id: "exa", name: "Exa", keyHint: "Web search…", where: "dashboard.exa.ai → API keys" },
+    {
+      id: "typesafe",
+      name: "TypeSafe",
+      keyHint: "Optional…",
+      where: "console.typesafe.ai/keys",
+      // Not a provider and not a tool: Jev makes the small decisions in every space.
+      what: "Optional: Jev decides where a message goes and what to recall or remember, quickly and cheaply.",
+    },
   ];
 
   /** The space whose agent is shown and changed (the active one until picked). */
@@ -51,7 +59,7 @@
   let spaceError = $state<string | null>(null);
 
   let keys = $state<AgentKeys | null>(null);
-  let drafts = $state<Record<keyof AgentKeys, string>>({ fireworks: "", anthropic: "", exa: "" });
+  let drafts = $state<Record<keyof AgentKeys, string>>({ fireworks: "", anthropic: "", exa: "", typesafe: "" });
   let saving = $state(false);
   let keyError = $state<string | null>(null);
 
@@ -435,9 +443,9 @@
           {#if source === "environment"}
             From Ternt's own environment (development); Settings can't change it.
           {:else if source === "keychain"}
-            Saved in your Keychain.
+            Saved in your Keychain.{p.what ? ` ${p.what}` : ""}
           {:else}
-            Not set. Make one at {p.where}.
+            {p.what ?? "Not set."} Make one at {p.where}.
           {/if}
         </div>
       </div>

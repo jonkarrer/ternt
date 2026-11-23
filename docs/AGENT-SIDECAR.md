@@ -26,7 +26,7 @@ ternt-agent --data <dir>
   before that space's first other request, which provider its agent runs on and which tools it
   has. The agent answers, routes and remembers with that provider. Ternt is bring-your-own-key:
   the keys live in the user's Keychain (service `com.jokar.ternt`, accounts `fireworks`,
-  `anthropic` and `exa`; `.dev` in debug builds), put there by Settings → Agent → Keys
+  `anthropic`, `exa` and `typesafe`; `.dev` in debug builds), put there by Settings → Agent → Keys
   (`src-tauri/src/agent/keys.rs`), and reach the process this way and no other. A variable
   already in Ternt's own environment wins, for development (`doppler run -- just dev tokidoki`).
   Saving or removing a key restarts the process, since its environment is fixed at start;
@@ -41,6 +41,14 @@ ternt-agent --data <dir>
   no key for still opens, without it: `configure` answers with the tools the agent really
   has. Settings lets a tool be switched on only when its key is there. A tool call shows in
   the panel as a tool row, from the thread's checkpoints like any message.
+- **Jev decides the small things, when there is a TypeSafe key** (`TYPESAFE_API_KEY`,
+  Keychain account `typesafe`, optional, set on the process like the others). It is not a
+  provider and not a tool: in every space, whichever provider answers there, the router
+  asks Jev which conversation a message belongs to before it would ask the provider's fast
+  model, and takes the answer only when Jev is sure; and each turn Jev picks the memories
+  worth recalling for the message and flags a message worth remembering. Without the key,
+  or when Jev fails, the agent works as before (the provider routes, a keyword search
+  recalls). Nothing in `configure` or the ready line says so.
 - The provider and tools are per space (`Space::agent` in the session, `setup.rs`); a key per
   space (a work account for a work space) is not designed: it would need a key in `configure`.
 - tokidoki holds `<dir>/.lock` while it runs: a second process on the same folder exits with code 1

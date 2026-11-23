@@ -197,7 +197,9 @@ through its environment and nothing else ever sees them. A key already in Ternt'
 wins, which is how development runs with the team's keys: `doppler run -- just dev tokidoki`.
 **Each space picks its own provider** (Fireworks AI by default) on the same page; the change
 reaches the running agent at once and its conversations go on. Each space also switches its
-agent's **tools** on or off there: web search for now, through Exa, with your Exa key under Keys. The page also has a **Memory**
+agent's **tools** on or off there: web search for now, through Exa, with your Exa key under Keys. An optional
+TypeSafe key there lets Jev make the agent's small decisions, fast and for very little: which conversation a message
+belongs to, which memories are worth recalling for it, and whether it says something worth remembering. The page also has a **Memory**
 section: what the space's agent has learned, fact by fact, to correct or forget, and a Wipe that
 forgets all of it (the conversations stay).
 

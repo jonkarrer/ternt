@@ -3,7 +3,8 @@
 //! Each space's agent keeps its files in `<dir>/<space>`. The host says per space, with
 //! `configure`, whose models it runs on and which tools it has; the keys are the process's,
 //! from its environment: `ANTHROPIC_API_KEY`, `FIREWORKS_API_KEY`, `BASETEN_API_KEY`, whichever
-//! the host has, and `EXA_API_KEY` for web search. A space never configured runs on `TOKIDOKI_PROVIDER` (`anthropic` unless
+//! the host has, `EXA_API_KEY` for web search, and `TYPESAFE_API_KEY` for Jev, which then
+//! routes inputs to their threads ahead of the fast model. A space never configured runs on `TOKIDOKI_PROVIDER` (`anthropic` unless
 //! set). `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL` run other models than a provider's
 //! usual. stdout is the protocol and nothing else; what would be logged goes to stderr.
 
@@ -13,7 +14,7 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result, bail};
 use tokidoki::serve::{self, Open};
 use tokidoki::tools::WebSearch;
-use tokidoki::{Config, Setup, Spaces, Tokidoki, Tools, Vendor};
+use tokidoki::{Config, Jev, Setup, Spaces, Tokidoki, Tools, Vendor};
 use tokio::io::BufReader;
 use tokio::signal::unix::{SignalKind, signal};
 
@@ -32,6 +33,8 @@ async fn main() {
 struct Keys {
     providers: Vec<(Vendor, String)>,
     exa: Option<String>,
+    /// TypeSafe's, for Jev: every space's router, whichever provider answers there.
+    jev: Option<String>,
 }
 
 impl Keys {
@@ -44,6 +47,7 @@ impl Keys {
                 .filter_map(|vendor| Some((vendor, var(vendor.key_var())?)))
                 .collect(),
             exa: var(WebSearch::KEY_VAR),
+            jev: var(Jev::KEY_VAR),
         }
     }
 
@@ -110,8 +114,9 @@ async fn run() -> Result<()> {
     // Without the provider's key an agent runs nothing, and what it has can still be read.
     let open = move |data: &Path, setup: &Setup| {
         let key = keys.get(setup.provider);
-        let config = Config::new(data, setup.provider, key.unwrap_or_default().to_string())
+        let mut config = Config::new(data, setup.provider, key.unwrap_or_default().to_string())
             .with_models_from_env();
+        config.jev = keys.jev.clone();
         match key {
             Some(_) => Tokidoki::open(config, keys.tools_for(setup)?),
             None => {

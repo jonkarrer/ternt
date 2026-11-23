@@ -33,7 +33,20 @@ tokidoki-serve --data <dir>
   | `baseten` | `BASETEN_API_KEY` | `deepseek-ai/DeepSeek-V4-Pro` | `deepseek-ai/DeepSeek-V4.1-Flash` |
 
   A space's provider does everything for it: answering, the memory work, and routing a
-  message to its thread. A space never configured runs on `TOKIDOKI_PROVIDER` (`anthropic`
+  message to its thread. With `TYPESAFE_API_KEY` set, Jev (TypeSafe's model for typed
+  answers, `inference::jev`) makes the small decisions around a conversation, in every space:
+  it is asked first where a message goes (`router::jev`), the provider's routing model only
+  when Jev isn't sure or doesn't answer in 5 seconds; and at the start of each turn it says
+  which memories would help answer the message and whether the message is worth keeping
+  (`experience::sift`, one request, 2 seconds at most), where otherwise a keyword search
+  recalls and only patterns flag what to keep; what a flagged message means for memory
+  (`experience::place`: something new, a change to one note, or nothing) is Jev's choice when
+  it is at least 0.8 sure, the provider's model then only wording it, and not asked at all for
+  "nothing"; and when a thread dreams (`experience::screen`),
+  Jev says whether the finished turns hold anything worth an episode, so small talk is not
+  summarized, and screens pairs of memories for repeats and contradictions, so the provider's
+  model is asked to clean up only those, and usually isn't asked. A thread's card is always
+  written: routing finds the thread by it. The provider still writes every memory. A space never configured runs on `TOKIDOKI_PROVIDER` (`anthropic`
   unless set). `TOKIDOKI_MODELS=cheap` picks each provider's cheapest models (what tests run
   on); `TOKIDOKI_MODEL` and `TOKIDOKI_ROUTER_MODEL` name models outright, for every provider.
   The environment is read once, at start: a changed key or model takes a restart; a changed
