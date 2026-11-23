@@ -7,9 +7,10 @@ use tauri::{
 };
 
 use crate::{
+    agent,
     browser::{self, TabKind, Zone},
     model::SPACE_COLORS,
-    agent, palette,
+    palette,
     panes::Direction,
     settings, welcome,
 };
@@ -243,14 +244,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         "Help",
         true,
         &[
-            &MenuItem::with_id(
-                app,
-                "help",
-                "Shortcuts and How-Tos",
-                true,
-                Some("Ctrl+H"),
-            )?,
+            &MenuItem::with_id(app, "help", "Shortcuts and How-Tos", true, Some("Ctrl+H"))?,
             &MenuItem::with_id(app, "welcome", "Welcome to Ternt", true, None::<&str>)?,
+            &MenuItem::with_id(app, "onboarding", "Set Up Ternt…", true, None::<&str>)?,
         ],
     )?;
 
@@ -345,6 +341,7 @@ pub fn run_action(app: &AppHandle, id: String) {
             "split-terminal" => browser::split_with_new_terminal(&app),
             "unsplit" => browser::end_group_of_active(&app),
             "welcome" => welcome::open(&app),
+            "onboarding" => crate::onboarding::open(&app),
             // ⌃F typed in a terminal (see `handle`).
             "terminal-explore" => browser::type_in_terminal(&app, "\x06"),
             "terminal-help" => browser::type_in_terminal(&app, "\x08"),

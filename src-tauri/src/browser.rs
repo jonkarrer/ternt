@@ -2335,7 +2335,14 @@ pub async fn set_sidebar_width(app: AppHandle, width: f64) -> Result<f64, String
 
 #[tauri::command]
 pub async fn create_space(app: AppHandle) -> Result<u32, String> {
-    new_space(&app).map_err(err)
+    let id = new_space(&app).map_err(err)?;
+    // On the provider the user has a key for, when that isn't the default one.
+    let provider = crate::agent::preferred_provider();
+    if let Some(mut setup) = space_setup(&app, id).filter(|setup| setup.provider != provider) {
+        setup.provider = provider;
+        set_space_agent(&app, id, setup);
+    }
+    Ok(id)
 }
 
 #[tauri::command]

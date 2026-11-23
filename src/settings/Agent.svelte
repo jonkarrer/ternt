@@ -10,15 +10,9 @@
     type Space,
   } from "../lib/browser";
   import type { Memory } from "../agent/protocol";
+  import { KEYS, PROVIDERS } from "../lib/agentKeys";
 
   let { spaces, activeSpace }: { spaces: Space[]; activeSpace: number | null } = $props();
-
-  // Each space has its own agent (⌘J), and each picks who answers for it and what it may use. The keys are
-  // yours and shared between spaces: in the Keychain, handed to the agent process, nowhere else.
-  const PROVIDERS: { id: AgentProvider; name: string; keyHint: string; where: string }[] = [
-    { id: "fireworks", name: "Fireworks AI", keyHint: "fw_…", where: "fireworks.ai → API keys" },
-    { id: "anthropic", name: "Anthropic", keyHint: "sk-ant-…", where: "console.anthropic.com → API keys" },
-  ];
 
   // What a space's agent can be given to do, each switched on per space. One that needs a
   // key of its own names it; that key is shared between spaces like the providers'.
@@ -31,20 +25,6 @@
       keyName: "Exa",
     },
   ];
-  /** Every key Settings keeps: the providers', then the tools'. */
-  const KEYS: { id: keyof AgentKeys; name: string; keyHint: string; where: string; what?: string }[] = [
-    ...PROVIDERS,
-    { id: "exa", name: "Exa", keyHint: "Web search…", where: "dashboard.exa.ai → API keys" },
-    {
-      id: "typesafe",
-      name: "TypeSafe",
-      keyHint: "Optional…",
-      where: "console.typesafe.ai/keys",
-      // Not a provider and not a tool: Jev makes the small decisions in every space.
-      what: "Optional: Jev decides where a message goes and what to recall or remember, quickly and cheaply.",
-    },
-  ];
-
   /** The space whose agent is shown and changed (the active one until picked). */
   let spaceId = $state<number | null>(null);
   const space = $derived(spaces.find((s) => s.id === spaceId) ?? null);
@@ -70,7 +50,16 @@
     }
   });
 
+  /** Whether the agent is used at all (asked at first launch); `null` until read. */
+  let enabled = $state<boolean | null>(null);
+  function setEnabled(event: Event) {
+    enabled = (event.currentTarget as HTMLInputElement).checked;
+    browser.updatePrefs({ agentEnabled: enabled });
+  }
+
   onMount(() => {
+    browser.getPrefs().then((p) => (enabled = p.agentEnabled));
+    const prefs = browser.onPrefsChanged((p) => (enabled = p.agentEnabled));
     browser.agentKeys().then((k) => (keys = k));
     browser.agentStatus().then((s) => (status = s));
     const statuses = browser.onAgentStatus((s) => {
@@ -84,6 +73,7 @@
     // Coming back from a conversation: the agent may have learned something.
     window.addEventListener("focus", reload);
     return () => {
+      prefs.then((off) => off());
       statuses.then((off) => off());
       window.removeEventListener("focus", reload);
     };
@@ -311,12 +301,27 @@
   <div class="about">
     <div class="title">Tokidoki</div>
     <p class="hint">Every space has its own agent, with its own memory. Press ⌘J to talk to the one for the space you're in.</p>
-    {#if status}<div class="hint status process" data-state={status.state}><i></i>{processText}</div>{/if}
+    {#if enabled === false}
+      <div class="hint status process" data-state="off"><i></i>Off. Ternt is a browser and a terminal; the Ask button and ⌘J are put away.</div>
+    {:else if status}
+      <div class="hint status process" data-state={status.state}><i></i>{processText}</div>
+    {/if}
   </div>
-  {#if status?.state === "down"}
+  {#if enabled && status?.state === "down"}
     <button class="button" onclick={() => browser.agentRestart()}>Restart</button>
   {/if}
+  <input
+    class="enabled"
+    type="checkbox"
+    {...{ switch: true }}
+    checked={enabled ?? true}
+    aria-label="Use the AI agent"
+    title="Use the AI agent"
+    onchange={setEnabled}
+  />
 </header>
+
+{#if enabled !== false}
 
 <div class="section-head">
   <h2>Space</h2>
@@ -439,6 +444,7 @@
     <form class="row" onsubmit={(e) => saveKey(p.id, e)}>
       <div class="label">
         {p.name}
+        {#if p.recommended && source === "none"}<span class="badge">Recommended</span>{/if}
         <div class="hint">
           {#if source === "environment"}
             From Ternt's own environment (development); Settings can't change it.
@@ -477,6 +483,7 @@
   Shared by every space and kept in your Keychain, never in a file. Your messages go from Ternt to the provider you chose
   and nowhere else.
 </p>
+{/if}
 
 <style>
   /* The page's head: what this is, and whether it is running. */
@@ -532,6 +539,13 @@
   }
   .process[data-state="down"] i {
     background: var(--danger);
+  }
+  .process[data-state="off"] i {
+    background: var(--text-muted);
+  }
+  .enabled {
+    align-self: flex-start;
+    margin-top: 4px;
   }
 
   .space,

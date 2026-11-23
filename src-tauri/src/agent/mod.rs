@@ -41,6 +41,7 @@ use tauri::{
 use tokio::sync::mpsc;
 
 use crate::browser::{self, UI_WEBVIEW};
+pub use keys::preferred_provider;
 use protocol::*;
 pub use setup::{Setup, SpaceStatus};
 pub use sidecar::Status;
@@ -139,8 +140,37 @@ pub fn start(app: &AppHandle) {
         .or_else(|| crate::session::data_dir(app).map(|dir| dir.join("agents")))
         .unwrap_or_else(|| std::env::temp_dir().join("ternt-agents"));
     let sidecar = sidecar::Sidecar::new(app.clone(), outbox, data);
-    sidecar.start();
+    if enabled(app) {
+        sidecar.start();
+    } else {
+        sidecar.switch_off();
+    }
     let _ = host.sidecar.set(sidecar);
+}
+
+/// Whether the user has the agent on (Settings → Agent, asked at first launch).
+pub fn enabled(app: &AppHandle) -> bool {
+    crate::prefs::get(app).agent_enabled
+}
+
+/// The agent was switched on or off: start its process, or hide the panel and stop it.
+pub fn set_enabled(app: &AppHandle, on: bool) {
+    let Ok(sidecar) = sidecar(app) else {
+        return;
+    };
+    if on {
+        sidecar.restart();
+        return;
+    }
+    let app = app.clone();
+    // Stopping waits for the process; closing the panel touches webviews. Neither on
+    // the thread that asked.
+    std::thread::spawn(move || {
+        if let Err(err) = close(&app) {
+            eprintln!("ternt-agent: closing the panel: {err}");
+        }
+        sidecar.switch_off();
+    });
 }
 
 /// Deliver events to the panel: text deltas for one thread merge into one
@@ -240,8 +270,12 @@ pub fn forget(app: &AppHandle, space: u32) {
     });
 }
 
-/// Start the agent process over (a key changed in Settings).
+/// Start the agent process over (a key changed in Settings). Not while the agent is
+/// off: the keys are read when it is switched on.
 pub fn restart(app: &AppHandle) {
+    if !enabled(app) {
+        return;
+    }
     if let Ok(sidecar) = sidecar(app) {
         sidecar.restart();
     }
@@ -314,9 +348,15 @@ pub fn close(app: &AppHandle) -> tauri::Result<()> {
     }
 }
 
-/// ⌘J: show the panel, or hide it if it's up.
+/// ⌘J: show the panel, or hide it if it's up. Nothing while the agent is off.
 pub fn toggle(app: &AppHandle) -> tauri::Result<()> {
-    if showing(app) { close(app) } else { open(app) }
+    if showing(app) {
+        close(app)
+    } else if enabled(app) {
+        open(app)
+    } else {
+        Ok(())
+    }
 }
 
 #[tauri::command]

@@ -211,8 +211,13 @@
     if (!resizing) sidebarWidth = s.sidebarWidth;
   }
 
+  /** The agent can be switched off (Settings → Agent): then there is no Ask button. */
+  let agentEnabled = $state(true);
+
   onMount(() => {
+    browser.getPrefs().then((p) => (agentEnabled = p.agentEnabled));
     const unlisten = [
+      browser.onPrefsChanged((p) => (agentEnabled = p.agentEnabled)),
       browser.onState(applyState),
       browser.onRename((target) => (renaming = target)),
       browser.onIconPicker((id) => (pickingIcon = id)),
@@ -721,15 +726,20 @@
       onpointerleave={leavePeek}
     >
       <header class="titlebar" data-tauri-drag-region>
-        <button
-          class="ask"
-          aria-label="Ask Tokidoki (⌘J)"
-          title="Ask Tokidoki, this space's agent (⌘J)"
-          onclick={() => browser.menuAction("agent")}
-        >
-          <svg viewBox="0 0 18 18"><path d="M9 2.5 10.6 7 15 8.6 10.6 10.2 9 14.7 7.4 10.2 3 8.6 7.4 7z" /></svg>
-          <span>Ask {space?.name ?? "Tokidoki"}</span>
-        </button>
+        {#if agentEnabled}
+          <button
+            class="ask"
+            aria-label="Ask Tokidoki (⌘J)"
+            title="Ask Tokidoki, this space's agent (⌘J)"
+            onclick={() => browser.menuAction("agent")}
+          >
+            <svg viewBox="0 0 18 18"><path d="M9 2.5 10.6 7 15 8.6 10.6 10.2 9 14.7 7.4 10.2 3 8.6 7.4 7z" /></svg>
+            <span>Ask {space?.name ?? "Tokidoki"}</span>
+          </button>
+        {:else}
+          <!-- The agent is off: its place in the title bar stays, as room to drag the window by. -->
+          <div class="ask-off" data-tauri-drag-region></div>
+        {/if}
         <div class="nav">
           <button
             class="tool"
@@ -1190,6 +1200,10 @@
     transition:
       opacity 100ms ease,
       background 100ms ease;
+  }
+  .ask-off {
+    flex: 1;
+    height: 24px;
   }
   .ask:hover {
     opacity: 1;

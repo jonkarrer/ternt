@@ -56,7 +56,9 @@ await t.assert(S().spaces.every((s) => s.id === space || s.agent.provider === "f
 const search = `document.querySelector('.tool[data-tool="web_search"] input')`;
 await t.assert((await read(`String(${search}?.checked)`)) === "false", "web search is off until switched on");
 await t.assert((await read(`document.querySelector('input.key[data-provider="exa"]')?.placeholder`)) === "Web search…", "and Keys has a field for the Exa key");
-await t.assert((await read(`document.querySelector('input.key[data-provider="typesafe"]')?.placeholder`)) === "Optional…", "and one for the TypeSafe key, which Jev routes with");
+await t.assert((await read(`document.querySelector('input.key[data-provider="typesafe"]')?.placeholder`)) === "Recommended…", "and one for the Jev key, marked recommended");
+await t.assert((await read(`document.querySelector(".badge")?.parentElement.textContent`)).includes("Jev"), "by a badge too");
+await t.assert((await read(`String(document.querySelector("input.enabled")?.checked)`)) === "true", "the agent is on, with a switch to turn it off");
 await click(`.tool[data-tool="web_search"] input`);
 await t.until(() => S().spaces.find((s) => s.id === space)?.agent.tools.includes("web_search"), "switching it on is saved with the space");
 await t.until(async () => (await t.invoke("agent_space_status", { space })).tools.includes("web_search"), "and the space's agent has the tool");

@@ -184,6 +184,8 @@ export interface Prefs {
   /** Air Traffic Control: links from other apps matching a rule open in its
       space (first match wins; src-tauri/src/routing.rs). */
   linkRules: LinkRule[];
+  /** Use the AI agent (⌘J, the Ask button). Off: nothing of it shows and its process doesn't run. */
+  agentEnabled: boolean;
   /** Sites allowed the camera and microphone (origins); the rest ask. */
   mediaSites: string[];
 }
@@ -356,7 +358,7 @@ export const browser = {
     listen<BrowserState>("browser:state", (e) => cb(e.payload)),
   onPaletteOpen: (cb: (request: PaletteRequest) => void): Promise<UnlistenFn> =>
     listen<PaletteRequest>("palette:open", (e) => cb(e.payload)),
-  /** The Settings window: prefs changed (by any window). */
+  /** Prefs changed (by any window). */
   onPrefsChanged: (cb: (prefs: Prefs) => void): Promise<UnlistenFn> =>
     listen<Prefs>("prefs:changed", (e) => cb(e.payload)),
 
@@ -397,6 +399,8 @@ export const browser = {
     listen<AgentStatus>("agent:status", (e) => cb(e.payload)),
   /** Which API keys the agents have (never the values); they live in the Keychain. */
   agentKeys: () => invoke<AgentKeys>("agent_keys"),
+  /** The setup window is done with: close it. */
+  closeOnboarding: () => invoke("close_onboarding"),
   /** Store keys and restart the agent with them. */
   agentSetKeys: (change: AgentKeyChange) => invoke("agent_set_keys", change),
   updateStatus: () => invoke<UpdateStatus>("update_status"),

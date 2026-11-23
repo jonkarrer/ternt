@@ -27,6 +27,7 @@ export default defineConfig({
         palette: fileURLToPath(new URL("palette.html", import.meta.url)),
         term: fileURLToPath(new URL("term.html", import.meta.url)),
         settings: fileURLToPath(new URL("settings.html", import.meta.url)),
+        onboarding: fileURLToPath(new URL("onboarding.html", import.meta.url)),
         little: fileURLToPath(new URL("little.html", import.meta.url)),
         agent: fileURLToPath(new URL("agent.html", import.meta.url)),
       },

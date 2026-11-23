@@ -59,6 +59,9 @@ const BACKOFF: [Duration; 4] = [
 ];
 const RESTART_WINDOW: Duration = Duration::from_secs(120);
 
+/// Why the process is down while the user has the agent switched off.
+pub const OFF: &str = "The AI agent is switched off (Settings → Agent).";
+
 /// What the panel shows about the process (`agent:status`).
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(tag = "state", rename_all = "camelCase")]
@@ -94,7 +97,7 @@ enum Intent {
     None = 0,
     /// Stop it and start another (Restart, a key or provider change).
     Restart = 1,
-    /// Stop it for good (Ternt is quitting).
+    /// Stop it for good (Ternt is quitting, or the agent was switched off).
     Stop = 2,
 }
 
@@ -205,7 +208,7 @@ impl Sidecar {
             let intent = Intent::from_u8(self.intent.swap(Intent::None as u8, Ordering::AcqRel));
             match (intent, outcome) {
                 (Intent::Stop, _) => {
-                    self.fail_pending("Ternt is quitting.");
+                    self.fail_pending("The agent was stopped.");
                     break;
                 }
                 (Intent::Restart, _) => {
@@ -547,7 +550,14 @@ impl Sidecar {
         }
     }
 
-    /// Stop the process before Ternt exits, and keep the loop from starting
+    /// The user switched the agent off: stop the process, leave it stopped and say why.
+    /// `restart` starts it again. Waits like `shutdown`, so not on the main thread.
+    pub fn switch_off(&self) {
+        self.shutdown();
+        self.set_status(Status::Down { reason: OFF.into() });
+    }
+
+    /// Stop the process before Ternt exits (or while the agent is off), and keep the loop from starting
     /// another. Runs on the main thread at exit, so it waits by polling: the
     /// loop clears `pid` the moment the process is gone, usually within a few
     /// milliseconds.

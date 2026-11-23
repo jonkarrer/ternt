@@ -7,7 +7,10 @@ An Arc-style browser and terminal. Tauri v2 (Rust) + Svelte 5 (Vite, TypeScript)
 Download the `.dmg` from the [latest release](https://github.com/jonkarrer/ternt/releases/latest),
 open it and drag Ternt to Applications. Needs macOS 14 or later.
 
-The first launch opens a welcome page with the shortcuts (later: *Help → Welcome to Ternt*).
+The first launch opens a welcome page with the shortcuts (later: *Help → Welcome to Ternt*), and
+over it a short setup window (later: *Help → Set Up Ternt…*): whether to use the AI agent and, if
+so, your API keys for it. A Fireworks AI or Anthropic key is required to go on with the agent on;
+a Jev key is highly recommended; with the agent off, Ternt is a browser and a terminal.
 No tabs are created for you: press ⌘T to open the first one.
 
 After that Ternt updates itself. It checks at launch, every 15 minutes, and when you come back to it
@@ -190,6 +193,10 @@ come back). `just sidecar tokidoki` (or `TERNT_SIDECAR=tokidoki`) builds the rea
 and what the e2e suites run against. **Releases ship tokidoki** (`just upload` builds it from the
 tree, refusing uncommitted changes there); `TERNT_SIDECAR=stub just upload` would ship the stub. `TERNT_SIDECAR=tokidoki e2e/run.sh tokidoki` runs the panel
 against the real agent (one model call if `ANTHROPIC_API_KEY` is set).
+
+The agent can be **switched off** (the switch at the top of Settings → Agent, or in the setup
+window): the Ask button goes, ⌘J does nothing and the sidecar isn't run (`Prefs::agent_enabled`,
+`agent::set_enabled`).
 
 The agent is **bring your own key**: Settings → Agent → Keys takes your Fireworks AI and Anthropic
 keys, kept in the macOS Keychain (`src-tauri/src/agent/keys.rs`); Ternt hands them to the sidecar

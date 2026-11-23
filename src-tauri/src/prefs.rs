@@ -4,7 +4,7 @@
 use std::{path::PathBuf, sync::Mutex};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, EventTarget, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// Where links opened from other apps go.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +59,10 @@ pub struct Prefs {
     /// Sites allowed the camera and microphone, as origins
     /// (`https://meet.google.com`); the rest ask first.
     pub media_sites: Vec<String>,
+    /// Use the AI agent (⌘J, the Ask button). Off, Ternt is a browser and a terminal:
+    /// nothing of the agent shows and its process isn't started (see `agent::set_enabled`).
+    /// Asked at first launch (`onboarding`); on for everyone who had Ternt before the question.
+    pub agent_enabled: bool,
 }
 
 impl Default for Prefs {
@@ -70,6 +74,7 @@ impl Default for Prefs {
             unload_tabs: true,
             link_rules: Vec::new(),
             media_sites: Vec::new(),
+            agent_enabled: true,
         }
     }
 }
@@ -126,17 +131,19 @@ pub fn set_prefs(app: AppHandle, mut prefs: Prefs) {
     } else {
         TERMINAL_FONT_SIZE
     };
+    let agent = (prefs.agent_enabled != get(&app).agent_enabled).then_some(prefs.agent_enabled);
     store(&app, prefs);
+    if let Some(enabled) = agent {
+        crate::agent::set_enabled(&app, enabled);
+    }
 }
 
 fn store(app: &AppHandle, prefs: Prefs) {
     *app.state::<Store>().0.lock().unwrap() = prefs.clone();
     save(app, &prefs);
-    let _ = app.emit_to(
-        EventTarget::webview(crate::settings::SETTINGS_WINDOW),
-        "prefs:changed",
-        prefs,
-    );
+    // Every page: Settings and the setup window show them, the sidebar shows the Ask
+    // button only while the agent is on.
+    let _ = app.emit("prefs:changed", prefs);
 }
 
 /// Whether `origin` may use the camera and microphone without asking.
@@ -165,6 +172,8 @@ mod tests {
         assert_eq!(prefs.external_links, LinkTarget::Tab);
         assert_eq!(prefs.account, Account::default());
         assert_eq!(prefs.terminal_font_size, TERMINAL_FONT_SIZE);
+        // Whoever had Ternt before the agent could be switched off keeps it.
+        assert!(prefs.agent_enabled);
     }
 
     #[test]

@@ -41,6 +41,10 @@ ternt-agent --data <dir>
   no key for still opens, without it: `configure` answers with the tools the agent really
   has. Settings lets a tool be switched on only when its key is there. A tool call shows in
   the panel as a tool row, from the thread's checkpoints like any message.
+- **The agent can be off** (`Prefs::agent_enabled`, asked at first launch in the setup window,
+  kept in Settings → Agent). Off, Ternt doesn't run the process at all: its status is `down`
+  with the reason saying so, ⌘J and the Ask button are put away, and a saved key restarts
+  nothing. Switching it on starts the process with the keys as they are then.
 - **Jev decides the small things, when there is a TypeSafe key** (`TYPESAFE_API_KEY`,
   Keychain account `typesafe`, optional, set on the process like the others). It is not a
   provider and not a tool: in every space, whichever provider answers there, the router

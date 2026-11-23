@@ -11,6 +11,7 @@ mod menu;
 mod model;
 #[cfg(target_os = "macos")]
 mod native;
+mod onboarding;
 mod palette;
 mod panes;
 mod persist;
@@ -86,6 +87,10 @@ pub fn run() {
                 // Welcome first, so a URL given on the command line ends up active.
                 if first_launch && let Err(err) = welcome::open(&handle) {
                     eprintln!("failed to open the welcome page: {err}");
+                }
+                // And over it, the setup window: the agent on or off, and its keys.
+                if first_launch && let Err(err) = onboarding::open(&handle) {
+                    eprintln!("failed to open the setup window: {err}");
                 }
                 for url in urls {
                     if let Err(err) = browser::open_tab(&handle, url) {
@@ -178,6 +183,7 @@ pub fn run() {
             downloads::reveal_download,
             downloads::cancel_download,
             downloads::clear_downloads,
+            onboarding::close_onboarding,
             settings::reveal_data_dir,
             settings::default_browser,
             settings::make_default_browser,

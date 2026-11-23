@@ -103,6 +103,19 @@ pub fn load() -> Vec<(&'static str, String)> {
         .collect()
 }
 
+/// The provider a new space starts on: the default, unless the user has no key for it and
+/// has one for another. Someone who set Ternt up with an Anthropic key alone shouldn't meet
+/// "needs your Fireworks AI key" in every space they make.
+pub fn preferred_provider() -> super::setup::Provider {
+    use super::setup::Provider;
+    let has = |key: &Key| matches!(key.read(), Ok(Some(_)));
+    if !has(&FIREWORKS) && has(&ANTHROPIC) {
+        Provider::Anthropic
+    } else {
+        Provider::default()
+    }
+}
+
 /// Where each key is, never its value: what Settings shows.
 #[derive(Clone, Copy, Debug, Default, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

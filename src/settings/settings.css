@@ -208,3 +208,15 @@ input[type="radio"] {
   font-size: 12px;
   color: var(--danger);
 }
+
+/* A word beside a label: this one is worth doing. */
+.badge {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: 1px;
+}

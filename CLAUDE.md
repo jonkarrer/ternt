@@ -20,6 +20,10 @@ file is what isn't in the code.
   Development uses the team keys: `doppler run -- just dev tokidoki`.
 - **Jev (TypeSafe) makes the agent's small decisions** when its key is there (owner,
   2026-11-23): routing and memory so far, more to come. See `tokidoki/CLAUDE.md`.
+- **Setup at first launch** (owner, 2026-11-23): a native window (`src/onboarding/`,
+  `src-tauri/src/onboarding.rs`) asks whether to use the AI agent. On needs a provider's key
+  before Continue; Jev's is recommended, never required. Off is a real switch
+  (`Prefs::agent_enabled`): no Ask button, no ⌘J, no sidecar.
 - **Secrets** come from Doppler (`doppler run --project ternt --config dev -- …`) or the
   Keychain. Never print a key, never put one on a command line, never commit the updater key.
 
