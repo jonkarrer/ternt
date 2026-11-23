@@ -152,8 +152,8 @@
   header {
     display: flex;
     align-items: center;
-    gap: 14px;
-    margin-bottom: 24px;
+    gap: 16px;
+    margin-bottom: 32px;
   }
   header > div {
     flex: 1;
@@ -165,23 +165,21 @@
   }
   .title-field {
     width: 100%;
-    height: 28px;
+    height: 32px;
     font-size: 15px;
     font-weight: 600;
   }
-  .hint {
-    margin-top: 3px;
-    font-size: 11px;
-    color: var(--text-muted);
+  header .hint {
+    margin-top: 4px;
   }
   .swatches {
     display: flex;
-    gap: 5px;
-    margin-top: 5px;
+    gap: 7px;
+    margin-top: 7px;
   }
   .swatch {
-    width: 13px;
-    height: 13px;
+    width: 15px;
+    height: 15px;
     border-radius: 50%;
     background: var(--swatch);
     box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.15);

@@ -17,7 +17,8 @@
 
 <style>
   .row {
-    min-height: 36px;
+    min-height: 40px;
+    padding-block: 8px;
   }
   kbd {
     flex: none;
@@ -27,7 +28,7 @@
     box-shadow: inset 0 0 0 0.5px var(--ring);
     font: inherit;
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--text);
     white-space: pre;
   }
 </style>

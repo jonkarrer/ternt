@@ -26,7 +26,7 @@
     {
       id: "web_search",
       name: "Web search",
-      hint: "The agent looks things up on the web when it needs to, through Exa, and says where it read them.",
+      hint: "Looks things up through Exa when it needs to, and says where it read them.",
       key: "exa",
       keyName: "Exa",
     },
@@ -296,44 +296,35 @@
   }
 </script>
 
-<h2>Agent</h2>
-<div class="card">
-  <div class="row">
-    <div class="label">
-      Tokidoki, your spaces' agents
-      <div class="hint">
-        Press ⌘J to talk to the agent of the space you are in. Each space has its own, with its own memory and its own
-        choice of who answers. Ternt runs them in a separate process; your messages go from it to the provider and
-        nowhere else.
-      </div>
-      {#if status}<div class="hint status" data-state={status.state}>{processText}</div>{/if}
-    </div>
-    {#if status?.state === "down"}
-      <button class="button" onclick={() => browser.agentRestart()}>Restart</button>
-    {/if}
+<header class="pane">
+  <span class="glyph" aria-hidden="true">
+    <svg viewBox="0 0 16 16"><path d="M8 1.5 9.6 6l4.4 1.6L9.6 9.4 8 14l-1.6-4.6L2 7.6 6.4 6Z" /></svg>
+  </span>
+  <div class="about">
+    <div class="title">Tokidoki</div>
+    <p class="hint">Every space has its own agent, with its own memory. Press ⌘J to talk to the one for the space you're in.</p>
+    {#if status}<div class="hint status process" data-state={status.state}><i></i>{processText}</div>{/if}
   </div>
-</div>
+  {#if status?.state === "down"}
+    <button class="button" onclick={() => browser.agentRestart()}>Restart</button>
+  {/if}
+</header>
 
-<h2>Space</h2>
+<div class="section-head">
+  <h2>Space</h2>
+  <select class="space" aria-label="Space" value={spaceId} onchange={pickSpace}>
+    {#each spaces as s (s.id)}
+      <option value={s.id}>{s.name}</option>
+    {/each}
+  </select>
+</div>
 <div class="card">
-  <div class="row">
-    <div class="label">
-      Settings for
-      <div class="hint">Each space's agent is set up on its own.</div>
-    </div>
-    <select class="field space" aria-label="Space" value={spaceId} onchange={pickSpace}>
-      {#each spaces as s (s.id)}
-        <option value={s.id}>{s.name}</option>
-      {/each}
-    </select>
-  </div>
   <div class="row">
     <div class="label">
       Provider
-      <div class="hint">Who answers in this space, with your key for them. Changing it keeps the conversations.</div>
       {#if spaceText}<div class="hint status" data-state={spaceStatus && !spaceStatus.hasKey && !stub ? "keys" : ""}>{spaceText}</div>{/if}
     </div>
-    <select class="field provider" aria-label="Provider" value={provider} disabled={!space} onchange={setProvider}>
+    <select class="provider" aria-label="Provider" value={provider} disabled={!space} onchange={setProvider}>
       {#each PROVIDERS as p (p.id)}
         <option value={p.id}>{p.name}</option>
       {/each}
@@ -347,7 +338,7 @@
         <div class="hint">{tool.hint}</div>
         {#if lacksKey(tool)}
           <div class="hint status" data-state={on ? "keys" : ""}>
-            {on ? `On, but waiting for an ${tool.keyName} key` : `Needs an ${tool.keyName} key`}: add yours under Keys.
+            {on ? `On, but waiting for an ${tool.keyName} key` : `Needs an ${tool.keyName} key`}: add yours under API keys.
           </div>
         {/if}
       </div>
@@ -367,55 +358,12 @@
   {/if}
 </div>
 
-<h2>Keys</h2>
-<div class="card">
-  {#each KEYS as p (p.id)}
-    {@const source = keys?.[p.id] ?? "none"}
-    <form class="row" onsubmit={(e) => saveKey(p.id, e)}>
-      <div class="label">
-        {p.name} API key
-        <div class="hint">
-          {#if source === "environment"}
-            From Ternt's own environment (development); Settings can't change it.
-          {:else if source === "keychain"}
-            Saved in your Keychain.
-          {:else}
-            Not set. Make one at {p.where}; it is kept in your Keychain, never in a file.
-          {/if}
-        </div>
-      </div>
-      <input
-        class="field key"
-        data-provider={p.id}
-        type="password"
-        bind:value={drafts[p.id]}
-        placeholder={source === "none" ? p.keyHint : "Replace…"}
-        aria-label="{p.name} API key"
-        autocomplete="off"
-        spellcheck="false"
-      />
-      <button class="button primary" type="submit" disabled={saving || !drafts[p.id].trim()}>{saving ? "Saving…" : "Save"}</button>
-      {#if source === "keychain"}
-        <button class="button" type="button" disabled={saving} onclick={() => change({ [p.id]: "" })}>Remove</button>
-      {/if}
-    </form>
-  {/each}
-  {#if keyError}
-    <div class="row"><span class="error" role="alert">{keyError}</span></div>
-  {/if}
-</div>
-
 <h2>Memory</h2>
+<p class="caption">
+  What the {space?.name ?? ""} agent has learned from your conversations and brings into later ones. Wiping it keeps the
+  conversations.
+</p>
 <div class="card">
-  <div class="row">
-    <div class="label">
-      What the {space?.name ?? ""} agent remembers
-      <div class="hint">
-        Facts it learned from your conversations in this space, brought into later ones. Edit a fact to correct it, or
-        forget it. Wipe forgets everything the agent has learned here; the conversations stay.
-      </div>
-    </div>
-  </div>
   {#if memoryError}
     <div class="row"><span class="error" role="alert">{memoryError}</span></div>
   {/if}
@@ -445,14 +393,16 @@
             <span class="text">{memory.text}</span>
             <div class="hint">{when(memory)}</div>
           </div>
-          <button class="button edit" onclick={() => edit(memory)}>Edit</button>
-          <button class="button danger forget" onclick={() => forget(memory)}>Forget</button>
+          <div class="actions">
+            <button class="button quiet edit" onclick={() => edit(memory)}>Edit</button>
+            <button class="button quiet danger forget" onclick={() => forget(memory)}>Forget</button>
+          </div>
         {/if}
       </div>
     {/each}
     {#if facts.length > shown.length}
       <div class="row">
-        <button class="button more" onclick={() => (showAll = true)}>Show all {facts.length}</button>
+        <button class="button quiet more" onclick={() => (showAll = true)}>Show all {facts.length}</button>
       </div>
     {/if}
   {/if}
@@ -473,22 +423,129 @@
   </div>
 </div>
 
+<h2>API keys</h2>
+<div class="card">
+  {#each KEYS as p (p.id)}
+    {@const source = keys?.[p.id] ?? "none"}
+    {@const draft = drafts[p.id].trim()}
+    <form class="row" onsubmit={(e) => saveKey(p.id, e)}>
+      <div class="label">
+        {p.name}
+        <div class="hint">
+          {#if source === "environment"}
+            From Ternt's own environment (development); Settings can't change it.
+          {:else if source === "keychain"}
+            Saved in your Keychain.
+          {:else}
+            Not set. Make one at {p.where}.
+          {/if}
+        </div>
+      </div>
+      <div class="entry">
+        <input
+          class="field key"
+          data-provider={p.id}
+          type="password"
+          bind:value={drafts[p.id]}
+          placeholder={source === "none" ? p.keyHint : "Replace…"}
+          aria-label="{p.name} API key"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <!-- One button at a time: Save once something is typed, else Remove for a saved key. -->
+        {#if draft}
+          <button class="button primary" type="submit" disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+        {:else if source === "keychain"}
+          <button class="button" type="button" disabled={saving} onclick={() => change({ [p.id]: "" })}>Remove</button>
+        {/if}
+      </div>
+    </form>
+  {/each}
+  {#if keyError}
+    <div class="row"><span class="error" role="alert">{keyError}</span></div>
+  {/if}
+</div>
+<p class="caption">
+  Shared by every space and kept in your Keychain, never in a file. Your messages go from Ternt to the provider you chose
+  and nowhere else.
+</p>
+
 <style>
+  /* The page's head: what this is, and whether it is running. */
+  .pane {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+  .glyph {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 13px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, white), var(--accent));
+    box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.14);
+  }
+  .glyph svg {
+    width: 28px;
+    height: 28px;
+    fill: white;
+  }
+  .about {
+    flex: 1;
+    min-width: 0;
+  }
+  .title {
+    font-size: 17px;
+    font-weight: 600;
+  }
+  .about p {
+    margin: 2px 0 0;
+    max-width: 52ch;
+  }
+  .process {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    margin-top: 8px;
+    color: var(--text);
+  }
+  .process i {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--warn);
+  }
+  .process[data-state="running"] i {
+    background: var(--ok);
+  }
+  .process[data-state="down"] i {
+    background: var(--danger);
+  }
+
   .space,
   .provider {
+    width: 170px;
+  }
+  /* The field gives way to its button, so the row's right edge and its label stay put. */
+  .entry {
     flex: none;
-    width: 160px;
+    display: flex;
+    gap: 8px;
+    width: 260px;
   }
   .key {
     flex: 1;
     min-width: 0;
-    max-width: 260px;
   }
   .memory .text {
     display: block;
     overflow-wrap: anywhere;
   }
-  .memory .edit {
+  .memory form.edit {
     display: flex;
     flex: 1;
     gap: 8px;
@@ -498,18 +555,19 @@
     flex: 1;
     min-width: 0;
   }
-  .count {
-    font-size: 12px;
+  .actions {
+    flex: none;
+    display: flex;
+    gap: 2px;
+    margin-right: -8px;
+  }
+  .more {
+    margin-left: -8px;
   }
   .status {
     margin-top: 4px;
   }
-  .status[data-state="down"],
   .status[data-state="keys"] {
-    color: #c9302c;
-  }
-  .error {
-    color: #c9302c;
-    font-size: 12px;
+    color: var(--danger);
   }
 </style>

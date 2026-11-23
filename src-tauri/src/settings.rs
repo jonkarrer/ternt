@@ -25,7 +25,7 @@ pub fn open(app: &AppHandle) -> tauri::Result<()> {
         WebviewUrl::App("settings.html".into()),
     )
     .title("Settings")
-    .inner_size(720.0, 540.0)
+    .inner_size(760.0, 680.0)
     .resizable(false)
     .minimizable(false)
     .maximizable(false)

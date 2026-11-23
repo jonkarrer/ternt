@@ -485,7 +485,7 @@ impl Stub {
     pub fn threads(&self) -> Vec<ThreadSummary> {
         let inner = self.inner.lock().unwrap();
         let mut threads: Vec<_> = inner.threads.iter().map(Thread::summary).collect();
-        threads.sort_by(|a, b| b.active_at.cmp(&a.active_at));
+        threads.sort_by_key(|t| std::cmp::Reverse(t.active_at));
         threads
     }
 

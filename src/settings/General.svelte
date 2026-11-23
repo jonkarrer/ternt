@@ -87,16 +87,11 @@
 </div>
 
 <h2>Camera and microphone</h2>
+<p class="caption">
+  A site asks the first time it wants your camera or microphone (a call joining, say). These are the sites you've
+  allowed: remove one to have it ask again. Sharing your screen always asks, in macOS's picker.
+</p>
 <div class="card media">
-  <div class="row">
-    <div class="label">
-      Sites you've allowed
-      <div class="hint">
-        A site asks the first time it wants your camera or microphone (a call joining, say). Remove one to have it ask
-        again. Sharing your screen always asks, in macOS's picker.
-      </div>
-    </div>
-  </div>
   {#each mediaSites as site (site)}
     <div class="row site">
       <span class="origin">{site.replace(/^https:\/\//, "")}</span>
@@ -117,10 +112,5 @@
   }
   .none {
     color: var(--text-muted);
-  }
-  .unload {
-    flex: none;
-    margin: 0;
-    accent-color: var(--accent);
   }
 </style>

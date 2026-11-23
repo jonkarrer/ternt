@@ -82,17 +82,12 @@
 </div>
 
 <h2>Air Traffic Control</h2>
+<p class="caption">
+  A link from another app that matches a rule opens as a tab in that rule's space; the rest go to {fallback}. The first
+  rule that matches wins. A host matches its subdomains too, and with a path (<code>github.com/acme</code>) only the
+  pages under it; a regex is tried against the whole URL.
+</p>
 <div class="card atc">
-  <div class="row">
-    <div class="label">
-      Send links to a space
-      <div class="hint">
-        A link from another app that matches a rule opens as a tab in that rule's space; the rest go to {fallback}. The
-        first rule that matches wins. A host matches its subdomains too, and with a path (<code>github.com/acme</code>)
-        only the pages under it; a regex is tried against the whole URL.
-      </div>
-    </div>
-  </div>
   {#each rules as rule, i (i)}
     <div class="row rule">
       <select class="kind" aria-label="Match by" bind:value={rule.kind} onchange={save}>
@@ -101,7 +96,7 @@
       </select>
       <div class="pattern-field">
         <input
-          class="pattern"
+          class="field pattern"
           class:regex={rule.kind === "regex"}
           class:invalid={problems[i]}
           aria-label="Pattern"
@@ -133,7 +128,7 @@
   </div>
   <div class="row tester">
     <input
-      class="sample"
+      class="field sample"
       aria-label="Test a link"
       placeholder="Test a link: paste a URL to see where it goes"
       spellcheck="false"
@@ -167,38 +162,18 @@
   .choice {
     cursor: default;
   }
-  input[type="radio"] {
-    flex: none;
-    margin: 0;
-    accent-color: var(--accent);
-  }
   code {
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 10.5px;
+    font-size: 11.5px;
   }
   .rule {
     gap: 8px;
   }
-  select,
-  .pattern,
-  .sample {
-    height: 26px;
-    border: 0;
-    border-radius: 6px;
-    background: var(--fill);
-    color: var(--text);
-    font: inherit;
-    font-size: 12px;
-  }
-  select {
-    flex: none;
-    padding: 0 6px;
-  }
   .kind {
-    width: 72px;
+    width: 84px;
   }
   .space {
-    width: 120px;
+    width: 130px;
   }
   .pattern-field {
     flex: 1;
@@ -207,24 +182,17 @@
   .pattern,
   .sample {
     width: 100%;
-    box-sizing: border-box;
-    padding: 0 8px;
-    outline: 0;
-  }
-  .pattern:focus,
-  .sample:focus {
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent);
   }
   .pattern.regex {
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 11.5px;
+    font-size: 12px;
   }
   .pattern.invalid {
     box-shadow: 0 0 0 1.5px var(--danger);
   }
   .problem {
-    margin-top: 3px;
-    font-size: 11px;
+    margin-top: 4px;
+    font-size: 12px;
     color: var(--danger);
   }
   .arrow {
@@ -234,8 +202,8 @@
     display: grid;
     flex: none;
     place-items: center;
-    width: 22px;
-    height: 22px;
+    width: 26px;
+    height: 26px;
     border-radius: 6px;
     color: var(--text-muted);
   }

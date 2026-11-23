@@ -62,8 +62,8 @@
     width: 220px;
     display: flex;
     flex-direction: column;
-    padding: 12px 10px;
-    border-right: 0.5px solid var(--separator);
+    padding: 16px 12px;
+    border-right: 0.5px solid var(--row-separator);
   }
   ul {
     flex: 1;
@@ -77,7 +77,7 @@
     align-items: center;
     gap: 10px;
     width: 100%;
-    padding: 6px 8px;
+    padding: 8px 10px;
     border-radius: 8px;
     text-align: left;
   }
@@ -99,7 +99,7 @@
     white-space: nowrap;
   }
   .sub {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .add {
@@ -111,6 +111,6 @@
     flex: 1;
     min-width: 0;
     overflow-y: auto;
-    padding: 24px 28px;
+    padding: 32px 32px 8px;
   }
 </style>

@@ -47,8 +47,8 @@ await t.invoke("set_prefs", {
 });
 await t.invoke("menu_action", { id: "settings" });
 await t.until(async () => (await windows()).includes("settings"), "Settings opens");
-await t.until(async () => (await read(`document.querySelectorAll(".page-tab").length`)) === "6", "Settings is ready");
-await t.eval("settings", `document.querySelector(".page-tab:nth-child(4)").click()`);
+await t.until(async () => (await read(`document.querySelectorAll(".page-tab").length`)) === "7", "Settings is ready");
+await t.eval("settings", `document.querySelector(".page-tab:nth-child(5)").click()`);
 await t.until(async () => (await read(`document.querySelectorAll(".rule").length`)) === "1", "Links lists the rule");
 const typeIn = (selector, value, event = "change") =>
   t.eval("settings", `(() => { const i = ${selector}; i.value = ${JSON.stringify(value)}; i.dispatchEvent(new Event("input", { bubbles: true })); i.dispatchEvent(new Event(${JSON.stringify(event)}, { bubbles: true })); })()`);

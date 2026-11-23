@@ -94,16 +94,16 @@
     display: flex;
     justify-content: center;
     gap: 2px;
-    padding: 10px 80px 8px;
-    border-bottom: 0.5px solid var(--separator);
+    padding: 12px 80px 10px;
+    border-bottom: 0.5px solid var(--row-separator);
   }
   .page-tab {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 3px;
-    width: 72px;
-    padding: 6px 0 5px;
+    width: 76px;
+    padding: 7px 0 6px;
     border-radius: 8px;
     font-size: 11px;
     color: var(--text-muted);
@@ -114,6 +114,7 @@
   .page-tab.selected {
     background: var(--fill-strong);
     color: var(--text);
+    font-weight: 500;
   }
   .page-tab.selected svg {
     stroke: var(--accent);
@@ -132,7 +133,8 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 24px 40px;
+    /* One column of at most 600px, centered. */
+    padding: 32px max(40px, calc(50% - 300px)) 8px;
   }
   /* Profiles brings its own two-column layout. */
   main.wide {

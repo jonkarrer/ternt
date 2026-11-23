@@ -87,8 +87,8 @@
   header {
     display: flex;
     align-items: center;
-    gap: 16px;
-    margin-bottom: 24px;
+    gap: 18px;
+    margin-bottom: 32px;
   }
   .avatar {
     flex: none;
@@ -108,18 +108,14 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
   .field {
     width: 100%;
   }
   .name {
-    height: 28px;
+    height: 32px;
     font-size: 15px;
     font-weight: 600;
-  }
-  .hint {
-    font-size: 11px;
-    color: var(--text-muted);
   }
 </style>
