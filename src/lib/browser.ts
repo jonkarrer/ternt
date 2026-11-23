@@ -184,7 +184,7 @@ export interface Prefs {
   /** Air Traffic Control: links from other apps matching a rule open in its
       space (first match wins; src-tauri/src/routing.rs). */
   linkRules: LinkRule[];
-  /** Use the AI agent (⌘J, the Ask button). Off: nothing of it shows and its process doesn't run. */
+  /** Use the AI agent (⌃A, `tok` ⇥ in the command bar). Off: nothing of it shows and its process doesn't run. */
   agentEnabled: boolean;
   /** Sites allowed the camera and microphone (origins); the rest ask. */
   mediaSites: string[];
@@ -207,7 +207,7 @@ export interface PaletteRequest {
   contentLeft: number;
 }
 
-/** The agent panel (⌘J): src-tauri/src/agent. */
+/** The agent panel (⌃A): src-tauri/src/agent. */
 export interface AgentSpace {
   id: number;
   name: string;
@@ -222,6 +222,8 @@ export interface AgentRequest {
   /** `stub` until tokidoki is embedded. */
   /** The agent's data folder under the app data dir. */
   folder: string;
+  /** Something to say at once, in a new conversation; `id` tells one asking from the next. */
+  ask: { id: number; text: string } | null;
 }
 
 /** An agent event with the space it came from. */
@@ -365,6 +367,8 @@ export const browser = {
   // The agent panel; `space` scopes every call to one space's agent.
   agentRequest: () => invoke<AgentRequest | null>("agent_request"),
   openAgent: () => invoke("open_agent"),
+  /** Open the panel on a new conversation that starts with `text` (the command bar's `tok` ⇥); empty just opens it. */
+  agentAsk: (text: string) => invoke("agent_ask", { text }),
   closeAgent: () => invoke("close_agent"),
   /** Send `text`; `thread` continues a conversation, `null` starts one. */
   agentSend: (space: number, text: string, thread: string | null) => invoke<Sent>("agent_send", { space, text, thread }),
@@ -388,7 +392,7 @@ export const browser = {
   agentWipe: (space: number) => invoke("agent_wipe", { space }),
   onAgentOpen: (cb: (request: AgentRequest) => void): Promise<UnlistenFn> =>
     listen<AgentRequest>("agent:open", (e) => cb(e.payload)),
-  /** The panel was hidden (Esc, ⌘J, the command bar opening). */
+  /** The panel was hidden (Esc, ⌃A, the command bar opening). */
   onAgentClose: (cb: () => void): Promise<UnlistenFn> => listen("agent:close", () => cb()),
   onAgentEvent: (cb: (tagged: AgentTagged) => void): Promise<UnlistenFn> =>
     listen<AgentTagged>("agent:event", (e) => cb(e.payload)),

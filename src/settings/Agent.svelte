@@ -300,9 +300,9 @@
   </span>
   <div class="about">
     <div class="title">Tokidoki</div>
-    <p class="hint">Every space has its own agent, with its own memory. Press ⌘J to talk to the one for the space you're in.</p>
+    <p class="hint">Every space has its own agent, with its own memory. Press ⌃A to talk to the one for the space you're in, or type tok and press Tab in the command bar (⌘T).</p>
     {#if enabled === false}
-      <div class="hint status process" data-state="off"><i></i>Off. Ternt is a browser and a terminal; the Ask button and ⌘J are put away.</div>
+      <div class="hint status process" data-state="off"><i></i>Off. Ternt is a browser and a terminal; ⌃A and the command bar's Tokidoki are put away.</div>
     {:else if status}
       <div class="hint status process" data-state={status.state}><i></i>{processText}</div>
     {/if}

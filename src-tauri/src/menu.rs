@@ -203,7 +203,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             )
         })
         .collect::<tauri::Result<Vec<_>>>()?;
-    let ask = MenuItem::with_id(app, "agent", "Ask Tokidoki", true, Some("CmdOrCtrl+J"))?;
+    let ask = MenuItem::with_id(app, "agent", "Ask Tokidoki", true, Some("Ctrl+A"))?;
     let ask_separator = PredefinedMenuItem::separator(app)?;
     let new_space = MenuItem::with_id(app, "new-space", "New Space", true, None::<&str>)?;
     let new_folder = MenuItem::with_id(app, "new-folder", "New Folder", true, None::<&str>)?;

@@ -121,7 +121,7 @@
       />
     </div>
     <p class="caption">
-      Every space gets its own assistant with its own memory: press ⌘J to ask it. It runs on your own API keys, which
+      Every space gets its own assistant with its own memory: press ⌃A to ask it. It runs on your own API keys, which
       stay in your Keychain and go only to the services they are for.
     </p>
     {#if on}
@@ -136,7 +136,7 @@
       <div class="card">
         <div class="row">
           <div class="label hint off">
-            Ternt works as a browser and a terminal without it: no Ask button, no ⌘J, nothing running in the background.
+            Ternt works as a browser and a terminal without it: no ⌃A, nothing running in the background.
             Switch it on any time in Settings → Agent.
           </div>
         </div>

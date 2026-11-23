@@ -41,7 +41,11 @@ pub fn write(path: &Path, data: &[u8], backup: bool) -> std::io::Result<()> {
     }
     let tmp = with_suffix(
         path,
-        &format!(".tmp-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)),
+        &format!(
+            ".tmp-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ),
     );
     let result = (|| {
         let mut file = std::fs::File::create(&tmp)?;
@@ -92,7 +96,10 @@ pub fn load<T: DeserializeOwned>(path: &Path) -> Loaded<T> {
             let _ = std::fs::rename(path, with_suffix(path, &format!(".unreadable-{stamp}")));
         }
     }
-    match std::fs::read(backup_path(path)).ok().map(|d| serde_json::from_slice(&d)) {
+    match std::fs::read(backup_path(path))
+        .ok()
+        .map(|d| serde_json::from_slice(&d))
+    {
         Some(Ok(value)) => {
             eprintln!("restored {} from its backup", path.display());
             Loaded::Read(value)
@@ -123,7 +130,10 @@ mod tests {
         save(&path, &vec![1, 2], false).unwrap();
         assert!(matches!(load::<Vec<u32>>(&path), Loaded::Read(v) if v == [1, 2]));
         // No temp files left behind.
-        assert_eq!(std::fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
     }
 
     #[test]
@@ -136,7 +146,11 @@ mod tests {
         let kept = std::fs::read_dir(path.parent().unwrap())
             .unwrap()
             .flatten()
-            .any(|e| e.file_name().to_string_lossy().starts_with("session.json.unreadable-"));
+            .any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("session.json.unreadable-")
+            });
         assert!(kept, "the damaged file is set aside, not deleted");
     }
 

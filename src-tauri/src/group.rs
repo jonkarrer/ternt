@@ -69,7 +69,10 @@ impl Group {
     pub fn can_place(&self, tab: u32, target: u32, place: Place) -> bool {
         let mut trial = self.clone();
         trial.remove(tab);
-        tab != target && trial.has(target) && trial.len() < MAX_TABS && trial.place(tab, target, place)
+        tab != target
+            && trial.has(target)
+            && trial.len() < MAX_TABS
+            && trial.place(tab, target, place)
     }
 
     /// Put `tab` at `place` beside `target`: left or right makes a second
@@ -234,9 +237,15 @@ mod tests {
     #[test]
     fn can_place_moves_a_member() {
         let g = group(vec![vec![1], vec![2, 3]]);
-        assert!(g.can_place(3, 1, Place::Bottom), "a member moves within the group");
+        assert!(
+            g.can_place(3, 1, Place::Bottom),
+            "a member moves within the group"
+        );
         assert!(!g.can_place(1, 1, Place::Bottom), "not beside itself");
-        assert!(!g.can_place(9, 7, Place::Bottom), "the target must be a member");
+        assert!(
+            !g.can_place(9, 7, Place::Bottom),
+            "the target must be a member"
+        );
         assert!(g.can_place(9, 1, Place::Bottom));
         assert!(!g.can_place(9, 2, Place::Top));
     }
@@ -254,7 +263,11 @@ mod tests {
                 (3, (108.0, 108.0, 300.0, 100.0)),
             ]
         );
-        assert_eq!(g.set_ratio(Some(0), 0.3), None, "a single tab has no row split");
+        assert_eq!(
+            g.set_ratio(Some(0), 0.3),
+            None,
+            "a single tab has no row split"
+        );
         assert_eq!(g.set_ratio(Some(1), 0.01), Some(MIN_RATIO));
     }
 

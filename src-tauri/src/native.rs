@@ -55,9 +55,24 @@ pub fn guard_mouse_moves(webview: &Webview) {
         let class: *const objc2::runtime::AnyClass = msg_send![view, class];
         replace(class, objc2::sel!(mouseMoved:), view_moved, &VIEW_MOVED);
         if let Some(observer) = objc2::runtime::AnyClass::get(c"WKMouseTrackingObserver") {
-            replace(observer, objc2::sel!(mouseMoved:), observer_moved, &OBSERVER_MOVED);
-            replace(observer, objc2::sel!(mouseEntered:), observer_entered, &OBSERVER_ENTERED);
-            replace(observer, objc2::sel!(mouseExited:), observer_exited, &OBSERVER_EXITED);
+            replace(
+                observer,
+                objc2::sel!(mouseMoved:),
+                observer_moved,
+                &OBSERVER_MOVED,
+            );
+            replace(
+                observer,
+                objc2::sel!(mouseEntered:),
+                observer_entered,
+                &OBSERVER_ENTERED,
+            );
+            replace(
+                observer,
+                objc2::sel!(mouseExited:),
+                observer_exited,
+                &OBSERVER_EXITED,
+            );
         }
     });
 }
@@ -102,7 +117,8 @@ static STOP_OBSERVING: std::sync::OnceLock<Stop> = std::sync::OnceLock::new();
 /// Install the guard (once; call before any page view is freed).
 pub fn guard_screen_time() {
     unsafe {
-        let Some(class) = objc2::runtime::AnyClass::get(c"WKScreenTimeConfigurationObserver") else {
+        let Some(class) = objc2::runtime::AnyClass::get(c"WKScreenTimeConfigurationObserver")
+        else {
             return;
         };
         let sel = objc2::sel!(stopObserving);
@@ -155,7 +171,11 @@ fn caught_or<T>(fallback: T, body: impl FnOnce() -> T) -> T {
 /// How many exceptions `caught` stopped (for tests).
 pub static RAISED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-unsafe extern "C-unwind" fn view_moved(this: &AnyObject, cmd: objc2::runtime::Sel, event: &AnyObject) {
+unsafe extern "C-unwind" fn view_moved(
+    this: &AnyObject,
+    cmd: objc2::runtime::Sel,
+    event: &AnyObject,
+) {
     caught(|| unsafe {
         if shows_at(this, event)
             && let Some(original) = VIEW_MOVED.get()
@@ -165,15 +185,27 @@ unsafe extern "C-unwind" fn view_moved(this: &AnyObject, cmd: objc2::runtime::Se
     });
 }
 
-unsafe extern "C-unwind" fn observer_moved(this: &AnyObject, cmd: objc2::runtime::Sel, event: &AnyObject) {
+unsafe extern "C-unwind" fn observer_moved(
+    this: &AnyObject,
+    cmd: objc2::runtime::Sel,
+    event: &AnyObject,
+) {
     caught(|| unsafe { observer_event(this, cmd, event, &OBSERVER_MOVED) });
 }
 
-unsafe extern "C-unwind" fn observer_entered(this: &AnyObject, cmd: objc2::runtime::Sel, event: &AnyObject) {
+unsafe extern "C-unwind" fn observer_entered(
+    this: &AnyObject,
+    cmd: objc2::runtime::Sel,
+    event: &AnyObject,
+) {
     caught(|| unsafe { observer_event(this, cmd, event, &OBSERVER_ENTERED) });
 }
 
-unsafe extern "C-unwind" fn observer_exited(this: &AnyObject, cmd: objc2::runtime::Sel, event: &AnyObject) {
+unsafe extern "C-unwind" fn observer_exited(
+    this: &AnyObject,
+    cmd: objc2::runtime::Sel,
+    event: &AnyObject,
+) {
     caught(|| unsafe {
         let me = this as *const AnyObject as usize;
         COVERED.lock().unwrap().retain(|&o| o != me);
@@ -425,7 +457,11 @@ pub fn place_below(webview: &Webview, other: &Webview) {
             let below = view(below as *mut c_void);
             let other = view(other.inner());
             if let Some(superview) = other.superview() {
-                superview.addSubview_positioned_relativeTo(below, NSWindowOrderingMode::Below, Some(other));
+                superview.addSubview_positioned_relativeTo(
+                    below,
+                    NSWindowOrderingMode::Below,
+                    Some(other),
+                );
             }
         });
     });
@@ -774,7 +810,11 @@ pub fn set_drop_hint(ui: &Webview, frame: Option<(f64, f64, f64, f64)>, radius: 
             })
             .clone()
         });
-        let y = if parent.isFlipped() { y } else { parent.frame().size.height - y - height };
+        let y = if parent.isFlipped() {
+            y
+        } else {
+            parent.frame().size.height - y - height
+        };
         hint.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(width, height)));
         parent.addSubview_positioned_relativeTo(&hint, NSWindowOrderingMode::Above, None);
     });
@@ -957,7 +997,10 @@ pub fn download_progress(download: &AnyObject) -> (i64, i64) {
     caught_or((0, -1), || unsafe {
         let progress: *mut AnyObject = msg_send![download, progress];
         match progress.as_ref() {
-            Some(p) => (msg_send![p, completedUnitCount], msg_send![p, totalUnitCount]),
+            Some(p) => (
+                msg_send![p, completedUnitCount],
+                msg_send![p, totalUnitCount],
+            ),
             None => (0, -1),
         }
     })
@@ -983,7 +1026,9 @@ pub fn guard_downloads(view: &AnyObject) {
                 std::mem::transmute::<ResponsePolicy, objc2::runtime::Imp>(response_policy),
             )
         {
-            let _ = RESPONSE_POLICY.set(std::mem::transmute::<objc2::runtime::Imp, ResponsePolicy>(old));
+            let _ = RESPONSE_POLICY.set(
+                std::mem::transmute::<objc2::runtime::Imp, ResponsePolicy>(old),
+            );
         }
         // wry's download delegate class has a generated name: hook it when
         // wry first hands a download its delegate.
@@ -1000,7 +1045,11 @@ pub fn guard_downloads(view: &AnyObject) {
     });
 }
 
-unsafe extern "C-unwind" fn set_delegate(this: &AnyObject, cmd: objc2::runtime::Sel, delegate: *mut AnyObject) {
+unsafe extern "C-unwind" fn set_delegate(
+    this: &AnyObject,
+    cmd: objc2::runtime::Sel,
+    delegate: *mut AnyObject,
+) {
     caught(|| unsafe {
         if let Some(original) = SET_DELEGATE.get() {
             original(this, cmd, delegate);
@@ -1078,7 +1127,11 @@ unsafe extern "C-unwind" fn decide_destination(
     });
 }
 
-unsafe extern "C-unwind" fn download_done(this: &AnyObject, cmd: objc2::runtime::Sel, download: &AnyObject) {
+unsafe extern "C-unwind" fn download_done(
+    this: &AnyObject,
+    cmd: objc2::runtime::Sel,
+    download: &AnyObject,
+) {
     with_download(download, || unsafe {
         if let Some(original) = DOWNLOAD_DONE.get() {
             original(this, cmd, download);
@@ -1118,7 +1171,9 @@ unsafe extern "C-unwind" fn response_policy(
         }
         let name = NSString::from_str("Content-Disposition");
         let value: *mut NSString = msg_send![response, valueForHTTPHeaderField: &*name];
-        value.as_ref().is_some_and(|v| is_attachment(&v.to_string()))
+        value
+            .as_ref()
+            .is_some_and(|v| is_attachment(&v.to_string()))
     });
     if attachment {
         handler.call((RESPONSE_DOWNLOAD,));
@@ -1330,15 +1385,21 @@ unsafe extern "C-unwind" fn media_permission(
         let _: () = msg_send![&*alert, setMessageText: &*NSString::from_str(&title)];
         let info = "Ternt remembers your answer for this site. Settings → General lists the sites you've allowed.";
         let _: () = msg_send![&*alert, setInformativeText: &*NSString::from_str(info)];
-        let _: *mut AnyObject = msg_send![&*alert, addButtonWithTitle: &*NSString::from_str("Allow")];
-        let _: *mut AnyObject = msg_send![&*alert, addButtonWithTitle: &*NSString::from_str("Don\u{2019}t Allow")];
+        let _: *mut AnyObject =
+            msg_send![&*alert, addButtonWithTitle: &*NSString::from_str("Allow")];
+        let _: *mut AnyObject =
+            msg_send![&*alert, addButtonWithTitle: &*NSString::from_str("Don\u{2019}t Allow")];
         let decision = decision.copy();
         let app = app.clone();
         js_dialog_show(web_view, &alert, move |allow| {
             if allow {
                 crate::prefs::allow_media(&app, &origin);
             }
-            decision.call((if allow { PERMISSION_GRANT } else { PERMISSION_DENY },));
+            decision.call((if allow {
+                PERMISSION_GRANT
+            } else {
+                PERMISSION_DENY
+            },));
         });
         true
     });
@@ -1398,7 +1459,9 @@ unsafe fn guard_new_windows(class: &objc2::runtime::AnyClass) {
             objc2::sel!(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:),
             std::mem::transmute::<CreateWebView, objc2::runtime::Imp>(create_web_view),
         ) {
-            let _ = CREATE_WEB_VIEW.set(std::mem::transmute::<objc2::runtime::Imp, CreateWebView>(old));
+            let _ = CREATE_WEB_VIEW.set(std::mem::transmute::<objc2::runtime::Imp, CreateWebView>(
+                old,
+            ));
         }
     });
 }
@@ -1457,7 +1520,9 @@ unsafe fn guard_link_clicks(view: &AnyObject) {
                 std::mem::transmute::<ActionPolicy, objc2::runtime::Imp>(action_policy),
             )
         {
-            let _ = ACTION_POLICY.set(std::mem::transmute::<objc2::runtime::Imp, ActionPolicy>(old));
+            let _ = ACTION_POLICY.set(std::mem::transmute::<objc2::runtime::Imp, ActionPolicy>(
+                old,
+            ));
         }
     });
 }
@@ -1808,7 +1873,9 @@ mod tests {
     fn attachments_are_saved_inline_ones_shown() {
         assert!(super::is_attachment("attachment"));
         assert!(super::is_attachment(r#"Attachment; filename="a.pdf""#));
-        assert!(!super::is_attachment(r#"inline; filename="attachment.pdf""#));
+        assert!(!super::is_attachment(
+            r#"inline; filename="attachment.pdf""#
+        ));
         assert!(!super::is_attachment(""));
     }
 }

@@ -212,7 +212,10 @@ pub fn favicon_from_links(html: &str) -> Option<String> {
                 .next()
                 .and_then(|n| n.trim().parse::<u32>().ok())
         });
-        let svg = href.split(['?', '#']).next().is_some_and(|p| p.ends_with(".svg"))
+        let svg = href
+            .split(['?', '#'])
+            .next()
+            .is_some_and(|p| p.ends_with(".svg"))
             || href.starts_with("data:image/svg");
         let rank = if tokens.contains(&"icon") {
             match (svg, size) {
@@ -309,17 +312,42 @@ mod tests {
         let i192 = r#"<link rel="icon" href="https://a.com/192.png" sizes="192x192">"#;
         let svg = r#"<link rel="icon" href="https://a.com/icon.svg?v=2" sizes="">"#;
         let mask = r#"<link rel="mask-icon" href="https://a.com/mask.svg" sizes="">"#;
-        assert_eq!(favicon_from_links(&links(&[touch, i16, i192, i32])).as_deref(), Some("https://a.com/32.png"));
-        assert_eq!(favicon_from_links(&links(&[i192, svg, i32])).as_deref(), Some("https://a.com/icon.svg?v=2"));
-        assert_eq!(favicon_from_links(&links(&[i16, ico])).as_deref(), Some("https://a.com/favicon.ico"));
-        assert_eq!(favicon_from_links(&links(&[touch, i16])).as_deref(), Some("https://a.com/16.png"));
-        assert_eq!(favicon_from_links(&links(&[mask, touch])).as_deref(), Some("https://a.com/touch.png"));
+        assert_eq!(
+            favicon_from_links(&links(&[touch, i16, i192, i32])).as_deref(),
+            Some("https://a.com/32.png")
+        );
+        assert_eq!(
+            favicon_from_links(&links(&[i192, svg, i32])).as_deref(),
+            Some("https://a.com/icon.svg?v=2")
+        );
+        assert_eq!(
+            favicon_from_links(&links(&[i16, ico])).as_deref(),
+            Some("https://a.com/favicon.ico")
+        );
+        assert_eq!(
+            favicon_from_links(&links(&[touch, i16])).as_deref(),
+            Some("https://a.com/16.png")
+        );
+        assert_eq!(
+            favicon_from_links(&links(&[mask, touch])).as_deref(),
+            Some("https://a.com/touch.png")
+        );
         assert_eq!(favicon_from_links(mask), None);
         assert_eq!(favicon_from_links(""), None);
-        let big = format!(r#"<link rel="icon" href="data:image/png;base64,{}" sizes="">"#, "A".repeat(9000));
-        assert_eq!(favicon_from_links(&big), None, "too big to send with every update");
+        let big = format!(
+            r#"<link rel="icon" href="data:image/png;base64,{}" sizes="">"#,
+            "A".repeat(9000)
+        );
+        assert_eq!(
+            favicon_from_links(&big),
+            None,
+            "too big to send with every update"
+        );
         let small = r#"<link rel="icon" href="data:image/svg+xml,%3Csvg/%3E" sizes="">"#;
-        assert_eq!(favicon_from_links(small).as_deref(), Some("data:image/svg+xml,%3Csvg/%3E"));
+        assert_eq!(
+            favicon_from_links(small).as_deref(),
+            Some("data:image/svg+xml,%3Csvg/%3E")
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ClosedTab, HistoryHit, Space, Tab } from "../lib/browser";
-import { ENGINES } from "../lib/engines";
+import { ENGINES, TOKIDOKI } from "../lib/engines";
 import { SEARCH_URL } from "../lib/url";
 import { buildItems, CLOSED_SUGGESTIONS, COMMANDS, score, SECTION_LIMIT, type Context, type Item } from "./rank";
 
@@ -309,6 +309,19 @@ describe("search engines", () => {
     expect(buildItems("", ctx({ engine: youtube }))[0]).toMatchObject({
       label: "Open YouTube",
       action: { type: "open", url: "https://www.youtube.com/" },
+    });
+  });
+
+  test("tok offers Tokidoki while the agent is on, and with its pill what is typed is said to it", () => {
+    expect(buildItems("tok", ctx()).some((i) => i.kind === "engine")).toBe(false);
+    const offered = top(buildItems("tok", ctx({ agent: true })));
+    expect(offered[0]).toMatchObject({ label: "Ask Tokidoki", shortcut: "Tab", action: { type: "engine", id: "tokidoki" } });
+    const items = buildItems(" what is new in rust? ", ctx({ agent: true, engine: TOKIDOKI }));
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ label: "Ask Tokidoki “what is new in rust?”", action: { type: "ask", text: "what is new in rust?" } });
+    expect(buildItems("", ctx({ agent: true, engine: TOKIDOKI }))[0]).toMatchObject({
+      label: "Open Tokidoki",
+      action: { type: "ask", text: "" },
     });
   });
 

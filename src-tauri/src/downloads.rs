@@ -90,7 +90,10 @@ pub fn load(app: &AppHandle) {
         _ => Vec::new(),
     };
     let state = app.state::<Downloads>();
-    state.next.store(list.iter().map(|d| d.id + 1).max().unwrap_or(1), Ordering::Relaxed);
+    state.next.store(
+        list.iter().map(|d| d.id + 1).max().unwrap_or(1),
+        Ordering::Relaxed,
+    );
     *state.list.lock().unwrap() = list;
 }
 
@@ -136,15 +139,28 @@ fn changed(app: &AppHandle) {
 /// way to one: wry numbers only past files, so two downloads of one file at
 /// once were both sent to the same path, and WebKit canceled one.
 fn unique(path: &Path, taken: &[Download]) -> PathBuf {
-    let free = |p: &Path| !p.exists() && !taken.iter().any(|d| d.state == State::Active && d.path == p);
+    let free = |p: &Path| {
+        !p.exists()
+            && !taken
+                .iter()
+                .any(|d| d.state == State::Active && d.path == p)
+    };
     if free(path) {
         return path.to_path_buf();
     }
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-    let ext = path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    let ext = path
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
     // wry's own numbering may already be there: count on from it.
     let stem = match stem.rsplit_once(" (") {
-        Some((base, n)) if n.strip_suffix(')').is_some_and(|n| n.parse::<u32>().is_ok()) => base,
+        Some((base, n))
+            if n.strip_suffix(')')
+                .is_some_and(|n| n.parse::<u32>().is_ok()) =>
+        {
+            base
+        }
         _ => &stem,
     };
     (1..)
@@ -218,7 +234,9 @@ pub fn finished(app: &AppHandle, url: &Url, success: bool) {
                 let mut n = n.borrow_mut();
                 let id = n
                     .iter()
-                    .find(|(_, d)| objc2::rc::Retained::as_ptr(d) == objc2::rc::Retained::as_ptr(&current))
+                    .find(|(_, d)| {
+                        objc2::rc::Retained::as_ptr(d) == objc2::rc::Retained::as_ptr(&current)
+                    })
                     .map(|(id, _)| *id)?;
                 n.remove(&id);
                 Some(id)
@@ -287,7 +305,14 @@ fn poll(app: &AppHandle) {
             let tick_app = app.clone();
             let _ = app.run_on_main_thread(move || read_progress(&tick_app));
             let state = app.state::<Downloads>();
-            let active = || state.list.lock().unwrap().iter().any(|d| d.state == State::Active);
+            let active = || {
+                state
+                    .list
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|d| d.state == State::Active)
+            };
             if !active() {
                 state.polling.store(false, Ordering::Release);
                 // One may have started just now, and seen us still polling.
@@ -317,7 +342,10 @@ fn read_progress(app: &AppHandle) {
             let state = app.state::<Downloads>();
             let mut list = state.list.lock().unwrap();
             for (id, done, total) in progress {
-                if let Some(d) = list.iter_mut().find(|d| d.id == id && d.state == State::Active) {
+                if let Some(d) = list
+                    .iter_mut()
+                    .find(|d| d.id == id && d.state == State::Active)
+                {
                     let received = done.max(0) as u64;
                     let total = (total > 0).then_some(total as u64);
                     if d.received != received || d.total != total {
@@ -392,7 +420,10 @@ pub async fn cancel_download(app: AppHandle, id: u32) -> Result<(), String> {
     {
         let state = app.state::<Downloads>();
         let mut list = state.list.lock().unwrap();
-        let Some(d) = list.iter_mut().find(|d| d.id == id && d.state == State::Active) else {
+        let Some(d) = list
+            .iter_mut()
+            .find(|d| d.id == id && d.state == State::Active)
+        else {
             return Ok(());
         };
         d.state = State::Canceled;
@@ -448,7 +479,13 @@ mod tests {
             missing: false,
         };
         // Taken by a download on its way, not on disk yet.
-        assert_eq!(unique(&path, std::slice::from_ref(&active)), dir.join("a.tar (2).gz"));
-        assert_eq!(unique(&dir.join("a.tar (1).gz"), &[active]), dir.join("a.tar (2).gz"));
+        assert_eq!(
+            unique(&path, std::slice::from_ref(&active)),
+            dir.join("a.tar (2).gz")
+        );
+        assert_eq!(
+            unique(&dir.join("a.tar (1).gz"), &[active]),
+            dir.join("a.tar (2).gz")
+        );
     }
 }

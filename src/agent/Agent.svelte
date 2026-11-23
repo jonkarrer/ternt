@@ -56,10 +56,26 @@
     };
   });
 
+  /** The last `ask` taken up, so a request heard twice is said once. */
+  let asked = 0;
+  /** Something the panel was opened to say, waiting for the agent to be able to take it. */
+  let asking = $state(false);
+
+  $effect(() => {
+    // Said as soon as it can be. Until then it sits in the box, where it stays if the
+    // agent can't answer (no key, say) for the user to send or change.
+    if (asking && request && ready && !busy && status) {
+      asking = false;
+      send();
+    }
+  });
+
   let showSeq = 0;
   async function show(next: AgentRequest) {
     const seq = ++showSeq;
     const sameSpace = request?.space.id === next.space.id;
+    const ask = next.ask && next.ask.id !== asked ? next.ask : null;
+    if (ask) asked = ask.id;
     request = next;
     error = null;
     browser.agentStatus().then((now) => (status = now));
@@ -67,6 +83,14 @@
     askSpace(next.space.id);
     await tick();
     input?.focus();
+    if (ask) {
+      // From the command bar (`tok` ⇥): a new conversation that starts with this.
+      await openThread(null);
+      draft = ask.text;
+      asking = true;
+      refreshThreads();
+      return;
+    }
     if (sameSpace && view.thread) {
       // Reopened on the same space: events while hidden were dropped, so
       // read what the thread gained.
@@ -182,7 +206,7 @@
     if (request && view.thread) browser.agentAbort(request.space.id, view.thread);
   }
 
-  /** Rust hides the panel and says so (`agent:close`), the same as for ⌘J. */
+  /** Rust hides the panel and says so (`agent:close`), the same as for ⌃A. */
   function close() {
     return browser.closeAgent();
   }
@@ -347,7 +371,7 @@
       <footer>
         <span><kbd>↵</kbd> send</span>
         <span><kbd>⇧↵</kbd> new line</span>
-        <span><kbd>esc</kbd> or <kbd>⌘J</kbd> close</span>
+        <span><kbd>esc</kbd> or <kbd>⌃A</kbd> close</span>
         {#if stub}<span><kbd>/tool</kbd> <kbd>/error</kbd> try the stub</span>{/if}
         {#if !stub && backend}<button type="button" class="link" onclick={() => browser.menuAction("settings")}>Settings</button>{/if}
       </footer>

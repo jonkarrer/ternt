@@ -326,7 +326,10 @@ static OPENED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new())
 
 pub fn record_opened(path: &std::path::Path, reveal: bool) {
     let kind = if reveal { "reveal" } else { "open" };
-    OPENED.lock().unwrap().push(format!("{kind}:{}", path.display()));
+    OPENED
+        .lock()
+        .unwrap()
+        .push(format!("{kind}:{}", path.display()));
 }
 
 #[tauri::command]
@@ -457,8 +460,15 @@ pub async fn debug_click(
 /// the first responder path and through each of its tracking areas, all of
 /// which must agree.
 #[tauri::command]
-pub async fn debug_takes_mouse(app: AppHandle, label: String, x: f64, y: f64) -> Result<Option<bool>, String> {
-    let webview = app.get_webview(&label).ok_or_else(|| format!("no webview {label}"))?;
+pub async fn debug_takes_mouse(
+    app: AppHandle,
+    label: String,
+    x: f64,
+    y: f64,
+) -> Result<Option<bool>, String> {
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| format!("no webview {label}"))?;
     let (tx, rx) = std::sync::mpsc::channel();
     webview
         .with_webview(move |p| unsafe {
@@ -515,7 +525,9 @@ pub async fn debug_observer_event(
     x: f64,
     y: f64,
 ) -> Result<Vec<String>, String> {
-    let webview = app.get_webview(&label).ok_or_else(|| format!("no webview {label}"))?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| format!("no webview {label}"))?;
     let (tx, rx) = std::sync::mpsc::channel();
     webview
         .with_webview(move |p| unsafe {
@@ -570,7 +582,8 @@ pub async fn debug_observer_event(
                 }
                 let owner = &*owner;
                 let send = std::panic::AssertUnwindSafe(|| {
-                    let _: () = objc2::msg_send![owner, performSelector: selector, withObject: &*event];
+                    let _: () =
+                        objc2::msg_send![owner, performSelector: selector, withObject: &*event];
                 });
                 if let Err(exception) = objc2::exception::catch(send) {
                     raised.push(format!("{exception:?}"));
@@ -618,7 +631,8 @@ pub async fn debug_ctrl_key(app: AppHandle, key: String) -> Result<(), String> {
                 isARepeat: false,
                 keyCode: 3u16
             ];
-            let app: *mut AnyObject = objc2::msg_send![objc2::class!(NSApplication), sharedApplication];
+            let app: *mut AnyObject =
+                objc2::msg_send![objc2::class!(NSApplication), sharedApplication];
             let _: () = objc2::msg_send![app, postEvent: event, atStart: false];
         })
         .map_err(|e| e.to_string())
@@ -662,7 +676,11 @@ pub async fn debug_answer_dialog(
             }
             walk(&*content, &mut views);
             let mut texts = vec![];
-            let wanted = if ok { ["OK", "Allow"] } else { ["Cancel", "Don\u{2019}t Allow"] };
+            let wanted = if ok {
+                ["OK", "Allow"]
+            } else {
+                ["Cancel", "Don\u{2019}t Allow"]
+            };
             let mut button = None;
             for &view in &views {
                 let view = &*view;

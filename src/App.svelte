@@ -211,13 +211,8 @@
     if (!resizing) sidebarWidth = s.sidebarWidth;
   }
 
-  /** The agent can be switched off (Settings → Agent): then there is no Ask button. */
-  let agentEnabled = $state(true);
-
   onMount(() => {
-    browser.getPrefs().then((p) => (agentEnabled = p.agentEnabled));
     const unlisten = [
-      browser.onPrefsChanged((p) => (agentEnabled = p.agentEnabled)),
       browser.onState(applyState),
       browser.onRename((target) => (renaming = target)),
       browser.onIconPicker((id) => (pickingIcon = id)),
@@ -726,20 +721,8 @@
       onpointerleave={leavePeek}
     >
       <header class="titlebar" data-tauri-drag-region>
-        {#if agentEnabled}
-          <button
-            class="ask"
-            aria-label="Ask Tokidoki (⌘J)"
-            title="Ask Tokidoki, this space's agent (⌘J)"
-            onclick={() => browser.menuAction("agent")}
-          >
-            <svg viewBox="0 0 18 18"><path d="M9 2.5 10.6 7 15 8.6 10.6 10.2 9 14.7 7.4 10.2 3 8.6 7.4 7z" /></svg>
-            <span>Ask {space?.name ?? "Tokidoki"}</span>
-          </button>
-        {:else}
-          <!-- The agent is off: its place in the title bar stays, as room to drag the window by. -->
-          <div class="ask-off" data-tauri-drag-region></div>
-        {/if}
+        <!-- Room to drag the window by. The agent has no button here: ⌃A, or `tok` ⇥ in the command bar. -->
+        <div class="grip" data-tauri-drag-region></div>
         <div class="nav">
           <button
             class="tool"
@@ -1182,47 +1165,10 @@
   }
   /* Ask Tokidoki: fills the title bar between the traffic lights and the
      navigation buttons, tinted with the space's color. */
-  .ask {
-    flex: 1;
-    min-width: 0;
-    height: 24px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 0 9px 0 7px;
-    border-radius: 7px;
-    background: hsl(var(--hue) var(--sat) 50% / 0.14);
-    box-shadow: inset 0 0 0 0.5px hsl(var(--hue) var(--sat) 50% / 0.28);
-    color: var(--text);
-    font-size: 12px;
-    font-weight: 600;
-    opacity: 0.85;
-    transition:
-      opacity 100ms ease,
-      background 100ms ease;
-  }
-  .ask-off {
+  /* The top of the sidebar beside the navigation buttons: room to drag the window by. */
+  .grip {
     flex: 1;
     height: 24px;
-  }
-  .ask:hover {
-    opacity: 1;
-    background: hsl(var(--hue) var(--sat) 50% / 0.24);
-  }
-  .ask:active {
-    background: hsl(var(--hue) var(--sat) 50% / 0.32);
-  }
-  .ask svg {
-    width: 13px;
-    height: 13px;
-    flex: none;
-    fill: hsl(var(--hue) var(--sat) 55%);
-    stroke: none;
-  }
-  .ask span {
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
   }
   .nav {
     display: flex;

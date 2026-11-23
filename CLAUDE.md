@@ -5,7 +5,7 @@ file is what isn't in the code.
 
 ## Standing decisions
 
-- **The agent** (⌘J) is tokidoki, run as a sidecar process: Ternt's copy lives in `tokidoki/`
+- **The agent** (⌃A, or `tok` ⇥ in the command bar; no button) is tokidoki, run as a sidecar process: Ternt's copy lives in `tokidoki/`
   (its own Cargo workspace, own CLAUDE.md), the host side in `src-tauri/src/agent/`, the
   contract in `docs/AGENT-SIDECAR.md`. Forked 2026-11-23 from jonkarrer/tokidoki at `4d3b18b`;
   that repo is the owner's own project now and is not touched or synced from here. When the
@@ -23,7 +23,7 @@ file is what isn't in the code.
 - **Setup at first launch** (owner, 2026-11-23): a native window (`src/onboarding/`,
   `src-tauri/src/onboarding.rs`) asks whether to use the AI agent. On needs a provider's key
   before Continue; Jev's is recommended, never required. Off is a real switch
-  (`Prefs::agent_enabled`): no Ask button, no ⌘J, no sidecar.
+  (`Prefs::agent_enabled`): no ⌃A, no `tok` in the command bar, no sidecar.
 - **Secrets** come from Doppler (`doppler run --project ternt --config dev -- …`) or the
   Keychain. Never print a key, never put one on a command line, never commit the updater key.
 

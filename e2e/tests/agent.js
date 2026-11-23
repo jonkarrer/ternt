@@ -1,4 +1,4 @@
-// The Tokidoki panel (⌘J) against the stub agent: per-space conversations,
+// The Tokidoki panel (⌃A) against the stub agent: per-space conversations,
 // streamed replies, tool calls, failed turns, stopping, and how it shares
 // the window with the command bar.
 const S = () => t.state();
@@ -98,6 +98,35 @@ await t.until(async () => !(await A.request()), "opening the command bar closes 
 await t.palette.key("Escape");
 await A.open();
 await t.until(async () => !(await t.palette.request()), "opening the panel closes the command bar");
+await A.key("Escape");
+
+// The command bar reaches the agent too: `tok` ⇥ and what is typed starts a conversation
+const threadsBefore = (await t.invoke("agent_threads", { space: S().activeSpace })).length;
+await t.palette.open("new-tab");
+await t.palette.type("tok");
+await t.until(async () => (await t.palette.rows()).includes("Ask Tokidoki"), "typing tok offers Tokidoki among the suggestions");
+await t.palette.key("Tab");
+await t.until(async () => (await t.read("palette", `document.querySelector(".engine")?.dataset.engine ?? ""`)) === "tokidoki", "Tab makes it the pill");
+await t.palette.type("hello from the command bar");
+await t.until(async () => (await t.palette.rows()).some((row) => row.includes("Ask Tokidoki “hello from the command bar”")), "what is typed is offered as a question for it");
+await t.palette.key("Enter");
+await t.until(() => A.request(), "Enter opens the panel");
+await t.assert(!(await t.palette.request()), "and closes the command bar");
+await t.until(async () => (await userRows()).some(([, x]) => x.includes("hello from the command bar")), "with the question asked", 15000);
+await t.until(async () => (await userRows()).length === 1, "in a conversation of its own");
+await t.until(async () => (await assistantRows()).length >= 1, "and answered", 15000);
+await t.until(async () => (await t.invoke("agent_threads", { space: S().activeSpace })).length === threadsBefore + 1, "a new conversation was started");
+await A.key("Escape");
+// Picked from the suggestions with nothing to say, it just opens the panel
+await t.palette.open("new-tab");
+await t.palette.type("tok");
+await t.until(async () => (await t.palette.rows()).includes("Ask Tokidoki"), "offered again");
+await t.eval("palette", `[...document.querySelectorAll("li")].find((li) => li.textContent.includes("Ask Tokidoki")).dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }))`);
+await t.until(async () => (await t.read("palette", `document.querySelector(".engine")?.dataset.engine ?? ""`)) === "tokidoki", "clicking the suggestion makes it the pill too");
+await t.palette.key("Enter");
+await t.until(() => A.request(), "and Enter with nothing typed opens the panel");
+await t.sleep(400);
+await t.assert((await t.invoke("agent_threads", { space: S().activeSpace })).length === threadsBefore + 1, "without starting another conversation");
 await A.key("Escape");
 
 // The switch (Settings → Agent) holds whatever the process was doing when it was flipped

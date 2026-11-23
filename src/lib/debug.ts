@@ -65,12 +65,12 @@ export function installTestHooks(getState: () => State, applyState?: (state: any
         return JSON.parse(await hooks.read("palette", js));
       },
     },
-    /** Drive the agent panel (⌘J). */
+    /** Drive the agent panel (⌃A). */
     agent: {
       request: () => invoke("agent_request"),
       async open() {
         await invoke("menu_action", { id: "agent" });
-        await hooks.until(() => hooks.agent.request(), "⌘J opens the agent panel");
+        await hooks.until(() => hooks.agent.request(), "⌃A opens the agent panel");
         await sleep(250);
       },
       type: (text: string) =>

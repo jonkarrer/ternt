@@ -1,4 +1,4 @@
-//! Tokidoki in Ternt: an AI agent per space, behind the Ask button and ⌘J.
+//! Tokidoki in Ternt: an AI agent per space, behind ⌃A and the command bar's `tok` ⇥.
 //!
 //! The agents run in their own process, the sidecar (`sidecar.rs`; protocol
 //! in `wire.rs` and docs/AGENT-SIDECAR.md): tokidoki-serve, or the stub from
@@ -70,6 +70,16 @@ pub struct Request {
     content_left: f64,
     /// The agent's data folder under the app data dir (`agents/<folder>`).
     folder: String,
+    /// Something to say at once, in a new conversation (the command bar's `tok` ⇥).
+    ask: Option<Ask>,
+}
+
+/// What the panel is opened to say. The page may be told of a request twice (the event,
+/// and its own asking when it has just loaded); `id` lets it say this once.
+#[derive(Clone, Serialize)]
+pub struct Ask {
+    id: u64,
+    text: String,
 }
 
 /// An event on its way to the page, with the space it belongs to.
@@ -315,6 +325,16 @@ pub fn showing(app: &AppHandle) -> bool {
 
 /// Show the panel for the active space.
 pub fn open(app: &AppHandle) -> tauri::Result<()> {
+    open_asking(app, None)
+}
+
+/// Show the panel; with `text`, on a new conversation that starts by saying it.
+fn open_asking(app: &AppHandle, text: Option<String>) -> tauri::Result<()> {
+    static ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let ask = text.map(|text| Ask {
+        id: ASKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
+        text,
+    });
     // One overlay at a time.
     crate::palette::close(app)?;
     let Some(space) = browser::active_space_info(app) else {
@@ -324,6 +344,7 @@ pub fn open(app: &AppHandle) -> tauri::Result<()> {
         folder: folder_name(space.id),
         space,
         content_left: browser::content_left(app),
+        ask,
     };
     *app.state::<Host>().request.lock().unwrap() = Some(request.clone());
     let webview = match app.get_webview(AGENT_WEBVIEW) {
@@ -338,7 +359,7 @@ pub fn open(app: &AppHandle) -> tauri::Result<()> {
     webview.set_focus()
 }
 
-/// Hide the panel, however it was asked (Esc, ⌘J, the command bar opening):
+/// Hide the panel, however it was asked (Esc, ⌃A, the command bar opening):
 /// the page hears `agent:close` and forgets its request the same way each time.
 pub fn close(app: &AppHandle) -> tauri::Result<()> {
     if app.state::<Host>().request.lock().unwrap().take().is_none() {
@@ -354,7 +375,7 @@ pub fn close(app: &AppHandle) -> tauri::Result<()> {
     }
 }
 
-/// ⌘J: show the panel, or hide it if it's up. Nothing while the agent is off.
+/// ⌃A: show the panel, or hide it if it's up. Nothing while the agent is off.
 pub fn toggle(app: &AppHandle) -> tauri::Result<()> {
     if showing(app) {
         close(app)
@@ -373,6 +394,17 @@ pub async fn agent_request(app: AppHandle) -> Option<Request> {
 #[tauri::command]
 pub async fn open_agent(app: AppHandle) -> Result<(), String> {
     open(&app).map_err(|e| e.to_string())
+}
+
+/// The command bar's `tok` ⇥: open the panel and say `text` to the active space's agent,
+/// in a new conversation. Nothing to say just opens it; nothing at all while the agent is off.
+#[tauri::command]
+pub async fn agent_ask(app: AppHandle, text: String) -> Result<(), String> {
+    if !enabled(&app) {
+        return Ok(());
+    }
+    let text = text.trim();
+    open_asking(&app, (!text.is_empty()).then(|| text.to_string())).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -59,7 +59,7 @@ pub struct Prefs {
     /// Sites allowed the camera and microphone, as origins
     /// (`https://meet.google.com`); the rest ask first.
     pub media_sites: Vec<String>,
-    /// Use the AI agent (⌘J, the Ask button). Off, Ternt is a browser and a terminal:
+    /// Use the AI agent (⌃A, `tok` ⇥ in the command bar). Off, Ternt is a browser and a terminal:
     /// nothing of the agent shows and its process isn't started (see `agent::set_enabled`).
     /// Asked at first launch (`onboarding`); on for everyone who had Ternt before the question.
     pub agent_enabled: bool,

@@ -40,7 +40,7 @@ export const SHORTCUTS: ShortcutGroup[] = [
     ["⌥⌘←  ⌥⌘→", "Previous / next space"],
   ]),
   group("Agent", [
-    ["⌘J", "Ask Tokidoki: this space's agent, in a panel over the page (also the Ask button at the top of the sidebar)"],
+    ["⌃A", "Ask Tokidoki: this space's agent, in a panel over the page. In the command bar, tok ⇥ and what you type starts a conversation with it"],
   ]),
   group("App", [
     ["⌃H", "Shortcuts and how-tos (this sheet)"],
@@ -54,7 +54,7 @@ export const SHORTCUTS: ShortcutGroup[] = [
 export const HOW_TOS: HowTo[] = [
   {
     title: "Ask your space's agent",
-    text: "Press ⌘J, or click Ask <space> at the top of the sidebar. Each space has its own agent with its own memory, so a dev space and a marketing space never mix. Enter sends, Shift+Enter adds a line, Esc closes; the + button starts a new conversation. Pick the provider and paste your own API key in Settings → Agent (⌘,): Fireworks AI or Anthropic. The key is kept in your Keychain and goes only to the agent process. In a build with the stand-in agent (marked stub) no key is needed.",
+    text: "Press ⌃A. Or press ⌘T, type tok, press Tab and type what you want to ask: Enter starts a new conversation with it. Each space has its own agent with its own memory, so a dev space and a marketing space never mix. Enter sends, Shift+Enter adds a line, Esc closes; the + button starts a new conversation. Pick the provider and paste your own API key in Settings → Agent (⌘,): Fireworks AI or Anthropic. The key is kept in your Keychain and goes only to the agent process. In a build with the stand-in agent (marked stub) no key is needed.",
   },
   {
     title: "Search a site",

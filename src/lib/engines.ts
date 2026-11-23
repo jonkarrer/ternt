@@ -1,5 +1,7 @@
 // Search engines for the command bar: type the start of one's name (or an
 // alias) and press Tab, and the query goes to that site (`you` ⇥ YouTube).
+// Tokidoki, the space's agent, is picked the same way (`tok` ⇥): what is typed
+// then starts a conversation with it instead of opening a page.
 // Pure (no Tauri imports) so it's unit-testable.
 
 export type Engine = {
@@ -13,6 +15,19 @@ export type Engine = {
   home: string;
   /** The pill's color. */
   color: string;
+  /** Not a site: the query is said to the space's agent. */
+  ask?: true;
+};
+
+/** The space's agent, offered among the engines while the agent is on. */
+export const TOKIDOKI: Engine = {
+  id: "tokidoki",
+  name: "Tokidoki",
+  aliases: ["tok", "ai"],
+  search: "",
+  home: "",
+  color: "#8b5cf6",
+  ask: true,
 };
 
 /** In order of preference when a prefix matches several. */
@@ -101,13 +116,14 @@ export const ENGINES: Engine[] = [
 
 /** The engine a typed word picks: an alias exactly, else the start of a
     name (two letters at least, so a one-letter search isn't taken over). */
-export function engineFor(typed: string): Engine | null {
+export function engineFor(typed: string, agent = false): Engine | null {
   const word = typed.trim().toLowerCase();
   if (!word || /\s/.test(word)) return null;
-  const byAlias = ENGINES.find((e) => e.aliases.includes(word));
+  const engines = agent ? [TOKIDOKI, ...ENGINES] : ENGINES;
+  const byAlias = engines.find((e) => e.aliases.includes(word));
   if (byAlias) return byAlias;
   if (word.length < 2) return null;
-  return ENGINES.find((e) => e.name.toLowerCase().startsWith(word)) ?? null;
+  return engines.find((e) => e.name.toLowerCase().startsWith(word)) ?? null;
 }
 
 /** Where a search for `query` goes (its home page with nothing to search). */

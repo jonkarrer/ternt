@@ -153,6 +153,7 @@ pub fn run() {
             palette::close_palette,
             agent::agent_request,
             agent::open_agent,
+            agent::agent_ask,
             agent::close_agent,
             agent::agent_send,
             agent::agent_threads,

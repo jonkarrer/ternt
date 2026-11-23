@@ -213,7 +213,9 @@ fn newer(a: &str, b: &str) -> bool {
 /// `manual` checks show the download and report "up to date" too.
 pub async fn check(app: &AppHandle, manual: bool) -> Result<(), String> {
     // Don't disturb an install in progress.
-    if matches!(status(app), Status::Installing { .. }) || *app.state::<Updates>().downloading.lock().unwrap() {
+    if matches!(status(app), Status::Installing { .. })
+        || *app.state::<Updates>().downloading.lock().unwrap()
+    {
         return Ok(());
     }
     use std::sync::atomic::Ordering;
@@ -241,7 +243,10 @@ pub async fn check(app: &AppHandle, manual: bool) -> Result<(), String> {
                 .as_ref()
                 .is_some_and(|p| p.update.version == update.version && p.bytes.is_some());
             if !ready {
-                *app.state::<Updates>().pending.lock().unwrap() = Some(Pending { update, bytes: None });
+                *app.state::<Updates>().pending.lock().unwrap() = Some(Pending {
+                    update,
+                    bytes: None,
+                });
                 download(app, manual || required).await?;
             }
             if required {
@@ -381,7 +386,12 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
     if let Err(err) = apply(app, &pending) {
         // Keep the update so the button can retry.
         *app.state::<Updates>().pending.lock().unwrap() = Some(pending);
-        set_status(app, Status::Failed { message: err.clone() });
+        set_status(
+            app,
+            Status::Failed {
+                message: err.clone(),
+            },
+        );
         return Err(err);
     }
 
@@ -393,7 +403,10 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
 
 /// Install a downloaded update into the app bundle and drop its package.
 fn apply(app: &AppHandle, pending: &Pending) -> Result<(), String> {
-    let bytes = pending.bytes.as_deref().ok_or("the update isn't downloaded")?;
+    let bytes = pending
+        .bytes
+        .as_deref()
+        .ok_or("the update isn't downloaded")?;
     pending.update.install(bytes).map_err(|e| e.to_string())?;
     if let Some(path) = package_path(app, &pending.update.version) {
         let _ = std::fs::remove_file(path);

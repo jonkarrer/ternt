@@ -60,7 +60,7 @@ them run under `doppler run --`.
 | ⌘, | Settings (⌘1–⌘6 switch its pages, ⌘W closes it) |
 | ⌃H | Shortcuts and how-tos, searchable (also in the Help menu). In a terminal, ⌃H goes to the shell (backspace) |
 | ⌘H | Hide Ternt |
-| ⌘J | Ask Tokidoki: this space's AI agent in a panel over the page (also the Ask button at the top of the sidebar). One agent per space, each with its own memory; a stub answers until tokidoki is embedded (see Agent below) |
+| ⌃A | Ask Tokidoki: this space's AI agent in a panel over the page. In the command bar (⌘T), `tok` ⇥ and what you type starts a conversation with it. One agent per space, each with its own memory; a stub answers until tokidoki is embedded (see Agent below) |
 
 ## Sidebar
 
@@ -176,7 +176,7 @@ name and email, kept on this Mac, and a summary of your profiles), **General** (
 
 Every space gets its own AI agent: tokidoki (`tokidoki/`, Ternt's copy, forked 2026-11-23 from
 [jonkarrer/tokidoki](https://github.com/jonkarrer/tokidoki)), an agent with durable execution and
-long-term memory. Press ⌘J or click **Ask <space>** at the top of the sidebar:
+long-term memory. Press ⌃A, or type `tok` ⇥ and your question in the command bar (⌘T):
 a panel opens over the page with that space's conversations. Agents share nothing, so what the dev
 space's agent learns never reaches the marketing space's.
 
@@ -195,7 +195,7 @@ tree, refusing uncommitted changes there); `TERNT_SIDECAR=stub just upload` woul
 against the real agent (one model call if `ANTHROPIC_API_KEY` is set).
 
 The agent can be **switched off** (the switch at the top of Settings → Agent, or in the setup
-window): the Ask button goes, ⌘J does nothing and the sidecar isn't run (`Prefs::agent_enabled`,
+window): ⌃A does nothing, the command bar stops offering Tokidoki and the sidecar isn't run (`Prefs::agent_enabled`,
 `agent::set_enabled`).
 
 The agent is **bring your own key**: Settings → Agent → Keys takes your Fireworks AI and Anthropic
@@ -241,7 +241,7 @@ One window, several native webviews (see `src-tauri/src/browser.rs`):
 | `term` | `term.html` → `src/term/` | All terminal tabs and their panes (xterm.js), created on first use |
 | `peek` | `index.html` again | The collapsed sidebar shown over the page on hover, pre-created hidden |
 | `palette` | `palette.html` → `src/palette/` | Command bar overlay, pre-created hidden |
-| `agent` | `agent.html` → `src/agent/` | Tokidoki panel (⌘J), created on first open then kept hidden (`src-tauri/src/agent/`; the agents themselves run in the `ternt-agent` sidecar process) |
+| `agent` | `agent.html` → `src/agent/` | Tokidoki panel (⌃A), created on first open then kept hidden (`src-tauri/src/agent/`; the agents themselves run in the `ternt-agent` sidecar process) |
 | `settings` | `settings.html` → `src/settings/` | Settings, its own window (`src-tauri/src/settings.rs`) |
 | `little-N-bar` / `little-N-page` | `little.html` → `src/little/` / the web | Little Ternt windows (`src-tauri/src/little.rs`) |
 

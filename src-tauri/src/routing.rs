@@ -45,7 +45,9 @@ impl LinkRule {
 }
 
 fn compile(pattern: &str) -> Result<regex::Regex, regex::Error> {
-    regex::RegexBuilder::new(pattern).size_limit(1 << 20).build()
+    regex::RegexBuilder::new(pattern)
+        .size_limit(1 << 20)
+        .build()
 }
 
 /// `pattern` is a host, maybe with a path: `github.com`, `*.google.com`,
@@ -108,8 +110,16 @@ pub fn check_link_rule(kind: RuleKind, pattern: String) -> Result<(), String> {
         RuleKind::Host => Ok(()),
         RuleKind::Regex => compile(pattern.trim()).map(|_| ()).map_err(|e| {
             // The last line says what's wrong; the rest repeats the pattern.
-            let line = e.to_string().lines().last().unwrap_or_default().trim().to_string();
-            line.strip_prefix("error: ").map(str::to_string).unwrap_or(line)
+            let line = e
+                .to_string()
+                .lines()
+                .last()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            line.strip_prefix("error: ")
+                .map(str::to_string)
+                .unwrap_or(line)
         }),
     }
 }
@@ -139,8 +149,16 @@ mod tests {
         assert!(hit(&r, "https://GitHub.com/x"));
         assert!(!hit(&r, "https://notgithub.com/"));
         assert!(!hit(&r, "https://github.com.evil.io/"));
-        for pattern in ["*.github.com", "https://github.com/", "www.github.com", "GitHub.com"] {
-            assert!(hit(&rule(RuleKind::Host, pattern), "https://api.github.com/"), "{pattern}");
+        for pattern in [
+            "*.github.com",
+            "https://github.com/",
+            "www.github.com",
+            "GitHub.com",
+        ] {
+            assert!(
+                hit(&rule(RuleKind::Host, pattern), "https://api.github.com/"),
+                "{pattern}"
+            );
         }
     }
 
@@ -158,8 +176,14 @@ mod tests {
         let r = rule(RuleKind::Regex, r"^https://docs\.google\.com/.*/d/1abc");
         assert!(hit(&r, "https://docs.google.com/document/d/1abcdef/edit"));
         assert!(!hit(&r, "https://docs.google.com/document/d/9zzz/edit"));
-        assert!(hit(&rule(RuleKind::Regex, "(?i)LINEAR"), "https://linear.app/acme"));
-        assert!(!hit(&rule(RuleKind::Regex, "(unclosed"), "https://a.com/(unclosed"));
+        assert!(hit(
+            &rule(RuleKind::Regex, "(?i)LINEAR"),
+            "https://linear.app/acme"
+        ));
+        assert!(!hit(
+            &rule(RuleKind::Regex, "(unclosed"),
+            "https://a.com/(unclosed"
+        ));
     }
 
     #[test]
@@ -172,6 +196,9 @@ mod tests {
     #[test]
     fn blank_rules_are_dropped() {
         assert_eq!(rule(RuleKind::Host, "  ").tidy(), None);
-        assert_eq!(rule(RuleKind::Host, " a.com ").tidy().unwrap().pattern, "a.com");
+        assert_eq!(
+            rule(RuleKind::Host, " a.com ").tidy().unwrap().pattern,
+            "a.com"
+        );
     }
 }

@@ -43,7 +43,7 @@ ternt-agent --data <dir>
   the panel as a tool row, from the thread's checkpoints like any message.
 - **The agent can be off** (`Prefs::agent_enabled`, asked at first launch in the setup window,
   kept in Settings → Agent). Off, Ternt doesn't run the process at all: its status is `down`
-  with the reason saying so, ⌘J and the Ask button are put away, and a saved key restarts
+  with the reason saying so, ⌃A and the command bar's `tok` are put away, and a saved key restarts
   nothing. Switching it on starts the process with the keys as they are then.
 - **Jev decides the small things, when there is a TypeSafe key** (`TYPESAFE_API_KEY`,
   Keychain account `typesafe`, optional, set on the process like the others). It is not a
