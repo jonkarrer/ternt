@@ -36,15 +36,16 @@
     saving = true;
     error = null;
     try {
-      const prefs = await browser.getPrefs();
-      if (prefs.agentEnabled !== on) await browser.updatePrefs({ agentEnabled: on });
       const typed = Object.fromEntries(
         (Object.keys(drafts) as (keyof AgentKeys)[]).filter((id) => drafts[id].trim()).map((id) => [id, drafts[id].trim()]),
       );
-      if (on && Object.keys(typed).length) {
-        await browser.agentSetKeys(typed);
-        await useKeyedProviders(await browser.agentKeys());
-      }
+      const keyed = on && Object.keys(typed).length > 0;
+      // The keys first: an agent switched on here starts with them, once, instead of
+      // starting without and being restarted for them.
+      if (keyed) await browser.agentSetKeys(typed);
+      const prefs = await browser.getPrefs();
+      if (prefs.agentEnabled !== on) await browser.updatePrefs({ agentEnabled: on });
+      if (keyed) await useKeyedProviders(await browser.agentKeys());
       await browser.closeOnboarding();
     } catch (e) {
       error = String(e);

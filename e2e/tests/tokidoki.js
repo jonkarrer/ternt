@@ -113,4 +113,18 @@ await t.invoke("agent_wipe", { space: first });
 await t.assert((await t.invoke("agent_memories", { space: first })).length === 0, "wipe leaves nothing");
 await t.assert((await t.invoke("agent_threads", { space: first })).length >= 1, "but keeps the conversation");
 await A.key("Escape");
+
+// A space deleted while the agent is switched off takes its agent's files with it (no model
+// call; e2e/run.sh leaves the folders in e2e/.out/tokidoki.agents to look at).
+const doomed = await t.invoke("create_space");
+await t.assert(Array.isArray(await t.invoke("agent_threads", { space: doomed })), `the new space's agent opens (space-${doomed})`);
+const prefs = await t.invoke("get_prefs");
+await t.invoke("set_prefs", { prefs: { ...prefs, agentEnabled: false } });
+await t.until(async () => (await t.invoke("agent_status")).state === "down", "the agent is switched off");
+await t.invoke("remove_space", { id: doomed });
+await t.until(() => !S().spaces.some((s) => s.id === doomed), "and the space deleted meanwhile");
+await new Promise((done) => setTimeout(done, 500));
+await t.log(`deleted-while-off space-${doomed}`);
+await t.invoke("set_prefs", { prefs: { ...prefs, agentEnabled: true } });
+await running();
 await t.quit();

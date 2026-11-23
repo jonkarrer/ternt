@@ -7,7 +7,8 @@
 //! One request, no memory on their side: everything a question needs goes in `state`.
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 use serde::Deserialize;
@@ -20,6 +21,15 @@ pub const MODEL: &str = "jev-1.14.0";
 /// These decisions stand in front of an answer: one that is slow is worth less than the
 /// fallback behind it.
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// What a decision made on the way to a reply (where a message goes, what to recall for
+/// it) waits for Jev: several times what Jev usually takes, short enough that a stalled
+/// request isn't felt as a hang. Idle work can wait longer.
+pub const BEFORE_A_REPLY: Duration = Duration::from_secs(2);
+/// After Jev didn't answer, or answered that it can't just now, it isn't asked again for
+/// this long: every question fails at once and its fallback decides. A turn asks Jev
+/// several things one after the other, and without this an outage would cost it each
+/// one's full wait before its first model call.
+const REST: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct Jev {
@@ -28,6 +38,9 @@ pub struct Jev {
     key: String,
     model: String,
     timeout: Duration,
+    /// Until when it is left alone (`REST`). Shared by its clones, which are the same Jev
+    /// asked with another patience.
+    resting: Arc<Mutex<Option<Instant>>>,
 }
 
 /// The option Jev picked from a choice question's, and how sure it is (0 to 1).
@@ -53,6 +66,7 @@ impl Jev {
             key: key.into(),
             model: MODEL.into(),
             timeout: TIMEOUT,
+            resting: Arc::default(),
         }
     }
 
@@ -64,6 +78,11 @@ impl Jev {
 
     /// The answers to `questions` about `state`, by the names the questions were given.
     pub async fn ask(&self, state: &Value, questions: Value) -> Result<Map<String, Value>> {
+        if let Some(until) = *self.resting.lock().unwrap()
+            && Instant::now() < until
+        {
+            bail!("Jev didn't answer a moment ago and isn't asked again yet");
+        }
         let body = json!({ "model": self.model, "state": state, "questions": questions });
         let response = self
             .http
@@ -72,10 +91,20 @@ impl Jev {
             .timeout(self.timeout)
             .json(&body)
             .send()
-            .await
-            // Without the address: the error is logged.
-            .map_err(|error| anyhow::anyhow!("Jev didn't answer: {}", error.without_url()))?;
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                self.rest();
+                // Without the address: the error is logged.
+                bail!("Jev didn't answer: {}", error.without_url());
+            }
+        };
         let status = response.status();
+        // Its trouble, not the question's: the next question would fare no better.
+        if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            self.rest();
+        }
         if !status.is_success() {
             let said = response.text().await.unwrap_or_default();
             let said: String = said.trim().chars().take(300).collect();
@@ -87,6 +116,10 @@ impl Jev {
         }
         let answered: Answered = response.json().await.context("reading Jev's answer")?;
         Ok(answered.answers)
+    }
+
+    fn rest(&self) {
+        *self.resting.lock().unwrap() = Some(Instant::now() + REST);
     }
 
     /// Yes-or-no questions (name, what is asked), all about the same `state`, in one request:
@@ -202,6 +235,34 @@ pub mod testing {
 mod tests {
     use super::testing::server;
     use super::*;
+
+    /// After an answer that says Jev can't just now, the next question isn't sent: it
+    /// fails at once, for its fallback to decide, and so does a clone's.
+    #[tokio::test]
+    async fn an_outage_is_not_waited_for_twice() {
+        let (base, seen) = testing::server("529 Overloaded", r#"{"detail":"overloaded"}"#).await;
+        let jev = Jev::at(base, "k");
+        let question = [("q".to_string(), "Is it?".to_string())];
+        assert!(jev.yes_or_no(&json!({}), &question).await.is_err());
+        let patient = jev.clone().within(Duration::from_secs(10));
+        let error = patient.yes_or_no(&json!({}), &question).await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("isn't asked again yet"),
+            "{error:#}"
+        );
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    /// A question Jev refuses (a bad key, a bad request) says nothing about the next one.
+    #[tokio::test]
+    async fn a_refused_question_does_not_stop_the_next() {
+        let (base, seen) = testing::server("400 Bad Request", r#"{"detail":"no"}"#).await;
+        let jev = Jev::at(base, "k");
+        let question = [("q".to_string(), "Is it?".to_string())];
+        assert!(jev.yes_or_no(&json!({}), &question).await.is_err());
+        assert!(jev.yes_or_no(&json!({}), &question).await.is_err());
+        assert_eq!(seen.lock().unwrap().len(), 2);
+    }
 
     fn options() -> Vec<(String, String)> {
         vec![

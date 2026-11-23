@@ -99,4 +99,28 @@ await t.palette.key("Escape");
 await A.open();
 await t.until(async () => !(await t.palette.request()), "opening the panel closes the command bar");
 await A.key("Escape");
+
+// The switch (Settings → Agent) holds whatever the process was doing when it was flipped
+const pause = (ms) => new Promise((done) => setTimeout(done, ms));
+const state = async () => (await t.invoke("agent_status")).state;
+const prefs = await t.invoke("get_prefs");
+const turn = (agentEnabled) => t.invoke("set_prefs", { prefs: { ...prefs, agentEnabled } });
+await turn(false);
+await t.until(async () => (await state()) === "down", "switched off, the process stops");
+await pause(1500);
+await t.assert((await state()) === "down", "and stays stopped");
+await turn(true);
+await turn(false);
+await turn(true);
+await t.until(async () => (await state()) === "running", "on, off and on again at once leaves it running", 15000);
+await pause(1500);
+await t.assert((await state()) === "running" && (await t.invoke("get_prefs")).agentEnabled, "as the switch says, with no late stop");
+await turn(false);
+await turn(true);
+await turn(false);
+await t.until(async () => (await state()) === "down", "and ending on off leaves it stopped", 15000);
+await pause(1500);
+await t.assert((await state()) === "down", "with no late start");
+await turn(true);
+await t.until(async () => (await state()) === "running", "switched on, it runs again", 15000);
 await t.quit();

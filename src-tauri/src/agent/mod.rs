@@ -143,7 +143,8 @@ pub fn start(app: &AppHandle) {
     if enabled(app) {
         sidecar.start();
     } else {
-        sidecar.switch_off();
+        sidecar.stand_down();
+        sidecar.settle_off();
     }
     let _ = host.sidecar.set(sidecar);
 }
@@ -162,14 +163,19 @@ pub fn set_enabled(app: &AppHandle, on: bool) {
         sidecar.restart();
         return;
     }
+    // Said here, in the order the switch was flipped: a late "off" must not undo an "on"
+    // that came after it.
+    sidecar.stand_down();
     let app = app.clone();
-    // Stopping waits for the process; closing the panel touches webviews. Neither on
-    // the thread that asked.
+    // Seeing the process out waits for it; closing the panel touches webviews. Neither
+    // on the thread that asked.
     std::thread::spawn(move || {
-        if let Err(err) = close(&app) {
+        if !enabled(&app)
+            && let Err(err) = close(&app)
+        {
             eprintln!("ternt-agent: closing the panel: {err}");
         }
-        sidecar.switch_off();
+        sidecar.settle_off();
     });
 }
 
@@ -257,8 +263,8 @@ fn emit(app: &AppHandle, space: u32, event: Event) {
 }
 
 /// A space was deleted: have the sidecar remove its agent's files
-/// (conversations, memory, journal). If the process is down just then the
-/// folder stays behind, which only costs disk.
+/// (conversations, memory, journal), or remove them here when there is no
+/// process to ask (`Sidecar::delete`).
 pub fn forget(app: &AppHandle, space: u32) {
     let Ok(sidecar) = sidecar(app) else {
         return;

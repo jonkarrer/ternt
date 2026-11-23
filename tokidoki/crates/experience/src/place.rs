@@ -95,51 +95,72 @@ impl<A: Api> Experience<A> {
                 thread: thread.to_string(),
                 checkpoint: raised[0].checkpoint,
             });
-            match chosen.choice.as_str() {
-                NOTHING => decisions.push(Decision::Ignore {
+            // The wording is the model's. If it fails for this message (no answer, or one
+            // that can't be read), this message goes to the model whole with the unplaced
+            // ones; what was decided for the others stands.
+            let worded = match chosen.choice.as_str() {
+                NOTHING => Ok(vec![Decision::Ignore {
                     reason: format!("nothing to keep (Jev, {:.2})", chosen.confidence),
-                }),
-                NEW => {
-                    let reply = self.ask(WRITE_PROMPT, text.to_string()).await?;
-                    let written = json_array(&reply)?;
-                    let none = HashMap::new();
-                    decisions.extend(
-                        written
-                            .iter()
-                            .filter_map(|raw| {
-                                to_decision(raw, &self.scopes.write, source.clone(), &none)
-                            })
-                            .filter(|decision| matches!(decision, Decision::Retain(_))),
-                    );
-                }
-                note => {
-                    let Some(item) = related
-                        .into_iter()
-                        .find(|item| format!("m{}", item.id) == note)
-                    else {
-                        unplaced.extend(raised);
-                        continue;
-                    };
-                    let input = json!({ "message": text, "note": describe(&item) });
-                    let reply = self.ask(REWRITE_PROMPT, input.to_string()).await?;
-                    let shown = HashMap::from([(item.id, item)]);
-                    // Whatever it answers is about that note: it was shown no other.
-                    decisions.extend(
-                        json_array(&reply)?
-                            .iter()
-                            .filter_map(|raw| {
-                                to_decision(raw, &self.scopes.write, source.clone(), &shown)
-                            })
-                            .filter(|decision| !matches!(decision, Decision::Retain(_)))
-                            .take(1),
-                    );
+                }]),
+                NEW => self.word_new(text, source).await,
+                note => match related
+                    .into_iter()
+                    .find(|item| format!("m{}", item.id) == note)
+                {
+                    Some(item) => self.word_change(text, item, source).await,
+                    None => Err(anyhow::anyhow!("Jev chose {note}, which it wasn't offered")),
+                },
+            };
+            match worded {
+                Ok(worded) => decisions.extend(worded),
+                Err(error) => {
+                    tracing::warn!(%error, "a placed message couldn't be worded; the model decides it whole");
+                    unplaced.extend(raised);
                 }
             }
         }
         if !unplaced.is_empty() {
-            decisions.extend(self.decide_by_model(&unplaced, thread).await?);
+            match self.decide_by_model(&unplaced, thread).await {
+                Ok(decided) => decisions.extend(decided),
+                // With nothing else decided this is the failure it would be without Jev;
+                // otherwise what Jev placed is kept, and the rest is lost as it would be.
+                Err(error) if decisions.is_empty() => return Err(error),
+                Err(error) => {
+                    tracing::warn!(%error, "the model couldn't decide the unplaced messages");
+                }
+            }
         }
         Ok(decisions)
+    }
+
+    /// The message says something new: the model writes it down.
+    async fn word_new(&self, text: &str, source: Option<Source>) -> Result<Vec<Decision>> {
+        let reply = self.ask(WRITE_PROMPT, text.to_string()).await?;
+        let none = HashMap::new();
+        Ok(json_array(&reply)?
+            .iter()
+            .filter_map(|raw| to_decision(raw, &self.scopes.write, source.clone(), &none))
+            .filter(|decision| matches!(decision, Decision::Retain(_)))
+            .collect())
+    }
+
+    /// The message changes `item`: the model rewrites that note, or drops it.
+    async fn word_change(
+        &self,
+        text: &str,
+        item: Item,
+        source: Option<Source>,
+    ) -> Result<Vec<Decision>> {
+        let input = json!({ "message": text, "note": describe(&item) });
+        let reply = self.ask(REWRITE_PROMPT, input.to_string()).await?;
+        let shown = HashMap::from([(item.id, item)]);
+        // Whatever it answers is about that note: it was shown no other.
+        Ok(json_array(&reply)?
+            .iter()
+            .filter_map(|raw| to_decision(raw, &self.scopes.write, source.clone(), &shown))
+            .filter(|decision| !matches!(decision, Decision::Retain(_)))
+            .take(1)
+            .collect())
     }
 }
 

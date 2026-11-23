@@ -328,8 +328,13 @@ impl Tokidoki {
             memory.clone(),
             vec![scope.clone()],
         );
-        if let Some(key) = &config.jev {
-            router.classifier = Some(Box::new(JevClassifier(Jev::new(key))));
+        // One Jev for routing and for memory, so that when it is down the first question to
+        // go unanswered spares the turn the wait for the others.
+        let jev = config.jev.as_ref().map(Jev::new);
+        if let Some(jev) = &jev {
+            // Routing stands before the reply like recall does, and waits no longer.
+            let routing = jev.clone().within(inference::jev::BEFORE_A_REPLY);
+            router.classifier = Some(Box::new(JevClassifier(routing)));
         }
         let experience = Experience::new(
             provider(),
@@ -340,8 +345,8 @@ impl Tokidoki {
                 write: scope.clone(),
             },
         );
-        let experience = match &config.jev {
-            Some(key) => experience.with_jev(Jev::new(key)),
+        let experience = match jev {
+            Some(jev) => experience.with_jev(jev),
             None => experience,
         };
         let model = Arc::new(ProviderModel {

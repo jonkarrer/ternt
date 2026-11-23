@@ -1764,7 +1764,20 @@ pub fn select_space_number(app: &AppHandle, number: usize) -> tauri::Result<()> 
 pub fn new_space(app: &AppHandle) -> tauri::Result<u32> {
     // Each new space gets its own logins; it can share another's via the
     // space menu.
-    let id = with(app, |s| s.add_space(Some(new_profile_id())));
+    // On the provider the user has a key for, when that isn't the default one; here, so
+    // that every way of making a space (the sidebar, the menu, its shortcut) gets it.
+    let provider = crate::agent::preferred_provider();
+    let id = with(app, |s| {
+        let id = s.add_space(Some(new_profile_id()));
+        s.set_space_agent(
+            id,
+            crate::agent::Setup {
+                provider,
+                ..Default::default()
+            },
+        );
+        id
+    });
     switch_space(app, id)?;
     emit_state(app);
     Ok(id)
@@ -2335,14 +2348,7 @@ pub async fn set_sidebar_width(app: AppHandle, width: f64) -> Result<f64, String
 
 #[tauri::command]
 pub async fn create_space(app: AppHandle) -> Result<u32, String> {
-    let id = new_space(&app).map_err(err)?;
-    // On the provider the user has a key for, when that isn't the default one.
-    let provider = crate::agent::preferred_provider();
-    if let Some(mut setup) = space_setup(&app, id).filter(|setup| setup.provider != provider) {
-        setup.provider = provider;
-        set_space_agent(&app, id, setup);
-    }
-    Ok(id)
+    new_space(&app).map_err(err)
 }
 
 #[tauri::command]

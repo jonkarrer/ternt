@@ -22,7 +22,7 @@ use crate::Experience;
 
 /// A turn waits for this before its first model call: longer than Jev usually takes by
 /// several times, short enough that a stalled request isn't felt as a hang.
-pub(crate) const PATIENCE: Duration = Duration::from_secs(2);
+pub(crate) const PATIENCE: Duration = inference::jev::BEFORE_A_REPLY;
 /// Memories Jev is asked about per message: the search's hits first, then the newest.
 const CANDIDATES: usize = 24;
 /// Of those, how many the search may bring.

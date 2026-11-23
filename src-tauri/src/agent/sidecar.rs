@@ -20,7 +20,7 @@ use std::{
     process::Stdio,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -89,28 +89,6 @@ pub enum Status {
     },
 }
 
-/// What Ternt wants of the running process, read by the loop when it exits.
-#[derive(Clone, Copy, PartialEq)]
-#[repr(u8)]
-enum Intent {
-    /// Nothing: an exit is a death.
-    None = 0,
-    /// Stop it and start another (Restart, a key or provider change).
-    Restart = 1,
-    /// Stop it for good (Ternt is quitting, or the agent was switched off).
-    Stop = 2,
-}
-
-impl Intent {
-    fn from_u8(value: u8) -> Self {
-        match value {
-            1 => Self::Restart,
-            2 => Self::Stop,
-            _ => Self::None,
-        }
-    }
-}
-
 pub struct Sidecar {
     app: AppHandle,
     outbox: Outbox,
@@ -126,8 +104,14 @@ pub struct Sidecar {
     pid: AtomicU32,
     /// A `run` loop is going (so `restart` knows whether to start one).
     running: AtomicBool,
-    intent: AtomicU8,
-    /// Cuts a back-off pause short (Restart pressed during one).
+    /// The user has the agent on and Ternt isn't quitting. The loop reads it wherever it
+    /// could start or keep a process, so switching off holds whatever the loop was doing
+    /// when it was asked: running, starting, or pausing between two tries.
+    wanted: AtomicBool,
+    /// A restart was asked for since the loop last began starting a process: the one it
+    /// has, or is starting, isn't the one wanted (it read the keys too early).
+    again: AtomicBool,
+    /// Cuts a back-off pause short (Restart pressed, or switched off, during one).
     wake: Notify,
     generation: AtomicU64,
     /// What the running process was told each space runs as, and its
@@ -159,6 +143,15 @@ fn restart_attempt(deaths: &mut Vec<Instant>, now: Instant) -> u32 {
     deaths.len() as u32
 }
 
+/// Remove an agent's folder; one that isn't there is already removed.
+fn remove_folder(folder: &std::path::Path) -> Result<(), String> {
+    match std::fs::remove_dir_all(folder) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("removing {}: {error}", folder.display())),
+    }
+}
+
 fn signal(pid: u32, sig: libc::c_int) {
     if pid != 0 {
         // Sending a signal to a pid we started and still hold is the one thing
@@ -182,7 +175,8 @@ impl Sidecar {
             deaths: Mutex::default(),
             pid: AtomicU32::new(0),
             running: AtomicBool::new(false),
-            intent: AtomicU8::new(Intent::None as u8),
+            wanted: AtomicBool::new(true),
+            again: AtomicBool::new(false),
             wake: Notify::new(),
             generation: AtomicU64::new(0),
             configured: Mutex::default(),
@@ -200,32 +194,33 @@ impl Sidecar {
 
     async fn run(self: Arc<Self>) {
         let mut restarted = false;
-        loop {
+        // Whether the loop ended because the agent isn't wanted, not because it gave up.
+        let stopped = loop {
+            if !self.wanted.load(Ordering::SeqCst) {
+                break true;
+            }
             let outcome = self.spawn_once(restarted).await;
             // However it ended, there is no process now.
-            self.pid.store(0, Ordering::Relaxed);
+            self.pid.store(0, Ordering::SeqCst);
             *self.stdin.lock().await = None;
-            let intent = Intent::from_u8(self.intent.swap(Intent::None as u8, Ordering::AcqRel));
-            match (intent, outcome) {
-                (Intent::Stop, _) => {
-                    self.fail_pending("The agent was stopped.");
-                    break;
-                }
-                (Intent::Restart, _) => {
-                    self.fail_pending("The agent was restarted.");
-                    self.set_status(Status::Restarting {
-                        attempt: 0,
-                        asked: true,
-                    });
-                    restarted = false;
-                    continue;
-                }
-                (Intent::None, Err(reason)) => {
-                    self.fail_pending(&reason);
-                    self.set_status(Status::Down { reason });
-                    break;
-                }
-                (Intent::None, Ok(())) => {}
+            let again = self.again.swap(false, Ordering::SeqCst);
+            if !self.wanted.load(Ordering::SeqCst) {
+                self.fail_pending("The agent was stopped.");
+                break true;
+            }
+            if again {
+                self.fail_pending("The agent was restarted.");
+                self.set_status(Status::Restarting {
+                    attempt: 0,
+                    asked: true,
+                });
+                restarted = false;
+                continue;
+            }
+            if let Err(reason) = outcome {
+                self.fail_pending(&reason);
+                self.set_status(Status::Down { reason });
+                break false;
             }
             self.fail_pending("The agent process exited.");
             let attempt = restart_attempt(&mut self.deaths.lock().unwrap(), Instant::now());
@@ -236,17 +231,25 @@ impl Sidecar {
                         BACKOFF.len() + 1
                     ),
                 });
-                break;
+                break false;
             }
             self.set_status(Status::Restarting {
                 attempt,
                 asked: false,
             });
-            // The pause, unless Restart cuts it short.
+            // The pause, unless Restart or switching off cuts it short.
             let _ = tokio::time::timeout(BACKOFF[attempt as usize - 1], self.wake.notified()).await;
-            restarted = true;
+            // Asked for during the pause, the next process isn't one that came back by itself.
+            restarted = !self.again.load(Ordering::SeqCst);
+        };
+        self.running.store(false, Ordering::SeqCst);
+        // Asked for while this loop was ending, when `restart` still saw it going and left
+        // the starting to it: switched on again right after off, or Restart as it gave up.
+        let again = self.again.swap(false, Ordering::SeqCst);
+        if self.wanted.load(Ordering::SeqCst) && (stopped || again) {
+            self.set_status(Status::Starting);
+            self.start();
         }
-        self.running.store(false, Ordering::Release);
     }
 
     /// Run the process until it exits. `Err` when it couldn't be started or
@@ -254,8 +257,9 @@ impl Sidecar {
     async fn spawn_once(&self, restarted: bool) -> Result<(), String> {
         let bin = binary();
         let _ = std::fs::create_dir_all(&self.data);
-        // Only what is asked of the process started here counts for it.
-        self.intent.store(Intent::None as u8, Ordering::Release);
+        // A restart asked for from here on is a restart of the process started here, even
+        // before it exists: it will have read the keys as they are now.
+        self.again.store(false, Ordering::SeqCst);
         // The user's keys reach the agents this way and no other; which one a
         // space uses, the process is told per space (`configure`).
         let mut child = Command::new(&bin)
@@ -268,7 +272,14 @@ impl Sidecar {
             .kill_on_drop(true)
             .spawn()
             .map_err(|err| format!("Couldn't start the agent ({}): {err}", bin.display()))?;
-        self.pid.store(child.id().unwrap_or(0), Ordering::Relaxed);
+        self.pid.store(child.id().unwrap_or(0), Ordering::SeqCst);
+        // Switched off or restarted while it was being started, when there was no process
+        // to tell: this one goes at once, and the loop does what was asked.
+        if self.again.load(Ordering::SeqCst) || !self.wanted.load(Ordering::SeqCst) {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Ok(());
+        }
         let stdin = child.stdin.take().ok_or("the agent process has no stdin")?;
         let stdout = child
             .stdout
@@ -507,42 +518,54 @@ impl Sidecar {
 
     /// The agent stopped and its files removed, for good. Not through `ask`:
     /// the space is gone from the model, so there is no setup to send first.
+    ///
+    /// With no process (the agent switched off, or down) Ternt removes the folder itself:
+    /// nothing else has it open then, and a deleted space's conversations and memory must
+    /// not outlive it because the agent happened to be off.
     pub async fn delete(&self, space: u32) -> Result<(), String> {
         self.configured.lock().unwrap().remove(&space);
-        self.call(Some(folder_name(space)), "delete", Value::Null)
-            .await
-            .map(|_| ())
+        let folder = folder_name(space);
+        let asked = self.call(Some(folder.clone()), "delete", Value::Null).await;
+        match asked {
+            Ok(_) => Ok(()),
+            Err(_) if self.pid.load(Ordering::SeqCst) == 0 => {
+                remove_folder(&self.data.join(&folder))
+            }
+            Err(error) => Err(error),
+        }
     }
 
-    /// Ask the running process to leave, with `intent` for the loop to read
-    /// when it has. Returns its pid, or `None` when nothing was running.
-    fn stop(&self, intent: Intent) -> Option<u32> {
-        let pid = self.pid.load(Ordering::Relaxed);
+    /// Ask the running process to leave. Returns its pid, or `None` when there is none;
+    /// what the loop does next is in `wanted` and `again`, set before this is called.
+    fn terminate(&self) -> Option<u32> {
+        let pid = self.pid.load(Ordering::SeqCst);
         if pid == 0 {
             return None;
         }
-        self.intent.store(intent as u8, Ordering::Release);
         signal(pid, libc::SIGTERM);
         Some(pid)
     }
 
-    /// Start over, on purpose (the Restart button, a key or provider change):
+    /// Start over, on purpose (the Restart button, a key change, switched on):
     /// stop the process and let the loop start another, with the keys read
     /// again; cut a back-off pause short; or start a loop when it was left
     /// down.
     pub fn restart(self: &Arc<Self>) {
         self.deaths.lock().unwrap().clear();
-        match self.stop(Intent::Restart) {
+        self.wanted.store(true, Ordering::SeqCst);
+        self.again.store(true, Ordering::SeqCst);
+        match self.terminate() {
             Some(pid) => {
                 let me = self.clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(STOP_WITHIN).await;
-                    if me.pid.load(Ordering::Relaxed) == pid {
+                    if me.pid.load(Ordering::SeqCst) == pid {
                         signal(pid, libc::SIGKILL);
                     }
                 });
             }
-            None if self.running.load(Ordering::Acquire) => self.wake.notify_one(),
+            // The loop is starting a process, pausing, or ending: each looks at `again`.
+            None if self.running.load(Ordering::SeqCst) => self.wake.notify_one(),
             None => {
                 self.set_status(Status::Starting);
                 self.start();
@@ -550,26 +573,43 @@ impl Sidecar {
         }
     }
 
-    /// The user switched the agent off: stop the process, leave it stopped and say why.
-    /// `restart` starts it again. Waits like `shutdown`, so not on the main thread.
-    pub fn switch_off(&self) {
-        self.shutdown();
-        self.set_status(Status::Down { reason: OFF.into() });
+    /// The agent isn't wanted from now (switched off, or Ternt is quitting): nothing is
+    /// started after this returns, whatever the loop was doing. Doesn't wait, so it can be
+    /// called where the asking happens and keeps its place among `restart`s; `settle_off`
+    /// or `shutdown` then sees the process out.
+    pub fn stand_down(&self) {
+        self.wanted.store(false, Ordering::SeqCst);
+        self.wake.notify_one();
     }
 
-    /// Stop the process before Ternt exits (or while the agent is off), and keep the loop from starting
-    /// another. Runs on the main thread at exit, so it waits by polling: the
-    /// loop clears `pid` the moment the process is gone, usually within a few
-    /// milliseconds.
+    /// After `stand_down`, for a switch-off: wait for the process to be gone and say why
+    /// there is none, unless the agent was switched on again meanwhile. Waits like
+    /// `shutdown`, so not on the main thread.
+    pub fn settle_off(&self) {
+        self.see_out();
+        if !self.wanted.load(Ordering::SeqCst) {
+            self.set_status(Status::Down { reason: OFF.into() });
+        }
+    }
+
+    /// Stop the process before Ternt exits, and keep the loop from starting another.
     pub fn shutdown(&self) {
-        let Some(pid) = self.stop(Intent::Stop) else {
+        self.stand_down();
+        self.see_out();
+    }
+
+    /// Tell the process to leave and wait until it has, killing it if it takes too long.
+    /// Runs on the main thread at exit, so it waits by polling: the loop clears `pid` the
+    /// moment the process is gone, usually within a few milliseconds.
+    fn see_out(&self) {
+        let Some(pid) = self.terminate() else {
             return;
         };
         let deadline = Instant::now() + STOP_WITHIN;
-        while self.pid.load(Ordering::Relaxed) == pid && Instant::now() < deadline {
+        while self.pid.load(Ordering::SeqCst) == pid && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
-        if self.pid.load(Ordering::Relaxed) == pid {
+        if self.pid.load(Ordering::SeqCst) == pid {
             signal(pid, libc::SIGKILL);
         }
     }
@@ -609,10 +649,13 @@ mod tests {
     }
 
     #[test]
-    fn intents_survive_the_trip_through_a_byte() {
-        for intent in [Intent::None, Intent::Restart, Intent::Stop] {
-            assert!(Intent::from_u8(intent as u8) == intent);
-        }
+    fn removing_a_folder_that_is_gone_is_no_error() {
+        let dir = std::env::temp_dir().join(format!("ternt-agent-test-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("space-3/db")).unwrap();
+        assert!(remove_folder(&dir.join("space-3")).is_ok());
+        assert!(!dir.join("space-3").exists());
+        assert!(remove_folder(&dir.join("space-3")).is_ok());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

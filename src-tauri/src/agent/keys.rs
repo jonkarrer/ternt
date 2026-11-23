@@ -7,8 +7,12 @@
 //! (`doppler run -- just dev tokidoki`), where a rebuilt debug binary would otherwise be asked
 //! to confirm Keychain access at every launch.
 
+use std::sync::Mutex;
+
 use keyring::Entry;
 use serde::Serialize;
+
+use super::setup::Provider;
 
 /// The Keychain service the keys are filed under. Debug builds keep their own, so trying a
 /// key in `just dev` never replaces the one the installed app uses.
@@ -84,6 +88,8 @@ impl Key {
             },
             value => entry.set_password(value),
         };
+        // Which provider a new space starts on may have changed with it.
+        *PREFERRED.lock().unwrap() = None;
         written.map_err(|error| format!("writing to the Keychain: {error}"))
     }
 }
@@ -91,7 +97,7 @@ impl Key {
 /// The sidecar's environment: every key the user has, as (variable, value). A key that can't
 /// be read is logged and left out, so the process still starts.
 pub fn load() -> Vec<(&'static str, String)> {
-    [&FIREWORKS, &ANTHROPIC, &EXA, &TYPESAFE]
+    let loaded: Vec<(&'static str, String)> = [&FIREWORKS, &ANTHROPIC, &EXA, &TYPESAFE]
         .into_iter()
         .filter_map(|key| match key.read() {
             Ok(value) => value.map(|(value, _)| (key.variable, value)),
@@ -100,16 +106,32 @@ pub fn load() -> Vec<(&'static str, String)> {
                 None
             }
         })
-        .collect()
+        .collect();
+    // The agent starts off the main thread, so what was just read spares `new_space` the
+    // reading.
+    let has = |key: &Key| loaded.iter().any(|(variable, _)| *variable == key.variable);
+    *PREFERRED.lock().unwrap() = Some(prefer(has(&FIREWORKS), has(&ANTHROPIC)));
+    loaded
 }
 
 /// The provider a new space starts on: the default, unless the user has no key for it and
 /// has one for another. Someone who set Ternt up with an Anthropic key alone shouldn't meet
 /// "needs your Fireworks AI key" in every space they make.
-pub fn preferred_provider() -> super::setup::Provider {
-    use super::setup::Provider;
-    let has = |key: &Key| matches!(key.read(), Ok(Some(_)));
-    if !has(&FIREWORKS) && has(&ANTHROPIC) {
+///
+/// Remembered until a key is written: making a space shouldn't read the Keychain, which is
+/// slow and, in a rebuilt debug build, asks the user to allow it each time.
+pub fn preferred_provider() -> Provider {
+    let mut preferred = PREFERRED.lock().unwrap();
+    *preferred.get_or_insert_with(|| {
+        let has = |key: &Key| matches!(key.read(), Ok(Some(_)));
+        prefer(has(&FIREWORKS), has(&ANTHROPIC))
+    })
+}
+
+static PREFERRED: Mutex<Option<Provider>> = Mutex::new(None);
+
+fn prefer(fireworks: bool, anthropic: bool) -> Provider {
+    if !fireworks && anthropic {
         Provider::Anthropic
     } else {
         Provider::default()

@@ -28,7 +28,8 @@ const PATIENCE: Duration = Duration::from_secs(10);
 const NEIGHBOURS: usize = 4;
 /// Questions per request, well inside what one request may hold.
 const BATCH: usize = 60;
-/// Pairs screened per dream; what is left over waits for the next.
+/// About how many pairs a dream screens. It takes new memories oldest first, each with all
+/// its pairs, and stops before the one that would go over; the rest wait for the next dream.
 const MAX_PAIRS: usize = 300;
 /// A pair this likely to need cleaning up is shown to the model.
 const SUSPECT_MIN: f32 = 0.5;
@@ -36,8 +37,12 @@ const SUSPECT_MIN: f32 = 0.5;
 /// Turns less likely than this to hold anything are left without an episode. Low: a
 /// summary too many costs a little, an episode missing can't be made up later by search.
 const EVENTFUL_MIN: f32 = 0.3;
-/// Transcript characters Jev reads to tell, newest kept: far inside what a question may hold.
+/// Transcript characters Jev reads in one question: far inside what a question may hold.
+/// Longer turns are judged a part at a time, so what happened early in them counts too.
 const EVENTFUL_INPUT_CHARS: usize = 12_000;
+/// Turns longer than this many parts aren't judged: that much talk gets its episode, which
+/// also keeps turns found uneventful from piling up without end.
+const EVENTFUL_MAX_PARTS: usize = 8;
 
 const EVENTFUL_ASKS: &str = "state.turns is part of a conversation between a user and their assistant. Did anything happen in it worth keeping a summary of for later: something asked for and done, a decision, a plan, a result, or something learned? Greetings, thanks, small talk and exchanges that settled nothing are not.";
 
@@ -61,16 +66,30 @@ impl<A: Api> Experience<A> {
         if self.uneventful.lock().unwrap().get(thread) == Some(&end) {
             return false;
         }
-        let state = json!({ "turns": crate::last_chars(turns, EVENTFUL_INPUT_CHARS) });
+        let parts = in_parts(turns, EVENTFUL_INPUT_CHARS);
+        if parts.len() > EVENTFUL_MAX_PARTS {
+            return true;
+        }
         let question = [("eventful".to_string(), EVENTFUL_ASKS.to_string())];
         let jev = jev.clone().within(PATIENCE);
-        let likely = match jev.yes_or_no(&state, &question).await {
-            Ok(answers) => answers.get("eventful").copied().unwrap_or(1.0),
-            Err(error) => {
-                tracing::warn!(%error, "Jev couldn't judge the turns; summarizing them");
-                return true;
+        // Newest first: what was just done is the likeliest to be worth keeping, and the
+        // first part that is settles it.
+        let mut likely: f32 = 0.0;
+        for part in parts.iter().rev() {
+            let state = json!({ "turns": part });
+            match jev.yes_or_no(&state, &question).await {
+                Ok(answers) => {
+                    likely = likely.max(answers.get("eventful").copied().unwrap_or(1.0));
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Jev couldn't judge the turns; summarizing them");
+                    return true;
+                }
             }
-        };
+            if likely >= EVENTFUL_MIN {
+                break;
+            }
+        }
         tracing::debug!(thread, end, likely, "judged turns for an episode");
         if likely < EVENTFUL_MIN {
             (self.uneventful.lock().unwrap()).insert(thread.to_string(), end);
@@ -82,13 +101,18 @@ impl<A: Api> Experience<A> {
     /// for the model to settle. Empty when nothing needs a look, which is the usual case.
     pub(crate) async fn suspects(&self, jev: &Jev, items: &[Item]) -> Result<Vec<Item>> {
         let since = *self.screened.lock().unwrap();
-        let newest = items.iter().map(|item| item.id).max().unwrap_or(since);
         let known: HashSet<i64> = items.iter().map(|item| item.id).collect();
         let scope = std::slice::from_ref(&self.scopes.write);
 
-        // Each pair once, and only pairs with a memory no earlier dream has screened.
+        // Each pair once, and only pairs with a memory no earlier dream has screened. A
+        // memory is screened whole or not yet, so `reached` always says truly how far the
+        // screening got: cutting the pairs off anywhere else would screen the same first
+        // ones at every dream and never the rest.
+        let mut fresh: Vec<&Item> = items.iter().filter(|item| item.id > since).collect();
+        fresh.sort_by_key(|item| item.id);
         let mut pairs: BTreeSet<(i64, i64)> = BTreeSet::new();
-        for item in items.iter().filter(|item| item.id > since) {
+        let mut reached = since;
+        for item in fresh {
             let keyed = items
                 .iter()
                 .filter(|other| item.key.is_some() && other.key == item.key)
@@ -98,17 +122,22 @@ impl<A: Api> Experience<A> {
                 .search(&item.body.text(), scope, NEIGHBOURS + 1)?
                 .into_iter()
                 .map(|hit| hit.item.id);
-            for other in keyed.chain(alike) {
-                if other != item.id && known.contains(&other) {
-                    pairs.insert((item.id.min(other), item.id.max(other)));
-                }
+            let own: BTreeSet<(i64, i64)> = keyed
+                .chain(alike)
+                .filter(|other| *other != item.id && known.contains(other))
+                .map(|other| (item.id.min(other), item.id.max(other)))
+                .collect();
+            let more = own.difference(&pairs).count();
+            if !pairs.is_empty() && pairs.len() + more > MAX_PAIRS {
+                break;
             }
+            pairs.extend(own);
+            reached = item.id;
         }
         let by_id = |id: i64| items.iter().find(|item| item.id == id);
         let pairs: Vec<(&Item, &Item)> = pairs
             .into_iter()
             .filter_map(|(a, b)| Some((by_id(a)?, by_id(b)?)))
-            .take(MAX_PAIRS)
             .collect();
 
         let jev = jev.clone().within(PATIENCE);
@@ -127,15 +156,25 @@ impl<A: Api> Experience<A> {
         }
         tracing::debug!(pairs = pairs.len(), suspected = ?suspected, "screened memories");
         // Only now: a request that failed leaves its pairs for the next dream.
-        if pairs.len() < MAX_PAIRS {
-            *self.screened.lock().unwrap() = newest;
-        }
+        *self.screened.lock().unwrap() = reached;
         Ok(items
             .iter()
             .filter(|item| suspected.contains(&item.id))
             .cloned()
             .collect())
     }
+}
+
+/// `text` in pieces of at most `size` characters, in order. One piece when it fits.
+fn in_parts(text: &str, size: usize) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= size {
+        return vec![text.to_string()];
+    }
+    chars
+        .chunks(size)
+        .map(|part| part.iter().collect())
+        .collect()
 }
 
 #[cfg(test)]
@@ -235,6 +274,94 @@ mod tests {
         assert_eq!(seen.len(), 1);
         let turns = seen[0].1["state"]["turns"].as_str().unwrap();
         assert!(turns.starts_with("User: hey\nAssistant: Hi!"), "{turns}");
+    }
+
+    /// Long turns are judged a part at a time, every part of them: something done early
+    /// isn't hidden by a long tail, and nothing is judged twice.
+    #[tokio::test]
+    async fn long_turns_are_judged_in_parts_to_their_start() {
+        let reply =
+            json!({ "model": "jev-1.14.0", "answers": { "eventful": noul(0.04) }, "usage": {} });
+        let (base, seen) = server("200 OK", reply.to_string()).await;
+        let jev = Jev::at(base, "k");
+        let exp = unreachable().with_jev(jev.clone());
+        let turns = format!("EARLY{}LATE", "x".repeat(EVENTFUL_INPUT_CHARS * 2));
+
+        assert!(!exp.eventful(&jev, "t1", 9, &turns).await);
+        {
+            let seen = seen.lock().unwrap();
+            let read: Vec<&str> = (seen.iter())
+                .map(|(_, sent)| sent["state"]["turns"].as_str().unwrap())
+                .collect();
+            assert_eq!(read.len(), 3);
+            assert!(read[0].ends_with("LATE") && read[2].starts_with("EARLY"));
+            assert!(
+                read.iter()
+                    .all(|part| part.chars().count() <= EVENTFUL_INPUT_CHARS)
+            );
+        }
+        // Far too long to judge: it gets its episode without asking.
+        let endless = "y".repeat(EVENTFUL_INPUT_CHARS * (EVENTFUL_MAX_PARTS + 1));
+        assert!(exp.eventful(&jev, "t2", 9, &endless).await);
+        assert_eq!(seen.lock().unwrap().len(), 3);
+    }
+
+    /// More new memories than one dream screens: the next dream goes on from where this
+    /// one stopped, so every memory is screened in the end.
+    #[tokio::test]
+    async fn what_one_dream_cannot_screen_the_next_one_does() {
+        let exp = unreachable();
+        // Alike enough that the search pairs each with its four nearest: more pairs than
+        // one dream takes.
+        for n in 0..120 {
+            let fact = Write::fact(me(), format!("The user's lucky number is {n}."));
+            exp.memory().write(fact).unwrap();
+        }
+        let items = exp.memory().list(&[me()], 500).unwrap();
+        assert_eq!(items.len(), 120);
+        // Jev sees nothing to clean up, whichever pair it is asked about.
+        let mut answers = serde_json::Map::new();
+        for a in &items {
+            for b in items.iter().filter(|b| a.id < b.id) {
+                answers.insert(format!("p{}-{}", a.id, b.id), noul(0.02));
+            }
+        }
+        let reply = json!({ "model": "jev-1.14.0", "answers": answers, "usage": {} });
+        let (base, seen) = server("200 OK", reply.to_string()).await;
+        let jev = Jev::at(base, "k");
+        let exp = exp.with_jev(jev.clone());
+        // The memories asked about so far, from the questions' names (`p3-17`).
+        let screened = |seen: &inference::jev::testing::Seen| -> BTreeSet<i64> {
+            let seen = seen.lock().unwrap();
+            let names = seen.iter().flat_map(|(_, sent)| {
+                let questions = sent["questions"].as_object().cloned().unwrap_or_default();
+                questions.into_iter().map(|(name, _)| name)
+            });
+            names
+                .flat_map(|name| {
+                    let ids = name.trim_start_matches('p').split('-');
+                    ids.map(|id| id.parse().unwrap()).collect::<Vec<i64>>()
+                })
+                .collect()
+        };
+
+        exp.suspects(&jev, &items).await.unwrap();
+        let after_one = screened(&seen).len();
+        assert!(
+            after_one < 120,
+            "one dream doesn't take them all ({after_one})"
+        );
+        let mut dreams = 1;
+        while *exp.screened.lock().unwrap() < items.iter().map(|item| item.id).max().unwrap() {
+            exp.suspects(&jev, &items).await.unwrap();
+            dreams += 1;
+            assert!(dreams < 20, "screening never finished");
+        }
+        assert_eq!(screened(&seen).len(), 120, "every memory was asked about");
+        // And with nothing new, nothing more is asked.
+        let requests = seen.lock().unwrap().len();
+        exp.suspects(&jev, &items).await.unwrap();
+        assert_eq!(seen.lock().unwrap().len(), requests);
     }
 
     /// Something happened, or Jev can't say: the model is asked, as without Jev.
