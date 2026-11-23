@@ -2,7 +2,7 @@
 //! in a file or the repo, and reach the agent only through the sidecar's environment (set on
 //! the process in `sidecar.rs`; see docs/AGENT-SIDECAR.md). The process gets every key the
 //! user has; which one a space's agent uses follows from that space's provider
-//! (`setup.rs`). A variable already in Ternt's own environment wins: development
+//! (`setup.rs`), and a tool's key (Exa, for web search) serves every space with that tool on. A variable already in Ternt's own environment wins: development
 //! (`doppler run -- just dev tokidoki`), where a rebuilt debug binary would otherwise be asked
 //! to confirm Keychain access at every launch.
 
@@ -32,6 +32,11 @@ pub const FIREWORKS: Key = Key {
 pub const ANTHROPIC: Key = Key {
     variable: "ANTHROPIC_API_KEY",
     account: "anthropic",
+};
+/// Web search, for the spaces that have that tool on (Exa).
+pub const EXA: Key = Key {
+    variable: "EXA_API_KEY",
+    account: "exa",
 };
 
 /// Where a key is, if anywhere.
@@ -78,7 +83,7 @@ impl Key {
 /// The sidecar's environment: every key the user has, as (variable, value). A key that can't
 /// be read is logged and left out, so the process still starts.
 pub fn load() -> Vec<(&'static str, String)> {
-    [&FIREWORKS, &ANTHROPIC]
+    [&FIREWORKS, &ANTHROPIC, &EXA]
         .into_iter()
         .filter_map(|key| match key.read() {
             Ok(value) => value.map(|(value, _)| (key.variable, value)),
@@ -96,6 +101,7 @@ pub fn load() -> Vec<(&'static str, String)> {
 pub struct Present {
     pub fireworks: Source,
     pub anthropic: Source,
+    pub exa: Source,
 }
 
 pub fn present() -> Present {
@@ -109,5 +115,6 @@ pub fn present() -> Present {
     Present {
         fireworks: source(&FIREWORKS),
         anthropic: source(&ANTHROPIC),
+        exa: source(&EXA),
     }
 }

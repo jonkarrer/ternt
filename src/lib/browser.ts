@@ -64,7 +64,7 @@ export interface Space {
 export type AgentProvider = "fireworks" | "anthropic";
 export interface AgentSetup {
   provider: AgentProvider;
-  /** Tool names the agent process knows (none offered yet). */
+  /** Tools switched on for the space's agent, by the name the agent process knows: `web_search`. */
   tools: string[];
 }
 
@@ -229,10 +229,10 @@ export interface AgentTagged {
 }
 
 /** The agent process (src-tauri/src/agent/sidecar.rs): a crash there restarts it, not Ternt. */
-/** Which keys are set (never their values). Fireworks or Anthropic answers; Baseten is the router's fallback. */
+/** Which keys are set (never their values). Fireworks or Anthropic answers; Exa is web search's. */
 /** Where a key is: nowhere, the Keychain, or Ternt's own environment (development; Settings can't remove it). */
 export type KeySource = "none" | "keychain" | "environment";
-export type AgentKeys = { fireworks: KeySource; anthropic: KeySource };
+export type AgentKeys = { fireworks: KeySource; anthropic: KeySource; exa: KeySource };
 /** A key change: a missing field leaves that key as it is, "" removes it. */
 export type AgentKeyChange = Partial<Record<keyof AgentKeys, string>>;
 

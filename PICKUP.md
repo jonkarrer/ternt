@@ -47,7 +47,7 @@ default_provider, tools: {}}`. `configure` takes `{provider?, tools?}` and answe
 The owner asked for basic tools that can be toggled in Settings → Agent, per space, with web
 search through Exa first. `EXA_API_KEY` is in Doppler (`ternt` / `dev`).
 
-Step 3, the tool, is **built and not yet committed** (2026-11-23), all in `tokidoki/`:
+Step 3, the tool, is **built** (`6ddf170`), all in `tokidoki/`:
 
 - `crates/tools`: `web_search`, Exa `/search` with highlights; `query`, `num_results` (at
   most 10), optional `days`; 15 second timeout; replay-safe. Mocked tests, and a live one
@@ -61,12 +61,17 @@ Step 3, the tool, is **built and not yet committed** (2026-11-23), all in `tokid
   answered with nothing.
 - Checked by driving the sidecar on the cheapest models, both providers: off, on, off.
 
-Step 4, Settings:
+Step 4, Settings, is **built** (2026-11-23):
 
-- Tools rows with a switch in the Space card, enabled only when the Exa key is present.
-- An Exa row under Keys: Keychain account `exa`, environment variable `EXA_API_KEY`, added to
-  `keys::load()`.
-- e2e in `settings.js` against the stub, then the real-agent suite.
+- Settings → Agent → Space has a Web search switch per space; it saves `Space::agent.tools`
+  and sends `configure`. It can be switched on only when the Exa key is there (the stub needs
+  none), and one left on without a key can still be switched off.
+- Keys has an Exa row: Keychain account `exa`, variable `EXA_API_KEY`, in `keys::load()`.
+- e2e: `settings.js` (switch on, saved per space, no restart, off) and `tokidoki.js` (a real
+  search in the panel on a cheap model, shown as a tool row, answer citing the page).
+
+More tools go in `tokidoki/crates/tools`, `Keys::tools_for` in `bin/serve.rs`, and the
+`TOOLS` list in `src/settings/Agent.svelte`.
 
 ## Also open
 

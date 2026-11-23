@@ -196,7 +196,8 @@ keys, kept in the macOS Keychain (`src-tauri/src/agent/keys.rs`); Ternt hands th
 through its environment and nothing else ever sees them. A key already in Ternt's environment
 wins, which is how development runs with the team's keys: `doppler run -- just dev tokidoki`.
 **Each space picks its own provider** (Fireworks AI by default) on the same page; the change
-reaches the running agent at once and its conversations go on. The page also has a **Memory**
+reaches the running agent at once and its conversations go on. Each space also switches its
+agent's **tools** on or off there: web search for now, through Exa, with your Exa key under Keys. The page also has a **Memory**
 section: what the space's agent has learned, fact by fact, to correct or forget, and a Wipe that
 forgets all of it (the conversations stay).
 

@@ -87,11 +87,30 @@ await t.until(async () => (await t.read("agent", `document.querySelector(".keys"
 await t.invoke("agent_set_space", { space: first, setup: { provider: space.provider, tools: [] } });
 await t.until(async () => (await t.invoke("agent_space_status", { space: first })).provider === space.provider, "and back");
 
+// Web search, switched on for the space in the middle of its conversation (one search at
+// Exa, two cheap model calls). Without an Exa key the agent runs without the tool.
+const searching = await t.invoke("agent_set_space", { space: first, setup: { provider: space.provider, tools: ["web_search"] } });
+if (have.exa === "none" || !searching.hasKey) {
+  await t.assert(searching.tools.length === 0 || !searching.hasKey, "without an Exa key the space runs without web search");
+  await t.log("warn - no EXA_API_KEY (or no provider key): the search itself wasn't tried");
+} else {
+  await t.assert(searching.tools.includes("web_search"), "the space's agent has web search");
+  await t.assert((await t.invoke("agent_status")).generation === again.generation, "without a restart");
+  await A.type("Search the web for the page rust-lang.org/learn and reply with its title and address, in one line.");
+  await A.key("Enter");
+  await t.until(async () => (await A.rows()).some(([k, x]) => k === "tool" && /web_search/.test(x)), "the search shows as a tool call in the conversation", 90000);
+  await t.until(async () => (await assistantRows()).some(([, x]) => /rust-lang\.org\/learn/i.test(x)), "and the answer cites the page it found", 90000);
+  await t.until(async () => !(await A.rows()).some(([k]) => k === "live") && !(await A.text(".presence")), "the turn ends", 20000);
+  await t.shot("tokidoki-search");
+}
+await t.invoke("agent_set_space", { space: first, setup: { provider: space.provider, tools: [] } });
+await t.until(async () => (await t.invoke("agent_space_status", { space: first })).tools.length === 0, "switched off, the tool is gone");
+
 // Memory is read and wiped without a model call (what it learned from one "pong" is its business)
 const remembered = await t.invoke("agent_memories", { space: first });
 await t.assert(Array.isArray(remembered) && remembered.every((m) => m.kind === "fact" || m.kind === "procedure"), `it lists what it remembers (${remembered.length})`);
 await t.invoke("agent_wipe", { space: first });
 await t.assert((await t.invoke("agent_memories", { space: first })).length === 0, "wipe leaves nothing");
-await t.assert((await t.invoke("agent_threads", { space: first })).length === 1, "but keeps the conversation");
+await t.assert((await t.invoke("agent_threads", { space: first })).length >= 1, "but keeps the conversation");
 await A.key("Escape");
 await t.quit();

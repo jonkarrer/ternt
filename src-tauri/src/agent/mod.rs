@@ -451,12 +451,16 @@ pub async fn agent_set_keys(
     app: AppHandle,
     fireworks: Option<String>,
     anthropic: Option<String>,
+    exa: Option<String>,
 ) -> Result<(), String> {
     if let Some(key) = fireworks {
         keys::FIREWORKS.write(key.trim())?;
     }
     if let Some(key) = anthropic {
         keys::ANTHROPIC.write(key.trim())?;
+    }
+    if let Some(key) = exa {
+        keys::EXA.write(key.trim())?;
     }
     restart(&app);
     Ok(())

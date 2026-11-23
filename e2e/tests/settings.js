@@ -52,6 +52,20 @@ await t.until(async () => (await t.invoke("agent_space_status", { space })).prov
 await t.assert((await t.invoke("agent_status")).generation === generation, "without restarting the process");
 await t.assert(S().spaces.every((s) => s.id === space || s.agent.provider === "fireworks"), "other spaces keep their own provider");
 
+// Tools: switched on per space, with a key of their own under Keys
+const search = `document.querySelector('.tool[data-tool="web_search"] input')`;
+await t.assert((await read(`String(${search}?.checked)`)) === "false", "web search is off until switched on");
+await t.assert((await read(`document.querySelector('input.key[data-provider="exa"]')?.placeholder`)) === "Web search…", "and Keys has a field for the Exa key");
+await click(`.tool[data-tool="web_search"] input`);
+await t.until(() => S().spaces.find((s) => s.id === space)?.agent.tools.includes("web_search"), "switching it on is saved with the space");
+await t.until(async () => (await t.invoke("agent_space_status", { space })).tools.includes("web_search"), "and the space's agent has the tool");
+await t.assert((await t.invoke("agent_space_status", { space })).provider === "anthropic", "on the provider it was on");
+await t.assert((await t.invoke("agent_status")).generation === generation, "without restarting the process");
+await t.assert(S().spaces.every((s) => s.id === space || s.agent.tools.length === 0), "other spaces keep their own tools");
+await t.until(async () => (await read(`String(${search}?.checked)`)) === "true", "the switch shows it on");
+await click(`.tool[data-tool="web_search"] input`);
+await t.until(async () => (await t.invoke("agent_space_status", { space })).tools.length === 0, "and off again takes it away");
+
 // Memory: what the space's agent learned; edit, forget, wipe
 const memoryTexts = () => read(`[...document.querySelectorAll(".memory .text")].map((el) => el.textContent).join("|")`);
 const remembered = () => t.invoke("agent_memories", { space });

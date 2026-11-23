@@ -25,8 +25,8 @@ ternt-agent --data <dir>
   `BASETEN_API_KEY`; Ternt doesn't offer it), and tells the process per space, with `configure`
   before that space's first other request, which provider its agent runs on and which tools it
   has. The agent answers, routes and remembers with that provider. Ternt is bring-your-own-key:
-  the keys live in the user's Keychain (service `com.jokar.ternt`, accounts `fireworks` and
-  `anthropic`; `.dev` in debug builds), put there by Settings → Agent → Keys
+  the keys live in the user's Keychain (service `com.jokar.ternt`, accounts `fireworks`,
+  `anthropic` and `exa`; `.dev` in debug builds), put there by Settings → Agent → Keys
   (`src-tauri/src/agent/keys.rs`), and reach the process this way and no other. A variable
   already in Ternt's own environment wins, for development (`doppler run -- just dev tokidoki`).
   Saving or removing a key restarts the process, since its environment is fixed at start;
@@ -35,6 +35,12 @@ ternt-agent --data <dir>
   that provider opens asleep, answers `threads`, `history` and the memory methods from disk,
   and `send` with an error. `configure` says so (`has_key: false`, `asleep: "…"`), which is how
   the panel knows to point at Settings instead of sending (`agent_space_status`).
+- **Tools are switched on per space** (Settings → Agent → Space), by the names the process
+  knows. Today there is one, `web_search`, which needs `EXA_API_KEY` (Keychain account `exa`),
+  set on the process like the providers' keys. A space that asks for a tool the process has
+  no key for still opens, without it: `configure` answers with the tools the agent really
+  has. Settings lets a tool be switched on only when its key is there. A tool call shows in
+  the panel as a tool row, from the thread's checkpoints like any message.
 - The provider and tools are per space (`Space::agent` in the session, `setup.rs`); a key per
   space (a work account for a work space) is not designed: it would need a key in `configure`.
 - tokidoki holds `<dir>/.lock` while it runs: a second process on the same folder exits with code 1

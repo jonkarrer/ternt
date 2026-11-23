@@ -30,7 +30,8 @@ impl Provider {
 pub struct Setup {
     #[serde(default)]
     pub provider: Provider,
-    /// Tool names the sidecar knows (none offered yet).
+    /// Tool names the sidecar knows: `web_search`. One it lacks the key for is left out
+    /// of how the agent really runs (`SpaceStatus::tools`).
     #[serde(default)]
     pub tools: Vec<String>,
 }

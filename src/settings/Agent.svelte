@@ -4,6 +4,7 @@
     browser,
     type AgentKeys,
     type AgentProvider,
+    type KeySource,
     type AgentSpaceStatus,
     type AgentStatus,
     type Space,
@@ -12,11 +13,28 @@
 
   let { spaces, activeSpace }: { spaces: Space[]; activeSpace: number | null } = $props();
 
-  // Each space has its own agent (⌘J), and each picks who answers for it. The keys are
+  // Each space has its own agent (⌘J), and each picks who answers for it and what it may use. The keys are
   // yours and shared between spaces: in the Keychain, handed to the agent process, nowhere else.
   const PROVIDERS: { id: AgentProvider; name: string; keyHint: string; where: string }[] = [
     { id: "fireworks", name: "Fireworks AI", keyHint: "fw_…", where: "fireworks.ai → API keys" },
     { id: "anthropic", name: "Anthropic", keyHint: "sk-ant-…", where: "console.anthropic.com → API keys" },
+  ];
+
+  // What a space's agent can be given to do, each switched on per space. One that needs a
+  // key of its own names it; that key is shared between spaces like the providers'.
+  const TOOLS: { id: string; name: string; hint: string; key: keyof AgentKeys; keyName: string }[] = [
+    {
+      id: "web_search",
+      name: "Web search",
+      hint: "The agent looks things up on the web when it needs to, through Exa, and says where it read them.",
+      key: "exa",
+      keyName: "Exa",
+    },
+  ];
+  /** Every key Settings keeps: the providers', then the tools'. */
+  const KEYS: { id: keyof AgentKeys; name: string; keyHint: string; where: string }[] = [
+    ...PROVIDERS,
+    { id: "exa", name: "Exa", keyHint: "Web search…", where: "dashboard.exa.ai → API keys" },
   ];
 
   /** The space whose agent is shown and changed (the active one until picked). */
@@ -33,7 +51,7 @@
   let spaceError = $state<string | null>(null);
 
   let keys = $state<AgentKeys | null>(null);
-  let drafts = $state<Record<AgentProvider, string>>({ fireworks: "", anthropic: "" });
+  let drafts = $state<Record<keyof AgentKeys, string>>({ fireworks: "", anthropic: "", exa: "" });
   let saving = $state(false);
   let keyError = $state<string | null>(null);
 
@@ -104,6 +122,25 @@
     }
   }
 
+  /** A tool is on when the space asks for it. Whether it runs is the process's to say. */
+  const isOn = (tool: string) => space?.agent.tools.includes(tool) ?? false;
+  const keyFor = (tool: (typeof TOOLS)[number]): KeySource => keys?.[tool.key] ?? "none";
+  /** The stand-in agent needs no keys; the real one can't run a tool without its key. */
+  const lacksKey = (tool: (typeof TOOLS)[number]) => !stub && keyFor(tool) === "none";
+
+  async function setTool(tool: string, event: Event) {
+    const on = (event.currentTarget as HTMLInputElement).checked;
+    if (!space || on === isOn(tool)) return;
+    const tools = on ? [...space.agent.tools, tool].sort() : space.agent.tools.filter((t) => t !== tool);
+    spaceError = null;
+    try {
+      // Like the provider: at once, and the conversations already going get it too.
+      spaceStatus = await browser.agentSetSpace(space.id, { ...space.agent, tools });
+    } catch (e) {
+      spaceError = String(e);
+    }
+  }
+
   const processText = $derived.by(() => {
     if (!status) return "";
     switch (status.state) {
@@ -130,13 +167,13 @@
 
   // --- Keys ---------------------------------------------------------------------
 
-  async function change(update: Partial<Record<AgentProvider, string>>) {
+  async function change(update: Partial<Record<keyof AgentKeys, string>>) {
     saving = true;
     keyError = null;
     try {
       await browser.agentSetKeys(update);
       keys = await browser.agentKeys();
-      for (const id of Object.keys(update) as AgentProvider[]) drafts[id] = "";
+      for (const id of Object.keys(update) as (keyof AgentKeys)[]) drafts[id] = "";
     } catch (e) {
       keyError = String(e);
     } finally {
@@ -144,7 +181,7 @@
     }
   }
 
-  function saveKey(id: AgentProvider, event: Event) {
+  function saveKey(id: keyof AgentKeys, event: Event) {
     event.preventDefault();
     const key = drafts[id].trim();
     if (key) change({ [id]: key });
@@ -302,6 +339,29 @@
       {/each}
     </select>
   </div>
+  {#each TOOLS as tool (tool.id)}
+    {@const on = isOn(tool.id)}
+    <label class="row tool" data-tool={tool.id}>
+      <div class="label">
+        {tool.name}
+        <div class="hint">{tool.hint}</div>
+        {#if lacksKey(tool)}
+          <div class="hint status" data-state={on ? "keys" : ""}>
+            {on ? `On, but waiting for an ${tool.keyName} key` : `Needs an ${tool.keyName} key`}: add yours under Keys.
+          </div>
+        {/if}
+      </div>
+      <!-- Without its key it can't be switched on, but one left on can still be switched off. -->
+      <input
+        type="checkbox"
+        {...{ switch: true }}
+        checked={on}
+        disabled={!space || (lacksKey(tool) && !on)}
+        aria-label={tool.name}
+        onchange={(e) => setTool(tool.id, e)}
+      />
+    </label>
+  {/each}
   {#if spaceError}
     <div class="row"><span class="error" role="alert">{spaceError}</span></div>
   {/if}
@@ -309,7 +369,7 @@
 
 <h2>Keys</h2>
 <div class="card">
-  {#each PROVIDERS as p (p.id)}
+  {#each KEYS as p (p.id)}
     {@const source = keys?.[p.id] ?? "none"}
     <form class="row" onsubmit={(e) => saveKey(p.id, e)}>
       <div class="label">
