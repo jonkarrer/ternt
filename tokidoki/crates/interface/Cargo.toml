@@ -1,0 +1,17 @@
+[package]
+name = "interface"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+# Only the protocol's types: front ends (a Dioxus web build, say) can share them without the
+# engine, Tokio or SQLite.
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ts-rs = { version = "12.0.1", features = ["serde-json-impl", "no-serde-warnings"], optional = true }
+
+[features]
+# The protocol as TypeScript (`protocol.ts`, checked by this crate's tests): for front ends
+# that aren't Rust.
+ts = ["dep:ts-rs"]

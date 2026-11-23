@@ -1,0 +1,32 @@
+[package]
+name = "tokidoki"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+agent.workspace = true
+anyhow.workspace = true
+context.workspace = true
+engine.workspace = true
+experience.workspace = true
+inference.workspace = true
+interface.workspace = true
+memory.workspace = true
+router.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+state.workspace = true
+telemetry.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+
+# The sidecar process (docs/SIDECAR.md): what a host bundles and runs.
+[[bin]]
+name = "tokidoki-serve"
+path = "src/bin/serve.rs"
+
+[[bin]]
+name = "chat"
+path = "src/bin/chat.rs"

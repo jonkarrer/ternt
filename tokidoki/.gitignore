@@ -1,0 +1,9 @@
+/target
+/data
+.direnv
+.DS_Store
+.env
+/.claude/worktrees
+*.db
+result
+node_modules/
