@@ -123,6 +123,9 @@ pub struct Space {
     /// one the space shows its initial.
     #[serde(default)]
     pub icon: Option<String>,
+    /// How its agent runs (Settings → Agent): provider and tools.
+    #[serde(default)]
+    pub agent: crate::agent::Setup,
 }
 
 /// Longest icon accepted, in bytes: room for one emoji with modifiers
@@ -261,6 +264,7 @@ impl Default for State {
                 color: SPACE_COLORS[0].into(),
                 profile: None,
                 icon: Some(DEFAULT_SPACE_ICONS[0].into()),
+                agent: Default::default(),
             }],
             folders: Vec::new(),
             profile_names: HashMap::new(),
@@ -427,7 +431,8 @@ impl State {
                 .map(|t| t.id)
                 .collect();
             let beside = order.iter().position(|&t| t == id).is_some_and(|i| {
-                let near = |j: Option<usize>| j.and_then(|j| order.get(j)).is_some_and(|&t| group.has(t));
+                let near =
+                    |j: Option<usize>| j.and_then(|j| order.get(j)).is_some_and(|&t| group.has(t));
                 near(i.checked_sub(1)) || near(Some(i + 1))
             });
             if !beside {
@@ -741,8 +746,20 @@ impl State {
             color,
             profile,
             icon: Some(icon),
+            agent: Default::default(),
         });
         id
+    }
+
+    /// How a space's agent runs (Settings → Agent). Returns whether it changed.
+    pub fn set_space_agent(&mut self, id: u32, agent: crate::agent::Setup) -> bool {
+        match self.spaces.iter_mut().find(|s| s.id == id) {
+            Some(space) if space.agent != agent => {
+                space.agent = agent;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Set or clear (`None`, blank) a space's icon. Returns whether anything
@@ -1374,7 +1391,10 @@ mod tests {
         tab.set_page_back(false);
         assert!(tab.can_go_back, "back to the opener");
         s.remove_tab(a);
-        assert!(!s.tab(b).unwrap().can_go_back, "the opener closed: no way back");
+        assert!(
+            !s.tab(b).unwrap().can_go_back,
+            "the opener closed: no way back"
+        );
     }
 
     #[test]
@@ -1677,7 +1697,10 @@ mod tests {
         let g = s.place_tab(a, c, Place::Right).unwrap();
         assert_eq!(titles(&s, &s.visible_order(1)), ["c", "a", "b"]);
         assert_eq!(s.groups[0].name, "Group 1");
-        assert_eq!((s.active, s.shown_group().map(|g| g.id)), (Some(a), Some(g)));
+        assert_eq!(
+            (s.active, s.shown_group().map(|g| g.id)),
+            (Some(a), Some(g))
+        );
         assert_eq!(s.on_screen(), [c, a]);
 
         // A third beside them; focus moving inside keeps the group up.
@@ -1711,11 +1734,21 @@ mod tests {
         let t1 = term(&mut s);
         let t2 = term(&mut s);
         assert!(!s.can_place(a, a, Place::Right), "not beside itself");
-        assert!(s.place_tab(t2, t1, Place::Right).is_some(), "terminals group too");
-        assert_eq!(titles(&s, &s.visible_order(1)), ["Terminal", "Terminal", "a"], "with the pages");
+        assert!(
+            s.place_tab(t2, t1, Place::Right).is_some(),
+            "terminals group too"
+        );
+        assert_eq!(
+            titles(&s, &s.visible_order(1)),
+            ["Terminal", "Terminal", "a"],
+            "with the pages"
+        );
         let fav = web(&mut s, "fav");
         s.move_tab(fav, Zone::Favorite, None, 0);
-        assert!(!s.can_place(fav, a, Place::Right), "favorites belong to every space");
+        assert!(
+            !s.can_place(fav, a, Place::Right),
+            "favorites belong to every space"
+        );
         let work = s.add_space(None);
         s.switch_space(work);
         let w = web(&mut s, "w");
@@ -1738,7 +1771,11 @@ mod tests {
         s.place_tab(b, a, Place::Right);
         s.place_tab(c, b, Place::Bottom);
         s.remove_tab(c);
-        assert_eq!(s.groups[0].columns, [vec![a], vec![b]], "closed: the rest fill in");
+        assert_eq!(
+            s.groups[0].columns,
+            [vec![a], vec![b]],
+            "closed: the rest fill in"
+        );
         s.move_tab(b, Zone::Pinned, None, 0);
         assert!(s.groups.is_empty(), "pinned away; a group of one ends");
 
@@ -1749,9 +1786,17 @@ mod tests {
         s.place_tab(e, a, Place::Bottom);
         assert_eq!(titles(&s, &s.visible_order(1)), ["b", "f", "a", "e", "d"]);
         s.move_tab(e, Zone::Today, None, 0);
-        assert_eq!(s.groups[0].columns, [vec![a], vec![d]], "dragged out of the block");
+        assert_eq!(
+            s.groups[0].columns,
+            [vec![a], vec![d]],
+            "dragged out of the block"
+        );
         s.move_tab(f, Zone::Today, None, 3);
-        assert_eq!(titles(&s, &s.visible_order(1)), ["b", "e", "a", "d", "f"], "a stranger can't split a group");
+        assert_eq!(
+            titles(&s, &s.visible_order(1)),
+            ["b", "e", "a", "d", "f"],
+            "a stranger can't split a group"
+        );
         assert!(s.ungroup_tab(d) && s.groups.is_empty());
     }
 
@@ -1767,22 +1812,38 @@ mod tests {
         assert_eq!(s.set_group_ratio(g, None, 0.05), Some(group::MIN_RATIO));
         assert_eq!(s.set_group_ratio(g, Some(1), 0.7), Some(0.7));
 
-        let r = State::restore(serde_json::from_str(&serde_json::to_string(&s.save()).unwrap()).unwrap());
+        let r = State::restore(
+            serde_json::from_str(&serde_json::to_string(&s.save()).unwrap()).unwrap(),
+        );
         let g = &r.groups[0];
         let names: Vec<Vec<&str>> = g
             .columns
             .iter()
-            .map(|c| c.iter().map(|&t| r.tab(t).unwrap().title.as_str()).collect())
+            .map(|c| {
+                c.iter()
+                    .map(|&t| r.tab(t).unwrap().title.as_str())
+                    .collect()
+            })
             .collect();
         assert_eq!(names, [vec!["a"], vec!["b", "c"]]);
-        assert_eq!((g.name.as_str(), g.ratio, g.rows[1]), ("Work", group::MIN_RATIO, 0.7));
+        assert_eq!(
+            (g.name.as_str(), g.ratio, g.rows[1]),
+            ("Work", group::MIN_RATIO, 0.7)
+        );
         assert!(r.group_shown);
 
         // Sessions from before groups: a split is a group of two.
         let old = r#"{"tabs":[{"kind":"web","url":"x","title":"x"},{"kind":"web","url":"y","title":"y"}],
             "active":0,"splits":[[0,1,0.3]],"sidebarWidth":240,"sidebarCollapsed":false}"#;
         let r = State::restore(serde_json::from_str(old).unwrap());
-        assert_eq!((r.groups[0].name.as_str(), r.groups[0].ratio, r.groups[0].len()), ("Group 1", 0.3, 2));
+        assert_eq!(
+            (
+                r.groups[0].name.as_str(),
+                r.groups[0].ratio,
+                r.groups[0].len()
+            ),
+            ("Group 1", 0.3, 2)
+        );
     }
 
     #[test]

@@ -153,6 +153,8 @@ pub fn run() {
             agent::agent_threads,
             agent::agent_history,
             agent::agent_abort,
+            agent::agent_space_status,
+            agent::agent_set_space,
             agent::agent_memories,
             agent::agent_revise,
             agent::agent_forget,

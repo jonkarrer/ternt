@@ -56,6 +56,16 @@ export interface Space {
   /** An emoji or a `sym:` line symbol (src/lib/spaceIcons.ts); `null`
    *  shows the space's initial. */
   icon: string | null;
+  /** How its agent runs (Settings → Agent). */
+  agent: AgentSetup;
+}
+
+/** Who answers for a space; the key for it is the user's own (Settings → Agent → Keys). */
+export type AgentProvider = "fireworks" | "anthropic";
+export interface AgentSetup {
+  provider: AgentProvider;
+  /** Tool names the agent process knows (none offered yet). */
+  tools: string[];
 }
 
 export interface Folder {
@@ -176,8 +186,6 @@ export interface Prefs {
   linkRules: LinkRule[];
   /** Sites allowed the camera and microphone (origins); the rest ask. */
   mediaSites: string[];
-  /** Who answers in the agent panel (Settings → Agent); the agent gets that provider's key. */
-  agentProvider: "fireworks" | "anthropic";
 }
 
 export interface LinkRule {
@@ -230,11 +238,21 @@ export type AgentKeyChange = Partial<Record<keyof AgentKeys, string>>;
 
 export type AgentStatus =
   | { state: "starting" }
-  /** `provider` answers (Settings → Agent); `hasKey`: its key was given (the stub needs none). */
-  | { state: "running"; backend: string; restarted: boolean; provider: string; model: string | null; hasKey: boolean; generation: number }
+  /** `generation` counts processes started; how each space's agent runs is `AgentSpaceStatus`. */
+  | { state: "running"; backend: string; restarted: boolean; generation: number }
   /** `asked`: restarted on purpose (Restart, a key change), not a crash. */
   | { state: "restarting"; attempt: number; asked: boolean }
   | { state: "down"; reason: string };
+
+/** How one space's agent runs now, as the process says: on which provider and model,
+ *  with which tools, and whether it has that provider's key (`asleep` says why not). */
+export interface AgentSpaceStatus {
+  provider: string;
+  model: string | null;
+  tools: string[];
+  hasKey: boolean;
+  asleep: string | null;
+}
 
 /** Mirror the sidebar constants in src-tauri/src/browser.rs. */
 export const DEFAULT_SIDEBAR_WIDTH = 240;
@@ -352,6 +370,13 @@ export const browser = {
   /** A thread's checkpoints from `since` on. */
   agentHistory: (space: number, thread: string, since: number) => invoke<AgentEvent[]>("agent_history", { space, thread, since }),
   agentAbort: (space: number, thread: string) => invoke<boolean>("agent_abort", { space, thread }),
+  /** How a space's agent runs now (provider, model, key). */
+  agentSpaceStatus: (space: number) => invoke<AgentSpaceStatus>("agent_space_status", { space }),
+  /** Change how a space's agent runs; it does so at once, no restart. */
+  agentSetSpace: (space: number, setup: AgentSetup) => invoke<AgentSpaceStatus>("agent_set_space", { space, setup }),
+  /** `agent:space`: a space's agent was (re)configured; every window hears. */
+  onAgentSpace: (cb: (change: { space: number; status: AgentSpaceStatus }) => void): Promise<UnlistenFn> =>
+    listen<{ space: number; status: AgentSpaceStatus }>("agent:space", (e) => cb(e.payload)),
   /** What a space's agent remembers, newest first (Settings → Agent → Memory). */
   agentMemories: (space: number) => invoke<Memory[]>("agent_memories", { space }),
   /** Correct a memory; the one that replaces it comes back (a new id). */

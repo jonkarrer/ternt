@@ -58,7 +58,6 @@ async fn main() {
         ready: Ready {
             backend: "stub".into(),
             version: env!("CARGO_PKG_VERSION").into(),
-            model: None,
         },
     });
 
@@ -121,6 +120,7 @@ fn handle(
         .entry(space.clone())
         .or_insert_with(|| stub::Stub::new(space.clone(), outbox.clone()));
     match request.method.as_str() {
+        "configure" => Ok(agent.configure(&params)),
         "send" => {
             let input: Input = serde_json::from_value(params["input"].clone())
                 .map_err(|e| format!("bad input: {e}"))?;

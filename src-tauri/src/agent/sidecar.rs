@@ -37,6 +37,7 @@ use tokio::{
 use super::{
     Outbox, folder_name, keys,
     protocol::*,
+    setup::{Setup, SpaceStatus},
     wire::{Frame, Request},
 };
 
@@ -69,14 +70,9 @@ pub enum Status {
         backend: String,
         /// It came back after dying: the panel reloads what it shows.
         restarted: bool,
-        /// Who answers (Settings → Agent): `fireworks` or `anthropic`.
-        provider: String,
-        /// The model that answers, if the process said.
-        model: Option<String>,
-        /// It was given that provider's key; without one it can't answer.
-        has_key: bool,
         /// Counts the processes started: a change means a new one, whatever
-        /// else looks the same.
+        /// else looks the same. How each space's agent runs is asked per
+        /// space (`configure`).
         generation: u64,
     },
     Restarting {
@@ -131,6 +127,9 @@ pub struct Sidecar {
     /// Cuts a back-off pause short (Restart pressed during one).
     wake: Notify,
     generation: AtomicU64,
+    /// What the running process was told each space runs as, and its
+    /// answer; emptied with every new process, which knows nothing.
+    configured: Mutex<HashMap<u32, (Setup, SpaceStatus)>>,
 }
 
 /// The agent process to start.
@@ -183,6 +182,7 @@ impl Sidecar {
             intent: AtomicU8::new(Intent::None as u8),
             wake: Notify::new(),
             generation: AtomicU64::new(0),
+            configured: Mutex::default(),
         })
     }
 
@@ -253,17 +253,12 @@ impl Sidecar {
         let _ = std::fs::create_dir_all(&self.data);
         // Only what is asked of the process started here counts for it.
         self.intent.store(Intent::None as u8, Ordering::Release);
-        // The user's provider and key reach the agent this way and no other.
-        let provider = crate::prefs::get(&self.app).agent_provider;
-        let keys = keys::load(provider);
-        let has_key = keys
-            .iter()
-            .any(|(variable, _)| *variable == keys::answering(provider).variable);
+        // The user's keys reach the agents this way and no other; which one a
+        // space uses, the process is told per space (`configure`).
         let mut child = Command::new(&bin)
             .arg("--data")
             .arg(&self.data)
-            .env("TOKIDOKI_PROVIDER", provider.as_str())
-            .envs(keys)
+            .envs(keys::load())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -302,12 +297,11 @@ impl Sidecar {
             }
         };
         *self.stdin.lock().await = Some(stdin);
+        // A new process knows no space's setup yet.
+        self.configured.lock().unwrap().clear();
         self.set_status(Status::Running {
             backend: ready.backend,
             restarted,
-            provider: provider.as_str().into(),
-            model: ready.model,
-            has_key,
             generation: self.generation.fetch_add(1, Ordering::Relaxed) + 1,
         });
 
@@ -402,16 +396,54 @@ impl Sidecar {
         }
     }
 
-    /// A request to one space's agent, which opens on first use.
+    /// A request to one space's agent, which opens on first use, as its
+    /// space's setup says.
     async fn ask<T: DeserializeOwned>(
         &self,
         space: u32,
         method: &str,
         params: Value,
     ) -> Result<T, String> {
+        self.ensure(space).await?;
         let value = self.call(Some(folder_name(space)), method, params).await?;
         serde_json::from_value(value)
             .map_err(|err| format!("The agent answered with something unexpected: {err}"))
+    }
+
+    /// Tell the process how `space`'s agent runs before anything else is
+    /// asked of it, once per process.
+    async fn ensure(&self, space: u32) -> Result<(), String> {
+        if self.configured.lock().unwrap().contains_key(&space) {
+            return Ok(());
+        }
+        let setup = crate::browser::space_setup(&self.app, space).unwrap_or_default();
+        self.configure(space, setup).await.map(|_| ())
+    }
+
+    /// Have `space`'s agent run as `setup` says (Settings → Agent), and say
+    /// how it runs now. Nothing is sent when the process was already told
+    /// this; a change reaches the agent at once, no restart. Every window
+    /// hears the answer (`agent:space`), the panel among them.
+    pub async fn configure(&self, space: u32, setup: Setup) -> Result<SpaceStatus, String> {
+        if let Some((known, status)) = self.configured.lock().unwrap().get(&space)
+            && *known == setup
+        {
+            return Ok(status.clone());
+        }
+        let params = json!({ "provider": setup.provider.as_str(), "tools": setup.tools });
+        let value = self
+            .call(Some(folder_name(space)), "configure", params)
+            .await?;
+        let status: SpaceStatus = serde_json::from_value(value)
+            .map_err(|err| format!("The agent answered with something unexpected: {err}"))?;
+        self.configured
+            .lock()
+            .unwrap()
+            .insert(space, (setup, status.clone()));
+        let _ = self
+            .app
+            .emit("agent:space", json!({ "space": space, "status": status }));
+        Ok(status)
     }
 
     /// Returns as soon as the input is placed; the answer arrives as events.
@@ -470,9 +502,11 @@ impl Sidecar {
             .map(|_| ())
     }
 
-    /// The agent stopped and its files removed, for good.
+    /// The agent stopped and its files removed, for good. Not through `ask`:
+    /// the space is gone from the model, so there is no setup to send first.
     pub async fn delete(&self, space: u32) -> Result<(), String> {
-        self.ask::<Value>(space, "delete", Value::Null)
+        self.configured.lock().unwrap().remove(&space);
+        self.call(Some(folder_name(space)), "delete", Value::Null)
             .await
             .map(|_| ())
     }
@@ -576,15 +610,12 @@ mod tests {
         let json = serde_json::to_value(Status::Running {
             backend: "stub".into(),
             restarted: true,
-            provider: "fireworks".into(),
-            model: None,
-            has_key: false,
             generation: 2,
         })
         .unwrap();
         assert_eq!(
             json,
-            serde_json::json!({ "state": "running", "backend": "stub", "restarted": true, "provider": "fireworks", "model": null, "hasKey": false, "generation": 2 })
+            serde_json::json!({ "state": "running", "backend": "stub", "restarted": true, "generation": 2 })
         );
         let json = serde_json::to_value(Status::Restarting {
             attempt: 0,

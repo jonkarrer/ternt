@@ -191,13 +191,14 @@ builds it from the checkout, refuses an uncommitted one, and names its commit in
 notes); `TERNT_SIDECAR=stub just upload` would ship the stub. `TERNT_SIDECAR=tokidoki e2e/run.sh tokidoki` runs the panel
 against the real agent (one model call if `ANTHROPIC_API_KEY` is set).
 
-The agent is **bring your own key**: Settings → Agent picks the provider (Fireworks AI or Anthropic)
-and takes the key, which is kept in the macOS Keychain (`src-tauri/src/agent/keys.rs`). Ternt hands
-the chosen provider's key to the sidecar through its environment and nothing else ever sees it. A
-key already in Ternt's environment wins, which is how development runs with the team's keys:
-`doppler run -- just dev tokidoki`. The same page has a **Memory** section: what each space's agent
-has learned, fact by fact, to correct or forget, and a Wipe that forgets all of it (the
-conversations stay).
+The agent is **bring your own key**: Settings → Agent → Keys takes your Fireworks AI and Anthropic
+keys, kept in the macOS Keychain (`src-tauri/src/agent/keys.rs`); Ternt hands them to the sidecar
+through its environment and nothing else ever sees them. A key already in Ternt's environment
+wins, which is how development runs with the team's keys: `doppler run -- just dev tokidoki`.
+**Each space picks its own provider** (Fireworks AI by default) on the same page; the change
+reaches the running agent at once and its conversations go on. The page also has a **Memory**
+section: what the space's agent has learned, fact by fact, to correct or forget, and a Wipe that
+forgets all of it (the conversations stay).
 
 - `src-tauri/src/agent/protocol.rs` mirrors tokidoki's `interface` types (`src/agent/protocol.ts`
   is its generated TypeScript, copied from the tokidoki repo). The panel is written against the

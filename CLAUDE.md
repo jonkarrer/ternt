@@ -9,11 +9,13 @@ file is what isn't in the code.
   is `~/devjon/projects/tokidoki` and the contract is `docs/AGENT-SIDECAR.md` here. Both
   repos are developed by the same agent since 2026-11-21: when the contract moves, change
   both, then `just sync-protocol` here copies tokidoki's protocol (Rust and TypeScript) over.
-- **Scope of the agent: a chat with memory.** No requests from the sidecar back to Ternt, no
-  key per space, until the owner says so.
-- **Bring your own key.** Settings → Agent picks the provider (Fireworks AI default, or
-  Anthropic) and keeps the key in the Keychain; the sidecar gets it through its environment
-  and nothing else does. Development uses the team keys: `doppler run -- just dev tokidoki`.
+- **Scope of the agent: a chat with memory, plus tools that need no browser** (web search
+  first). No requests from the sidecar back to Ternt until the owner says so.
+- **Bring your own key; provider and tools per space** (owner, 2026-11-23). Settings → Agent →
+  Keys keeps the Fireworks AI and Anthropic keys in the Keychain; the sidecar gets every key
+  through its environment and nothing else does. Each space picks its provider (Fireworks
+  default) and tools, kept with the space and sent as `configure`; no key per space.
+  Development uses the team keys: `doppler run -- just dev tokidoki`.
 - **Secrets** come from Doppler (`doppler run --project ternt --config dev -- …`) or the
   Keychain. Never print a key, never put one on a command line, never commit the updater key.
 

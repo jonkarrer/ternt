@@ -18,26 +18,6 @@ pub enum LinkTarget {
     Tab,
 }
 
-/// Who answers in the agent panel (Settings → Agent). Bring your own key:
-/// the one for this provider is what the agent process gets.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum AgentProvider {
-    #[default]
-    Fireworks,
-    Anthropic,
-}
-
-impl AgentProvider {
-    /// As the agent process is told (`TOKIDOKI_PROVIDER`).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Fireworks => "fireworks",
-            Self::Anthropic => "anthropic",
-        }
-    }
-}
-
 /// Who uses this Ternt (Settings → Account). Kept on this Mac only; the
 /// profiles hold the actual sign-ins.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -79,7 +59,6 @@ pub struct Prefs {
     /// Sites allowed the camera and microphone, as origins
     /// (`https://meet.google.com`); the rest ask first.
     pub media_sites: Vec<String>,
-    pub agent_provider: AgentProvider,
 }
 
 impl Default for Prefs {
@@ -91,7 +70,6 @@ impl Default for Prefs {
             unload_tabs: true,
             link_rules: Vec::new(),
             media_sites: Vec::new(),
-            agent_provider: AgentProvider::default(),
         }
     }
 }
@@ -148,12 +126,7 @@ pub fn set_prefs(app: AppHandle, mut prefs: Prefs) {
     } else {
         TERMINAL_FONT_SIZE
     };
-    // The agent process gets its provider and key at start.
-    let provider_changed = get(&app).agent_provider != prefs.agent_provider;
     store(&app, prefs);
-    if provider_changed {
-        crate::agent::restart(&app);
-    }
 }
 
 fn store(app: &AppHandle, prefs: Prefs) {
@@ -192,9 +165,6 @@ mod tests {
         assert_eq!(prefs.external_links, LinkTarget::Tab);
         assert_eq!(prefs.account, Account::default());
         assert_eq!(prefs.terminal_font_size, TERMINAL_FONT_SIZE);
-        assert_eq!(prefs.agent_provider, AgentProvider::Fireworks);
-        let prefs: Prefs = serde_json::from_str(r#"{"agentProvider":"anthropic"}"#).unwrap();
-        assert_eq!(prefs.agent_provider, AgentProvider::Anthropic);
     }
 
     #[test]

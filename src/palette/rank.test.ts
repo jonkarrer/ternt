@@ -25,8 +25,9 @@ function tab(title: string, url: string, extra: Partial<Tab> = {}): Tab {
   };
 }
 
-const home: Space = { id: 1, name: "Home", color: "blue", profile: null, icon: null };
-const work: Space = { id: 2, name: "Work", color: "green", profile: "abc", icon: null };
+const agent = { provider: "fireworks" as const, tools: [] };
+const home: Space = { id: 1, name: "Home", color: "blue", profile: null, icon: null, agent };
+const work: Space = { id: 2, name: "Work", color: "green", profile: "abc", icon: null, agent };
 
 function ctx(over: Partial<Context> = {}): Context {
   return { mode: "newTab", tabs: [], spaces: [home, work], activeId: null, activeSpace: 1, history: [], closed: [], groups: [], ...over };

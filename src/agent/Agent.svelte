@@ -1,13 +1,15 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import SpaceIcon from "../lib/SpaceIcon.svelte";
-  import { browser, type AgentRequest, type AgentStatus, type AgentTagged } from "../lib/browser";
+  import { browser, type AgentRequest, type AgentSpaceStatus, type AgentStatus, type AgentTagged } from "../lib/browser";
   import type { ThreadSummary } from "./protocol";
   import { apply, emptyView, presenceText, rows, type ThreadView } from "./thread";
 
   let request = $state<AgentRequest | null>(null);
   /** The agent process; `null` until asked. */
   let status = $state<AgentStatus | null>(null);
+  /** How this space's agent runs (its provider, whether it has a key); `null` until asked. */
+  let spaceStatus = $state<AgentSpaceStatus | null>(null);
   /** The process just came back from a crash (shown for a moment). */
   let restarted = $state(false);
   let restartedTimer: ReturnType<typeof setTimeout> | undefined;
@@ -25,9 +27,9 @@
   const presence = $derived(presenceText(view.live.doing));
   const backend = $derived(status?.state === "running" ? status.backend : null);
   const stub = $derived(backend === "stub");
-  /** The agent is up but has no key for its provider (Settings → Agent), so it can't answer yet. */
-  const needsKey = $derived(status?.state === "running" && !stub && !status.hasKey);
-  const providerName = $derived(status?.state === "running" && status.provider === "anthropic" ? "Anthropic" : "Fireworks AI");
+  /** The agent is up but has no key for this space's provider (Settings → Agent), so it can't answer yet. */
+  const needsKey = $derived(status?.state === "running" && !stub && spaceStatus !== null && !spaceStatus.hasKey);
+  const providerName = $derived(spaceStatus?.provider === "anthropic" ? "Anthropic" : "Fireworks AI");
   /** The process can take an input. */
   const ready = $derived(!status || (status.state === "running" && !needsKey));
 
@@ -38,6 +40,10 @@
     const closes = browser.onAgentClose(() => (request = null));
     const events = browser.onAgentEvent(onEvent);
     const statuses = browser.onAgentStatus(onStatus);
+    // Settings changed how this space's agent runs (its provider, say).
+    const spaces = browser.onAgentSpace(({ space: id, status: next }) => {
+      if (request?.space.id === id) spaceStatus = next;
+    });
     // A request made before this page loaded is waiting in Rust; subscribe
     // first so none can slip in between.
     opens.then(() => browser.agentRequest()).then((pending) => pending && show(pending));
@@ -46,6 +52,7 @@
       closes.then((off) => off());
       events.then((off) => off());
       statuses.then((off) => off());
+      spaces.then((off) => off());
     };
   });
 
@@ -56,6 +63,8 @@
     request = next;
     error = null;
     browser.agentStatus().then((now) => (status = now));
+    if (!sameSpace) spaceStatus = null;
+    askSpace(next.space.id);
     await tick();
     input?.focus();
     if (sameSpace && view.thread) {
@@ -69,6 +78,16 @@
     if (seq !== showSeq) return;
     await openThread(threads[0]?.id ?? null);
     scrollToEnd(true);
+  }
+
+  /** How the space's agent runs: whether it can answer, and on what. */
+  function askSpace(id: number) {
+    browser
+      .agentSpaceStatus(id)
+      .then((now) => {
+        if (request?.space.id === id) spaceStatus = now;
+      })
+      .catch(() => {});
   }
 
   async function openThread(thread: string | null) {
@@ -114,6 +133,8 @@
       restarted = next.restarted;
       clearTimeout(restartedTimer);
       restartedTimer = setTimeout(() => (restarted = false), 8000);
+      // A new process: ask again whether this space's agent can answer.
+      if (request) askSpace(request.space.id);
       reload();
     }
   }

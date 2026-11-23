@@ -6,8 +6,9 @@
 //! Methods and their `params` (all take `space`, the agent's folder name,
 //! except `shutdown`):
 //!
-//! | method     | params                               | result                |
-//! |------------|--------------------------------------|-----------------------|
+//! | method      | params                               | result                |
+//! |-------------|--------------------------------------|-----------------------|
+//! | `configure` | `{ "provider": str, "tools": [str] }` | `SpaceStatus`: how the agent runs now |
 //! | `send`     | `{ "input": Input, "label": str }`   | `Sent`                |
 //! | `threads`  |                                      | `[ThreadSummary]`     |
 //! | `history`  | `{ "thread": id, "since": n }`       | `[Event]` checkpoints |
@@ -47,9 +48,6 @@ pub struct Ready {
     /// `stub` or `tokidoki`.
     pub backend: String,
     pub version: String,
-    /// The model that answers, when the process says (tokidoki does).
-    #[serde(default)]
-    pub model: Option<String>,
 }
 
 /// A line from the sidecar.

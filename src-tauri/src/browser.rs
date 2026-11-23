@@ -155,6 +155,20 @@ pub fn space_info(app: &AppHandle, id: u32) -> Option<crate::agent::SpaceInfo> {
     })
 }
 
+/// How a space's agent runs, if the space exists.
+pub fn space_setup(app: &AppHandle, id: u32) -> Option<crate::agent::Setup> {
+    with(app, |s| s.space(id).map(|space| space.agent.clone()))
+}
+
+/// Settings → Agent changed how a space's agent runs. Returns whether it did.
+pub fn set_space_agent(app: &AppHandle, id: u32, setup: crate::agent::Setup) -> bool {
+    let changed = with(app, |s| s.set_space_agent(id, setup));
+    if changed {
+        emit_state(app);
+    }
+    changed
+}
+
 pub fn active_space_info(app: &AppHandle) -> Option<crate::agent::SpaceInfo> {
     let id = with(app, |s| s.active_space);
     space_info(app, id)
@@ -263,7 +277,13 @@ fn snapshot(app: &AppHandle) -> Snapshot {
     snapshot.screen = screen_frames(app)
         .unwrap_or_default()
         .into_iter()
-        .map(|(tab, (x, y, width, height))| ScreenFrame { tab, x, y, width, height })
+        .map(|(tab, (x, y, width, height))| ScreenFrame {
+            tab,
+            x,
+            y,
+            width,
+            height,
+        })
         .collect();
     snapshot
 }
@@ -296,12 +316,13 @@ fn emit_state(app: &AppHandle) {
     let Ok(snapshot) = serde_json::value::to_raw_value(&snapshot(app)) else {
         return;
     };
-    for label in [UI_WEBVIEW, PEEK_WEBVIEW, TERM_WEBVIEW, crate::settings::SETTINGS_WINDOW] {
-        let _ = app.emit_to(
-            EventTarget::webview(label),
-            "browser:state",
-            &snapshot,
-        );
+    for label in [
+        UI_WEBVIEW,
+        PEEK_WEBVIEW,
+        TERM_WEBVIEW,
+        crate::settings::SETTINGS_WINDOW,
+    ] {
+        let _ = app.emit_to(EventTarget::webview(label), "browser:state", &snapshot);
     }
     session::schedule_save(app);
 }
@@ -364,7 +385,9 @@ pub fn on_native_change(app: &AppHandle, id: u32, native: NativeState) {
 }
 
 fn origin(url: &str) -> Option<String> {
-    Url::parse(url).ok().map(|u| u.origin().ascii_serialization())
+    Url::parse(url)
+        .ok()
+        .map(|u| u.origin().ascii_serialization())
 }
 
 /// Read the icon a tab's page names into the tab.
@@ -377,7 +400,9 @@ async fn read_favicon(app: &AppHandle, id: u32) {
     };
     let icon = crate::icons::favicon_from_links(&links);
     let changed = with(app, |s| {
-        let tab = s.tab_mut(id).filter(|t| t.url == url && t.favicon != icon)?;
+        let tab = s
+            .tab_mut(id)
+            .filter(|t| t.url == url && t.favicon != icon)?;
         tab.favicon = icon;
         Some(())
     });
@@ -409,7 +434,10 @@ fn content_bounds(app: &AppHandle) -> tauri::Result<Rect> {
 
 /// Logical `(x, y, width, height)` of a rect.
 fn frame_of(rect: Rect) -> group::Frame {
-    let (p, z) = (rect.position.to_logical::<f64>(1.0), rect.size.to_logical::<f64>(1.0));
+    let (p, z) = (
+        rect.position.to_logical::<f64>(1.0),
+        rect.size.to_logical::<f64>(1.0),
+    );
     (p.x, p.y, z.width, z.height)
 }
 
@@ -1022,7 +1050,10 @@ pub fn open_link_in_new_tab(app: &AppHandle, label: Option<&str>, url: Url, fron
 /// and named, `target="results"`): show that tab, as a browser brings the
 /// window forward. On the main thread.
 pub fn on_link_into(app: &AppHandle, label: &str) {
-    let Some(id) = label.strip_prefix("tab-").and_then(|id| id.parse::<u32>().ok()) else {
+    let Some(id) = label
+        .strip_prefix("tab-")
+        .and_then(|id| id.parse::<u32>().ok())
+    else {
         return;
     };
     if with(app, |s| s.active) == Some(id) {
@@ -1076,11 +1107,10 @@ fn ensure_term_webview(app: &AppHandle) -> tauri::Result<Webview> {
         return Ok(webview);
     }
     let bounds = content_bounds(app)?;
-    let builder =
-        WebviewBuilder::new(TERM_WEBVIEW, WebviewUrl::App("term.html".into()))
-            .focused(false)
-            // Transparent between a group's terminals (see term.css).
-            .transparent(true);
+    let builder = WebviewBuilder::new(TERM_WEBVIEW, WebviewUrl::App("term.html".into()))
+        .focused(false)
+        // Transparent between a group's terminals (see term.css).
+        .transparent(true);
     let webview = main_window(app)?.add_child(builder, bounds.position, bounds.size)?;
     #[cfg(target_os = "macos")]
     {
@@ -1423,11 +1453,15 @@ pub fn end_group_of_active(app: &AppHandle) -> tauri::Result<()> {
 /// would go beside, where, and the half of that tab's frame it would take.
 fn group_drop(app: &AppHandle, tab: u32, x: f64, y: f64) -> Option<(u32, Place, group::Frame)> {
     let frames = screen_frames(app).ok()?;
-    let &(target, frame) = frames.iter().find(|(_, (fx, fy, fw, fh))| {
-        x >= *fx && x <= fx + fw && y >= *fy && y <= fy + fh
-    })?;
+    let &(target, frame) = frames
+        .iter()
+        .find(|(_, (fx, fy, fw, fh))| x >= *fx && x <= fx + fw && y >= *fy && y <= fy + fh)?;
     let place = group::place_at(frame, (x, y));
-    with(app, |s| s.can_place(tab, target, place)).then_some((target, place, group::half(frame, place)))
+    with(app, |s| s.can_place(tab, target, place)).then_some((
+        target,
+        place,
+        group::half(frame, place),
+    ))
 }
 
 /// Called (on the main thread) when keyboard focus moves into a content

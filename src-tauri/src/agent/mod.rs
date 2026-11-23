@@ -23,6 +23,7 @@
 
 mod keys;
 pub mod protocol;
+mod setup;
 mod sidecar;
 pub mod wire;
 
@@ -41,6 +42,7 @@ use tokio::sync::mpsc;
 
 use crate::browser::{self, UI_WEBVIEW};
 use protocol::*;
+pub use setup::{Setup, SpaceStatus};
 pub use sidecar::Status;
 
 pub const AGENT_WEBVIEW: &str = "agent";
@@ -238,7 +240,7 @@ pub fn forget(app: &AppHandle, space: u32) {
     });
 }
 
-/// Start the agent process over (the provider changed in Settings).
+/// Start the agent process over (a key changed in Settings).
 pub fn restart(app: &AppHandle) {
     if let Ok(sidecar) = sidecar(app) {
         sidecar.restart();
@@ -367,6 +369,28 @@ pub async fn agent_history(
 #[tauri::command]
 pub async fn agent_abort(app: AppHandle, space: u32, thread: String) -> Result<bool, String> {
     sidecar(&app)?.abort(space, thread).await
+}
+
+/// How a space's agent runs now (the panel and Settings ask).
+#[tauri::command]
+pub async fn agent_space_status(app: AppHandle, space: u32) -> Result<SpaceStatus, String> {
+    let setup = browser::space_setup(&app, space).ok_or_else(|| format!("no space {space}"))?;
+    sidecar(&app)?.configure(space, setup).await
+}
+
+/// Settings → Agent: how a space's agent should run from now on. Kept with
+/// the space, and the agent runs so at once.
+#[tauri::command]
+pub async fn agent_set_space(
+    app: AppHandle,
+    space: u32,
+    setup: Setup,
+) -> Result<SpaceStatus, String> {
+    if browser::space_setup(&app, space).is_none() {
+        return Err(format!("no space {space}"));
+    }
+    browser::set_space_agent(&app, space, setup.clone());
+    sidecar(&app)?.configure(space, setup).await
 }
 
 /// What a space's agent remembers (Settings → Agent → Memory).

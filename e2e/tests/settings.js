@@ -39,20 +39,23 @@ await t.assert(
 );
 await t.shot("settings-account", "settings");
 await click(`.page-tab:nth-child(2)`);
-await t.until(async () => (await read(`document.querySelector("select.provider")?.value`)) === "fireworks", "Agent shows the provider, Fireworks by default");
-await t.until(async () => (await read(`document.querySelector("main").textContent`)).includes("stand-in agent"), "and that the stub is running");
-await t.assert((await read(`document.querySelector("input.key")?.placeholder`)) === "fw_…", "with a field for that provider's key");
-await t.eval("settings", `const s = document.querySelector("select.provider"); s.value = "anthropic"; s.dispatchEvent(new Event("change", { bubbles: true }))`);
-await t.until(async () => (await t.invoke("get_prefs")).agentProvider === "anthropic", "choosing Anthropic is saved");
-await t.until(async () => (await read(`document.querySelector("input.key")?.placeholder`)) === "sk-ant-…", "and the key field follows");
-await t.until(async () => { const s = await t.invoke("agent_status"); return s.state === "running" && s.provider === "anthropic"; }, "the agent restarts for the new provider", 15000);
-
-// Memory: what the space's agent learned, listed per space; edit, forget, wipe
 const space = S().activeSpace;
+await t.until(async () => (await read(`document.querySelector("select.space")?.value`)) === String(space), "Agent shows the active space");
+await t.until(async () => (await read(`document.querySelector("select.provider")?.value`)) === "fireworks", "on Fireworks AI by default");
+await t.until(async () => (await read(`document.querySelector("main").textContent`)).includes("stand-in agent"), "and that the stub is running");
+await t.assert((await read(`document.querySelector('input.key[data-provider="fireworks"]')?.placeholder`)) === "fw_…", "with a field for the Fireworks key");
+await t.assert((await read(`document.querySelector('input.key[data-provider="anthropic"]')?.placeholder`)) === "sk-ant-…", "and one for the Anthropic key");
+const generation = (await t.invoke("agent_status")).generation;
+await t.eval("settings", `const s = document.querySelector("select.provider"); s.value = "anthropic"; s.dispatchEvent(new Event("change", { bubbles: true }))`);
+await t.until(() => S().spaces.find((s) => s.id === space)?.agent.provider === "anthropic", "choosing Anthropic is saved with the space");
+await t.until(async () => (await t.invoke("agent_space_status", { space })).provider === "anthropic", "and the space's agent runs on it");
+await t.assert((await t.invoke("agent_status")).generation === generation, "without restarting the process");
+await t.assert(S().spaces.every((s) => s.id === space || s.agent.provider === "fireworks"), "other spaces keep their own provider");
+
+// Memory: what the space's agent learned; edit, forget, wipe
 const memoryTexts = () => read(`[...document.querySelectorAll(".memory .text")].map((el) => el.textContent).join("|")`);
 const remembered = () => t.invoke("agent_memories", { space });
-await t.until(async () => (await read(`document.querySelector("select.space")?.value`)) === String(space), "Memory shows the active space");
-await t.until(async () => (await read(`document.querySelector("main .empty")?.textContent`)) === "Nothing remembered yet.", "with nothing remembered yet");
+await t.until(async () => (await read(`document.querySelector("main .empty")?.textContent`)) === "Nothing remembered yet.", "Memory has nothing remembered yet");
 await t.assert((await read(`String(document.querySelector("button.wipe").disabled)`)) === "true", "and nothing to wipe");
 await t.invoke("agent_send", { space, text: "remember the stub", thread: null });
 await t.until(async () => (await remembered()).length === 1, "the stub learns one fact per answered question", 10000);

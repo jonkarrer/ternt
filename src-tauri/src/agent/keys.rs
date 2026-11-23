@@ -1,14 +1,13 @@
 //! The user's API keys for the agents: bring your own. They live in the macOS Keychain, never
 //! in a file or the repo, and reach the agent only through the sidecar's environment (set on
-//! the process in `sidecar.rs`; see docs/AGENT-SIDECAR.md). The process gets the key of the
-//! provider chosen in Settings (`prefs::AgentProvider`) and nothing for the other. A variable already in Ternt's own
-//! environment wins: development (`ANTHROPIC_API_KEY=… just dev`), where a rebuilt debug
-//! binary would otherwise be asked to confirm Keychain access at every launch.
+//! the process in `sidecar.rs`; see docs/AGENT-SIDECAR.md). The process gets every key the
+//! user has; which one a space's agent uses follows from that space's provider
+//! (`setup.rs`). A variable already in Ternt's own environment wins: development
+//! (`doppler run -- just dev tokidoki`), where a rebuilt debug binary would otherwise be asked
+//! to confirm Keychain access at every launch.
 
 use keyring::Entry;
 use serde::Serialize;
-
-use crate::prefs::AgentProvider;
 
 /// The Keychain service the keys are filed under. Debug builds keep their own, so trying a
 /// key in `just dev` never replaces the one the installed app uses.
@@ -24,7 +23,7 @@ pub struct Key {
     account: &'static str,
 }
 
-/// Answers and memory, through Fireworks AI. One of this and `ANTHROPIC` is required.
+/// Answers and memory, through Fireworks AI (the default provider).
 pub const FIREWORKS: Key = Key {
     variable: "FIREWORKS_API_KEY",
     account: "fireworks",
@@ -34,14 +33,6 @@ pub const ANTHROPIC: Key = Key {
     variable: "ANTHROPIC_API_KEY",
     account: "anthropic",
 };
-
-/// The key a provider answers with.
-pub fn answering(provider: AgentProvider) -> &'static Key {
-    match provider {
-        AgentProvider::Fireworks => &FIREWORKS,
-        AgentProvider::Anthropic => &ANTHROPIC,
-    }
-}
 
 /// Where a key is, if anywhere.
 #[derive(Clone, Copy, Debug, Default, Serialize, PartialEq)]
@@ -84,11 +75,10 @@ impl Key {
     }
 }
 
-/// The sidecar's environment for `provider`: its key, as (variable, value). The other
-/// provider's key stays out. A key that can't be read is logged and left out, so
-/// the process still starts.
-pub fn load(provider: AgentProvider) -> Vec<(&'static str, String)> {
-    [answering(provider)]
+/// The sidecar's environment: every key the user has, as (variable, value). A key that can't
+/// be read is logged and left out, so the process still starts.
+pub fn load() -> Vec<(&'static str, String)> {
+    [&FIREWORKS, &ANTHROPIC]
         .into_iter()
         .filter_map(|key| match key.read() {
             Ok(value) => value.map(|(value, _)| (key.variable, value)),

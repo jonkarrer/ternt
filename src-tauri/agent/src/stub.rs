@@ -30,6 +30,9 @@ pub struct Stub {
     space: String,
     /// What the space is called, for the canned text (`label` on `send`).
     label: Mutex<String>,
+    /// What it was told to run as (`configure`): provider and tools, echoed
+    /// back so Settings shows them. The stub runs on nothing.
+    setup: Mutex<(String, Vec<String>)>,
     outbox: Outbox,
     inner: Arc<Mutex<Inner>>,
 }
@@ -261,10 +264,33 @@ impl Stub {
     pub fn new(space: String, outbox: Outbox) -> Self {
         Self {
             label: Mutex::new(space.clone()),
+            setup: Mutex::new(("fireworks".into(), Vec::new())),
             space,
             outbox,
             inner: Arc::default(),
         }
+    }
+
+    /// Takes the setup's parts that are given, keeps the rest, and says how
+    /// it "runs": the stub needs no key, so it always has one.
+    pub fn configure(&self, params: &serde_json::Value) -> serde_json::Value {
+        let mut setup = self.setup.lock().unwrap();
+        if let Some(provider) = params["provider"].as_str() {
+            setup.0 = provider.into();
+        }
+        if let Some(tools) = params["tools"].as_array() {
+            setup.1 = tools
+                .iter()
+                .filter_map(|t| t.as_str().map(String::from))
+                .collect();
+        }
+        serde_json::json!({
+            "provider": setup.0,
+            "model": null,
+            "tools": setup.1,
+            "has_key": true,
+            "asleep": null,
+        })
     }
 
     pub fn set_label(&self, label: &str) {

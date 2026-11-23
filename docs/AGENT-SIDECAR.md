@@ -20,23 +20,23 @@ ternt-agent --data <dir>
   space's folder name, `space-<id>`, so a renamed space keeps its agent.
 - A space's folder name is lowercase letters, digits, `-` and `_`, at most 64 characters (tokidoki
   rejects anything else). `space-<id>` always fits.
-- **The provider and its key come from the environment.** `TOKIDOKI_PROVIDER` is `fireworks` or
-  `anthropic`: who the user chose in Settings → Agent (tokidoki also knows `baseten`; Ternt
-  doesn't offer it). With it comes that provider's key and only that one, `FIREWORKS_API_KEY` or
-  `ANTHROPIC_API_KEY`; the process answers, routes and remembers with that one provider. Ternt is
-  bring-your-own-key: the keys live in the user's Keychain (service `com.jokar.ternt`, accounts
-  `fireworks` and `anthropic`; `.dev` in debug builds), put there by Settings → Agent
-  (`src-tauri/src/agent/keys.rs`), and reach the process this way and no other. A variable already
-  in Ternt's own environment wins, for development (`doppler run -- just dev tokidoki`). Changing
-  the provider or the key restarts the process, since its environment is fixed at start. A variable already in
-  Ternt's own environment wins, for development. Saving a key restarts the process, since the
-  environment is fixed at start. **Without the provider's key the process must still start and say
-  it is ready**; it answers requests that need the model with an error. Ternt knows whether it
-  gave the provider's key (`hasKey` in the panel's status) and points at Settings instead of
-  sending.
-- One environment means one provider and one key for every space. A key per space (a work
-  account for a work space) is not designed: it would need a key in the request that opens the
-  space.
+- **Each space picks its provider; the keys come from the environment.** Ternt sets every key
+  the user has on the process, `FIREWORKS_API_KEY` and `ANTHROPIC_API_KEY` (tokidoki also knows
+  `BASETEN_API_KEY`; Ternt doesn't offer it), and tells the process per space, with `configure`
+  before that space's first other request, which provider its agent runs on and which tools it
+  has. The agent answers, routes and remembers with that provider. Ternt is bring-your-own-key:
+  the keys live in the user's Keychain (service `com.jokar.ternt`, accounts `fireworks` and
+  `anthropic`; `.dev` in debug builds), put there by Settings → Agent → Keys
+  (`src-tauri/src/agent/keys.rs`), and reach the process this way and no other. A variable
+  already in Ternt's own environment wins, for development (`doppler run -- just dev tokidoki`).
+  Saving or removing a key restarts the process, since its environment is fixed at start;
+  changing a space's provider or tools does not, `configure` reaches the running agent.
+  **Without a provider's key the process must still start and say it is ready**; an agent on
+  that provider opens asleep, answers `threads`, `history` and the memory methods from disk,
+  and `send` with an error. `configure` says so (`has_key: false`, `asleep: "…"`), which is how
+  the panel knows to point at Settings instead of sending (`agent_space_status`).
+- The provider and tools are per space (`Space::agent` in the session, `setup.rs`); a key per
+  space (a work account for a work space) is not designed: it would need a key in `configure`.
 - tokidoki holds `<dir>/.lock` while it runs: a second process on the same folder exits with code 1
   before its ready line. Ternt only starts a replacement after `wait` on the old process, so this
   happens only if something else runs a sidecar on Ternt's folder.
@@ -89,6 +89,7 @@ with its space on the way to the panel.
 
 | method     | params                              | result                           |
 |------------|-------------------------------------|----------------------------------|
+| `configure` | `{ "provider": str, "tools": [str] }` | how the agent runs now: `{ provider, model, tools, has_key, asleep }`. Same setup: the agent stays as it is; a change: it is stopped and opened again so, its work resuming. Ternt sends it before a space's first other request in a process's life and when Settings changes the space |
 | `send`     | `{ "input": Input, "label": str }`  | `Sent`                           |
 | `threads`  |                                     | `[ThreadSummary]`, newest first  |
 | `history`  | `{ "thread": id, "since": n }`      | `[Event]`: checkpoints from `n`  |
@@ -150,8 +151,7 @@ within two minutes leaves it down, with a Restart button. After a restart the pa
 `threads` and `history`, so an agent that resumes from disk (tokidoki) shows everything it had,
 and one that doesn't (the stub) shows a fresh start.
 
-A restart Ternt asks for (the Restart button, saving a key, changing the provider) is not a
-death: the process gets SIGTERM, then SIGKILL 300 ms later if it is still there, and comes back
+A restart Ternt asks for (the Restart button, saving or removing a key) is not a death: the process gets SIGTERM, then SIGKILL 300 ms later if it is still there, and comes back
 with no pause, no crash banner and the restart budget cleared; asked during a back-off pause, it
 cuts the pause short. When Ternt quits it does the same with no restart to follow. The status
 carries a `generation` that changes with every process started, for anyone who needs to tell a
