@@ -1,6 +1,6 @@
 # Ternt
 
-An Arc-style macOS browser and terminal (Tauri v2 + Svelte 5). The README is the map; this
+An Arc-style macOS browser and terminal (Tauri v2 + Svelte 5). `README.md` is the front page and `docs/` the map (GUIDE, ARCHITECTURE, DEVELOPMENT); this
 file is what isn't in the code.
 
 ## Standing decisions

@@ -1,0 +1,56 @@
+Ternt Source-Available License
+
+Copyright (c) 2026 Jon Karrer. All rights reserved.
+
+This repository is public so that its source code can be read. It is not open
+source. "The Software" means everything in this repository and every release
+built from it, including the tokidoki agent in the tokidoki/ directory.
+
+1. What you may do
+
+   a. Read the source code, and download or clone it for the purpose of
+      reading it and evaluating the Software.
+   b. Install and run unmodified releases of the Software that the copyright
+      holder publishes, for your personal or internal business use.
+
+2. What you may not do without prior written permission from the copyright
+   holder
+
+   a. Copy, modify, merge or create derivative works of the Software, in whole
+      or in part, beyond what section 1 needs.
+   b. Distribute, publish, sublicense, sell, rent or host the Software or any
+      part of it, modified or not.
+   c. Use the Software's source code to build, train or improve a competing
+      product or service.
+   d. Remove or alter this license or any copyright notice.
+   e. Use the names "Ternt" and "Tokidoki" or the Software's icons to name or
+      promote anything else.
+
+3. Contributions
+
+   If you send a change to the copyright holder (a pull request, a patch or
+   similar), you grant the copyright holder a perpetual, worldwide,
+   royalty-free, irrevocable right to use, modify, distribute and relicense
+   it as part of the Software.
+
+4. Third-party components
+
+   The Software depends on components made by others. Each stays under its own
+   license, and nothing here limits rights you have under those licenses.
+
+5. Termination
+
+   Your rights under this license end automatically if you break its terms.
+
+6. No warranty
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+   WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+   IN CONNECTION WITH THE SOFTWARE OR THE USE OF OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+For permission beyond this license, open an issue at
+https://github.com/jonkarrer/ternt/issues.
