@@ -46,7 +46,7 @@ click needed. *Ternt → Check for Updates…* checks right away and answers on 
 
 ## Sidebar
 
-Arc-style, top to bottom:
+Top to bottom:
 
 - **Favorites**: tiles showing each site's app icon (its `apple-touch-icon`, else its largest icon,
   read from the open page so signed-in sites and single-page apps get theirs), shared by every
@@ -116,7 +116,7 @@ spaces: a profile is the identity sites see while you're in one (say, one Gmail 
 for side projects).
 A profile no space uses any more is deleted.
 
-**Air Traffic Control** (Settings → Links) sends links from other apps to a space: a rule matches
+**Link rules** (Settings → Links) send links from other apps to a space: a rule matches
 by host (`github.com` takes its subdomains too; `github.com/acme` only the pages under it) or by a
 regex tried against the whole URL, and the first match opens the link as a tab in its space. Links
 no rule takes go to Little Ternt or a new tab, as chosen above it. A tester there shows where a
@@ -148,7 +148,7 @@ space you're in. Read it and close it (⌘W), or click *Open in Ternt* to move t
 
 ## Settings
 
-*Ternt → Settings…* (⌘,) opens an Arc-style window with pages along the top: **Account** (your
+*Ternt → Settings…* (⌘,) opens a window with pages along the top: **Account** (your
 name and email, kept on this Mac, and a summary of your profiles), **General** (version, updates, sites allowed the camera and microphone),
 **Profiles** (Default and each separate profile),
 **Links** (default browser, where links from other apps open), **Shortcuts** and **Advanced**
@@ -181,5 +181,17 @@ forget, and a Wipe that forgets all of it (the conversations stay).
 **Switching it off** (the switch at the top of *Settings → Agent*, or in the setup window): ⌃A
 does nothing, the command bar stops offering Tokidoki and no agent process runs.
 
+**What leaves your Mac.** What you ask, and what the agent remembers that bears on it, goes to
+the provider the space uses; to TypeSafe too when Jev's key is set; and the agent's searches to
+Exa when web search is on. Nowhere else. Each bills your own key. Answers can be wrong: check
+what matters.
+
 If the agent's process crashes, Ternt carries on and restarts it; the panel says so, and shows a
 Restart button if it keeps failing.
+
+## License and notices
+
+*Help → License* shows Ternt's terms: the code may be read and the published releases run, and
+it comes as it is, without warranty. *Help → Third-Party Licenses* lists the open-source software
+Ternt includes, with its license texts. The setup window and *Settings → Agent* link to the
+license too.

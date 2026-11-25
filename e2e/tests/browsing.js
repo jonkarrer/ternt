@@ -22,7 +22,7 @@ await t.eval(`tab-${S().active}`, `go("/spa/route-2")`);
 await t.until(() => tab()?.url.endsWith("/spa/route-2"), "pushState URL tracked");
 await t.assert(tab().canGoBack, "pushState adds history entry");
 
-// Tab switching shortcuts (new tabs go on top, like Arc)
+// Tab switching shortcuts (new tabs go on top)
 await t.assert(S().tabs[0].id === S().active, "new tab is inserted at the top");
 await t.invoke("menu_action", { id: "previous-tab" });
 await t.until(() => S().active === S().tabs.at(-1).id, "ctrl+shift+tab wraps to last");

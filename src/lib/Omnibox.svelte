@@ -4,7 +4,7 @@
   let { tab }: { tab: Tab | undefined } = $props();
 </script>
 
-<!-- Arc-style: the sidebar shows the host; clicking opens the command bar
+<!-- The sidebar shows the host; clicking opens the command bar
      prefilled with the full URL. -->
 <button class="omnibox" onclick={() => browser.openPalette("edit")}>
   {#if tab?.kind === "terminal"}

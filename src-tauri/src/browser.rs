@@ -1229,7 +1229,7 @@ fn refresh_active(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn close_tab_by_id(app: &AppHandle, id: u32) -> tauri::Result<()> {
-    // Favorites and pinned tabs unload instead of closing (Arc behavior):
+    // Favorites and pinned tabs unload instead of closing:
     // they stay in the sidebar and reload their URL when next opened.
     let Some((tab, was_active, next, partner_of_active)) = with(app, |s| {
         // In the group on screen, the rest of the group fills its space
@@ -1304,7 +1304,7 @@ pub fn close_active_tab(app: &AppHandle) -> tauri::Result<()> {
     }
 }
 
-/// Close the active space's Today web tabs (Arc's "Clear"). Terminals stay:
+/// Close the active space's Today web tabs ("Clear"). Terminals stay:
 /// closing one kills its shell, which ⇧⌘T can't bring back.
 pub fn clear_today(app: &AppHandle) -> tauri::Result<()> {
     let (mut ids, active) = with(app, |s| {

@@ -479,13 +479,27 @@
     <div class="row"><span class="error" role="alert">{keyError}</span></div>
   {/if}
 </div>
-<p class="caption">
-  Shared by every space and kept in your Keychain, never in a file. Your messages go from Ternt to the provider you chose
-  and nowhere else.
+<p class="caption notice">
+  Shared by every space and kept in your Keychain, never in a file. What you ask, and what the agent remembers that bears on it, goes to the provider the space uses, to TypeSafe when
+  Jev's key is set, and its searches to Exa when web search is on; nowhere else. Each bills your own key. Answers can be
+  wrong: check what matters. Ternt comes without warranty, see its
+  <button class="link license" type="button" onclick={() => browser.openLicense()}>license</button>.
 </p>
 {/if}
 
 <style>
+  /* A link in running text (the license). */
+  .link {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--accent);
+    cursor: pointer;
+  }
+  .link:hover {
+    text-decoration: underline;
+  }
   /* The page's head: what this is, and whether it is running. */
   .pane {
     display: flex;

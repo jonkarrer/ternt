@@ -58,7 +58,7 @@ fn window_of(webview: &str) -> &str {
     webview.trim_end_matches("-bar").trim_end_matches("-page")
 }
 
-/// A link from another app: a tab in the space an Air Traffic Control rule
+/// A link from another app: a tab in the space a link rule
 /// names, else a Little Ternt window or a new tab, per Settings. Must not be
 /// called from the main thread.
 pub fn open_external(app: &AppHandle, url: Url) -> tauri::Result<()> {
@@ -68,7 +68,7 @@ pub fn open_external(app: &AppHandle, url: Url) -> tauri::Result<()> {
     // At launch the link can arrive before the session (and its spaces)
     // is back.
     crate::browser::wait_until_restored();
-    // Air Traffic Control: a rule sends it to its space.
+    // Link rules: a rule sends it to its space.
     if let Some((_, space)) = crate::routing::route(app, &url) {
         crate::browser::switch_space(app, space)?;
         crate::browser::open_tab(app, url)?;

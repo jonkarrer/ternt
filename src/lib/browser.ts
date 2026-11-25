@@ -181,7 +181,7 @@ export interface Prefs {
   terminalFontSize: number;
   /** Unload tabs off screen for 30 minutes, to save memory. */
   unloadTabs: boolean;
-  /** Air Traffic Control: links from other apps matching a rule open in its
+  /** Link rules: links from other apps matching a rule open in its
       space (first match wins; src-tauri/src/routing.rs). */
   linkRules: LinkRule[];
   /** Use the AI agent (⌃A, `tok` ⇥ in the command bar). Off: nothing of it shows and its process doesn't run. */
@@ -403,6 +403,8 @@ export const browser = {
     listen<AgentStatus>("agent:status", (e) => cb(e.payload)),
   /** Which API keys the agents have (never the values); they live in the Keychain. */
   agentKeys: () => invoke<AgentKeys>("agent_keys"),
+  /** Show Ternt's license (or the notices of the software it includes) in a tab. */
+  openLicense: (thirdParty = false) => invoke("open_license", { thirdParty }),
   /** The setup window is done with: close it. */
   closeOnboarding: () => invoke("close_onboarding"),
   /** Store keys and restart the agent with them. */

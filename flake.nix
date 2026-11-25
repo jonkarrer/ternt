@@ -1,5 +1,5 @@
 {
-  description = "ternt — Arc-style browser and terminal for macOS (Tauri v2 + Svelte 5)";
+  description = "ternt — browser and terminal for macOS (Tauri v2 + Svelte 5)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";

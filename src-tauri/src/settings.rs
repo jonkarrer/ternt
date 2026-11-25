@@ -30,7 +30,7 @@ pub fn open(app: &AppHandle) -> tauri::Result<()> {
     .minimizable(false)
     .maximizable(false)
     .center();
-    // The tab bar sits in the title bar, as in Arc and macOS settings.
+    // The tab bar sits in the title bar, as in macOS settings.
     #[cfg(target_os = "macos")]
     let builder = builder
         .title_bar_style(tauri::TitleBarStyle::Overlay)

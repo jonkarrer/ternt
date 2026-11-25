@@ -6,7 +6,7 @@
 
 <p align="center">
   A browser and a terminal in one window, with an AI agent in every space.<br>
-  Arc's way of organizing the web, for macOS.
+  Spaces in a sidebar instead of a strip of tabs, for macOS.
 </p>
 
 <p align="center">
@@ -94,5 +94,12 @@ It runs in its own process, so a failure there never takes the browser down. Mor
 
 Ternt is source-available, not open source. You may read the code and run the published
 releases; copying, modifying and redistributing it need permission. See [LICENSE](LICENSE).
+
+The app shows the same terms under *Help → License*, and the notices of the open-source software
+it includes under *Help → Third-Party Licenses*.
+
+Ternt is provided as is, without warranty. The agent's answers come from third-party models and
+can be wrong; what you ask it is sent to the providers whose keys you set, and billed by them to
+you.
 
 Copyright © 2026 Jon Karrer.

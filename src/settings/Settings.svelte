@@ -9,7 +9,7 @@
   import Account from "./Account.svelte";
   import Agent from "./Agent.svelte";
 
-  // Arc-style: a row of icon tabs in the title bar, one page below.
+  // A row of icon tabs in the title bar, one page below.
   const PAGES = [
     { id: "account", label: "Account", icon: "M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5ZM8 4.75a2.25 2.25 0 1 0 0 4.5 2.25 2.25 0 0 0 0-4.5ZM4 12.4c.8-1.5 2.3-2.4 4-2.4s3.2.9 4 2.4" },
     { id: "agent", label: "Agent", icon: "M8 1.5 9.6 6l4.4 1.6L9.6 9.4 8 14l-1.6-4.6L2 7.6 6.4 6Z" },

@@ -19,6 +19,10 @@ The flake follows the org Nix standard, with the `mkDevShell` builder vendored i
 Secrets live in the `ternt` Doppler project (`doppler.yaml` binds `dev`); recipes that need
 them run under `doppler run --`.
 
+After adding, removing or updating a dependency (Cargo or npm), run `just licenses`: it rewrites
+`src-tauri/third-party-licenses.txt`, the notices *Help → Third-Party Licenses* shows, from what
+the release links (`scripts/licenses.ts`). `just check` fails while that file is out of date.
+
 `ternt <url>...` opens URLs as tabs (`bun tauri dev -- -- https://example.com`).
 
 ## Tests

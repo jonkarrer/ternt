@@ -53,7 +53,7 @@ pub struct Prefs {
     pub terminal_font_size: f64,
     /// Unload tabs that have been off screen a while (see `unload`).
     pub unload_tabs: bool,
-    /// Air Traffic Control: links from other apps that go to a given space
+    /// Link rules: links from other apps that go to a given space
     /// (see `routing`).
     pub link_rules: Vec<crate::routing::LinkRule>,
     /// Sites allowed the camera and microphone, as origins

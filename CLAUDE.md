@@ -1,6 +1,6 @@
 # Ternt
 
-An Arc-style macOS browser and terminal (Tauri v2 + Svelte 5). `README.md` is the front page and `docs/` the map (GUIDE, ARCHITECTURE, DEVELOPMENT); this
+A macOS browser and terminal with a sidebar of spaces (Tauri v2 + Svelte 5). `README.md` is the front page and `docs/` the map (GUIDE, ARCHITECTURE, DEVELOPMENT); this
 file is what isn't in the code.
 
 ## Standing decisions
@@ -26,6 +26,9 @@ file is what isn't in the code.
   (`Prefs::agent_enabled`): no ⌃A, no `tok` in the command bar, no sidecar.
 - **Secrets** come from Doppler (`doppler run --project ternt --config dev -- …`) or the
   Keychain. Never print a key, never put one on a command line, never commit the updater key.
+- **License and notices** (owner, 2026-11-25): source-available (`LICENSE`), shown in the app at
+  `ternt://license/`; the setup window says continuing accepts it. Dependencies' notices ship in
+  `src-tauri/third-party-licenses.txt`: run `just licenses` when dependencies change.
 
 ## Working with the owner
 

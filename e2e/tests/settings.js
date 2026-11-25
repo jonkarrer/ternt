@@ -56,6 +56,8 @@ await t.assert(S().spaces.every((s) => s.id === space || s.agent.provider === "f
 const search = `document.querySelector('.tool[data-tool="web_search"] input')`;
 await t.assert((await read(`String(${search}?.checked)`)) === "false", "web search is off until switched on");
 await t.assert((await read(`document.querySelector('input.key[data-provider="exa"]')?.placeholder`)) === "Web search…", "and Keys has a field for the Exa key");
+await t.assert((await read(`document.querySelector(".notice")?.textContent`))?.includes("Answers can be wrong"), "under them, where what you ask goes and that answers can be wrong");
+await t.assert((await read(`document.querySelector(".notice .link.license")?.textContent`)) === "license", "with a link to the license");
 await t.assert((await read(`document.querySelector('input.key[data-provider="typesafe"]')?.placeholder`)) === "Recommended…", "and one for the Jev key, marked recommended");
 await t.assert((await read(`document.querySelector(".badge")?.parentElement.textContent`)).includes("Jev"), "by a badge too");
 await t.assert((await read(`String(document.querySelector("input.enabled")?.checked)`)) === "true", "the agent is on, with a switch to turn it off");

@@ -247,6 +247,15 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &MenuItem::with_id(app, "help", "Shortcuts and How-Tos", true, Some("Ctrl+H"))?,
             &MenuItem::with_id(app, "welcome", "Welcome to Ternt", true, None::<&str>)?,
             &MenuItem::with_id(app, "onboarding", "Set Up Ternt…", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "license", "License", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "third-party",
+                "Third-Party Licenses",
+                true,
+                None::<&str>,
+            )?,
         ],
     )?;
 
@@ -341,6 +350,8 @@ pub fn run_action(app: &AppHandle, id: String) {
             "split-terminal" => browser::split_with_new_terminal(&app),
             "unsplit" => browser::end_group_of_active(&app),
             "welcome" => welcome::open(&app),
+            "license" => welcome::open_page(&app, welcome::LICENSE_URL),
+            "third-party" => welcome::open_page(&app, welcome::THIRD_PARTY_URL),
             "onboarding" => crate::onboarding::open(&app),
             // ⌃F typed in a terminal (see `handle`).
             "terminal-explore" => browser::type_in_terminal(&app, "\x06"),

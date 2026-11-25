@@ -1,4 +1,4 @@
-// Air Traffic Control: links from other apps that match a rule open in its
+// Link rules: links from other apps that match a rule open in its
 // space (Settings → Links); the rest go where Settings says (Little Ternt).
 const S = () => t.state();
 const tab = () => S().tabs.find((x) => x.id === S().active);
@@ -64,7 +64,7 @@ await t.until(async () => (await t.invoke("get_prefs")).linkRules.map((r) => r.p
 await t.eval("settings", `(() => { const s = document.querySelectorAll(".rule .kind")[1]; s.value = "regex"; s.dispatchEvent(new Event("change", { bubbles: true })); })()`);
 await typeIn(`document.querySelectorAll(".rule .pattern")[1]`, "(unclosed");
 await t.until(async () => (await read(`document.querySelector(".problem")?.textContent ?? ""`)).length > 0, "a regex that won't compile says why");
-await t.shot("atc-settings", "settings");
+await t.shot("link-rules-settings", "settings");
 await typeIn(`document.querySelectorAll(".rule .pattern")[1]`, String.raw`^https://linear\.app/`);
 await t.until(async () => !(await read(`document.querySelector(".problem")?.textContent ?? ""`)), "fixed, the warning goes");
 await t.eval("settings", `document.querySelectorAll(".rule button[aria-label='Move rule up']")[1].click()`);

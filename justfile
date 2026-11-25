@@ -1,4 +1,4 @@
-# Ternt — Arc-style browser and terminal for macOS (Tauri v2 + Svelte 5)
+# Ternt — browser and terminal for macOS (Tauri v2 + Svelte 5)
 
 # Default: list available commands
 default:
@@ -18,8 +18,13 @@ sidecar *args:
 sync-protocol:
     scripts/sync-protocol.sh
 
+# Rewrite src-tauri/third-party-licenses.txt (Help → Third-Party Licenses) after dependencies change
+licenses:
+    bun scripts/licenses.ts
+
 # Typecheck + lint — must be clean before commit (Ternt, then the agent in tokidoki/)
 check: sidecar
+    bun scripts/licenses.ts --check
     bun run check && cd src-tauri && cargo clippy -q --workspace --all-targets -- -D warnings
     cd tokidoki && just check
 

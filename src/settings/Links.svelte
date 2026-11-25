@@ -23,7 +23,7 @@
     browser.updatePrefs({ externalLinks });
   }
 
-  // --- Air Traffic Control ---------------------------------------------------
+  // --- Link rules ------------------------------------------------------------
 
   async function save() {
     problems = await Promise.all(rules.map((r) => (r.pattern.trim() ? browser.checkLinkRule(r.kind, r.pattern) : null)));
@@ -81,13 +81,13 @@
   </label>
 </div>
 
-<h2>Air Traffic Control</h2>
+<h2>Link rules</h2>
 <p class="caption">
   A link from another app that matches a rule opens as a tab in that rule's space; the rest go to {fallback}. The first
   rule that matches wins. A host matches its subdomains too, and with a path (<code>github.com/acme</code>) only the
   pages under it; a regex is tried against the whole URL.
 </p>
-<div class="card atc">
+<div class="card rules">
   {#each rules as rule, i (i)}
     <div class="row rule">
       <select class="kind" aria-label="Match by" bind:value={rule.kind} onchange={save}>

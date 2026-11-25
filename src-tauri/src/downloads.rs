@@ -1,5 +1,5 @@
-//! Downloads: the list in the sidebar's Downloads box (src/lib/DownloadsBox.svelte),
-//! like Arc's. Files go to ~/Downloads (named as the site suggests,
+//! Downloads: the list in the sidebar's Downloads box (src/lib/DownloadsBox.svelte).
+//! Files go to ~/Downloads (named as the site suggests,
 //! numbered rather than overwriting); each shows its progress while it
 //! downloads, then opens with a click. Finished ones are kept in
 //! `downloads.json` across launches.
@@ -195,7 +195,7 @@ pub fn started(webview: &Webview, url: &Url, path: &mut PathBuf) {
     if let Some(download) = crate::native::current_download() {
         NATIVE.with(|n| n.borrow_mut().insert(id, download));
         // A link opened in a new tab that was only ever a file: close the
-        // empty tab (or window), as Safari and Arc do.
+        // empty tab (or window), as Safari does.
         if crate::native::shows_nothing(webview) {
             close_empty(app, webview.label().to_string());
         }

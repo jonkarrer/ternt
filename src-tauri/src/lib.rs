@@ -185,6 +185,7 @@ pub fn run() {
             downloads::cancel_download,
             downloads::clear_downloads,
             onboarding::close_onboarding,
+            welcome::open_license,
             settings::reveal_data_dir,
             settings::default_browser,
             settings::make_default_browser,

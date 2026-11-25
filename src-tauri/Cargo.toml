@@ -39,7 +39,7 @@ libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 portable-pty = "0.9.0"
-# Air Traffic Control's regex rules (src/routing.rs).
+# Link rules written as a regex (src/routing.rs).
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-case", "unicode-perl"] }
 # Site icons for favorites (src/icons.rs). The updater already builds both,
 # with these features.

@@ -25,6 +25,15 @@ await t.assert(
   "and a field for each key: the two providers, Jev, Exa",
 );
 await t.assert((await setup(`document.querySelector(".keys .badge")?.parentElement.textContent`)).includes("Jev"), "Jev is marked recommended");
+await t.assert(
+  (await setup(`document.querySelector(".notice")?.textContent`))?.includes("Answers can be wrong"),
+  "it says where what you ask goes, and that answers can be wrong",
+);
+await t.assert((await setup(`document.querySelector(".terms")?.textContent`))?.includes("By continuing you accept"), "and that continuing accepts the license");
+await press(".link.license");
+await t.until(() => tab()?.url === "ternt://license/" && tab()?.title === "Ternt License" && !tab().loading, "its link opens the license in a tab");
+await t.invoke("menu_action", { id: "third-party" });
+await t.until(() => tab()?.url === "ternt://third-party/" && tab()?.title === "Third-Party Licenses", "Help → Third-Party Licenses opens the notices");
 // The stand-in agent needs no key, so Continue is open; a real one asks for a provider's first.
 await t.until(async () => (await setup(`String(document.querySelector(".continue").disabled)`)) === "false", "the stand-in agent needs no key to continue");
 await t.sleep(300);

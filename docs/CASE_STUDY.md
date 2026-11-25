@@ -1,6 +1,6 @@
 # Ternt: a case study
 
-How an Arc-style macOS browser and terminal, with an AI agent in every space, went from an
+How a macOS browser and terminal built around a sidebar of spaces, with an AI agent in every space, went from an
 empty folder to 28 signed releases in 27 days. This covers what was intended, what was chosen
 and why, what went wrong, and what is still unproven. The sources are the commit history, the
 docs in this repo, and the working sessions between the owner and Claude.
@@ -9,7 +9,7 @@ docs in this repo, and the working sessions between the owner and Claude.
 
 | | |
 |---|---|
-| What | A browser and terminal in one window: Arc's sidebar model, real terminals as tabs, one AI agent per space |
+| What | A browser and terminal in one window: spaces in a sidebar, real terminals as tabs, one AI agent per space |
 | Stack | Tauri v2 (Rust), Svelte 5, WebKit, xterm.js; the agent (tokidoki) is a separate Rust workspace run as a sidecar process |
 | Platform | macOS 14 or later, universal (Apple silicon and Intel) |
 | Period | 2026-10-28 to 2026-11-23: 164 commits on 16 working days |
@@ -22,7 +22,7 @@ docs in this repo, and the working sessions between the owner and Claude.
 
 The owner wanted the browser they actually work in, not a demo:
 
-- **Arc's organization.** Spaces, favorites, pinned tabs in folders, a Today list that is
+- **Organized by spaces.** Spaces, favorites, pinned tabs in folders, a Today list that is
   cleared, a command bar instead of an address bar.
 - **Terminals as first-class tabs.** A shell sits in the sidebar next to the pages it relates
   to, splits into panes, and can be grouped on screen with web pages.
@@ -43,7 +43,7 @@ secrets never appear on a command line, in a log or in the repo.
 | Oct 29–30 | Becoming a product | Renamed to Ternt; test suite; self-update; signing and notarization from a headless Mac; icon; Settings; split view; Little Ternt and default-browser support. v0.1.0 to v0.4.0 |
 | Nov 2–6 | Daily-driver gaps | Terminal panes, help sheet, downloads, JS dialogs, tab groups of up to four, swipes between spaces, and the web-compatibility bugs that only daily use finds. v0.5.0 to v0.14.1 |
 | Nov 16–18 | Hardening | Cursor flicker (and the crash its first fix caused), background updates, a durability and performance audit, idle tab unloading, the downloads box. v0.15.0 to v0.19.0 |
-| Nov 19–20 | Two tracks | In Ternt: site search by Tab, Air Traffic Control, real `window.open`, video calls (v0.20.0). In parallel the owner built tokidoki, the agent, as its own project |
+| Nov 19–20 | Two tracks | In Ternt: site search by Tab, link rules, real `window.open`, video calls (v0.20.0). In parallel the owner built tokidoki, the agent, as its own project |
 | Nov 21–23 | The agent | Panel, sidecar process, real agent, bring-your-own-key, per-space provider, memory editor, fork into this repo, web search, Jev, first-launch setup, ⌃A and `tok` ⇥. v0.21.0 and v0.22.0 |
 
 ## Architecture choices

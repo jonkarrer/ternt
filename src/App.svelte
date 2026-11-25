@@ -947,7 +947,7 @@
               {/if}
             </div>
 
-            <!-- Arc's separator between Pinned and Today, with "Clear" on hover. -->
+            <!-- The separator between Pinned and Today, with "Clear" on hover. -->
             <div class="divider">
               <span class="line"></span>
               {#if today.some((t) => t.kind === "web")}
@@ -1649,7 +1649,7 @@
     gap: 10px;
     padding-top: 6px;
   }
-  /* Bottom left, like Arc's, so the spaces stay centered. */
+  /* Bottom left, so the spaces stay centered. */
   .downloads-button {
     position: absolute;
     left: 2px;

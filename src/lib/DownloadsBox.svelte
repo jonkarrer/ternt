@@ -4,7 +4,7 @@
   import { formatBytes, formatLeft, formatProgress } from "./bytes";
   import { downloads, holdDownloads, rateOf, watchDownloads } from "./downloads.svelte";
 
-  // The Downloads box over the bottom of the sidebar, like Arc's: each file
+  // The Downloads box over the bottom of the sidebar: each file
   // with its progress while it downloads, then a click opens it. It opens
   // when a download starts; the footer's download button shows or hides it
   // (src/lib/downloads.svelte.ts).

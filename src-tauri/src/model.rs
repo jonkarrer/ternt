@@ -1,6 +1,6 @@
 //! The tab/space/folder model: pure data and ordering rules, no webviews.
 //!
-//! Arc-style layout, top to bottom:
+//! The sidebar's layout, top to bottom:
 //! - **Favorites**: icon tiles shared by every space with the same profile.
 //! - **Pinned**: per space, optionally grouped into folders.
 //! - **Today**: per space, newest first.

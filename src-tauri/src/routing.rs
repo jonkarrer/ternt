@@ -1,4 +1,4 @@
-//! Air Traffic Control (as in Arc): links from other apps go to the space a
+//! Link rules: links from other apps go to the space a
 //! rule names, as a new tab there, instead of where Settings → Links sends
 //! the rest. Rules are kept in prefs and tried in order; the first that
 //! matches wins.

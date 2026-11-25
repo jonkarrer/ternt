@@ -132,6 +132,11 @@
         {@render keyRow(JEV, "Sorts messages and memory, fast and for very little. Highly recommended.")}
         {@render keyRow(EXA, "Optional: web search.")}
       </div>
+      <p class="caption notice">
+        What you ask, and what the agent remembers that bears on it, goes to the provider that answers, to TypeSafe
+        when Jev's key is set, and its searches to Exa. Each bills your own key. Answers can be wrong: check what
+        matters.
+      </p>
     {:else}
       <div class="card">
         <div class="row">
@@ -144,6 +149,11 @@
     {/if}
 
     <DefaultBrowser />
+    <p class="caption terms">
+      By continuing you accept Ternt's
+      <button class="link license" type="button" onclick={() => browser.openLicense()}>license</button>: it comes as
+      it is, without warranty.
+    </p>
   </main>
 
   <footer>
@@ -229,5 +239,17 @@
   }
   .continue {
     min-width: 96px;
+  }
+  /* A link in running text (the license). */
+  .link {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--accent);
+    cursor: pointer;
+  }
+  .link:hover {
+    text-decoration: underline;
   }
 </style>
