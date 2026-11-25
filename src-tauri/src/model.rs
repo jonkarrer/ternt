@@ -123,9 +123,6 @@ pub struct Space {
     /// one the space shows its initial.
     #[serde(default)]
     pub icon: Option<String>,
-    /// How its agent runs (Settings → Agent): provider and tools.
-    #[serde(default)]
-    pub agent: crate::agent::Setup,
 }
 
 /// Longest icon accepted, in bytes: room for one emoji with modifiers
@@ -264,7 +261,6 @@ impl Default for State {
                 color: SPACE_COLORS[0].into(),
                 profile: None,
                 icon: Some(DEFAULT_SPACE_ICONS[0].into()),
-                agent: Default::default(),
             }],
             folders: Vec::new(),
             profile_names: HashMap::new(),
@@ -746,20 +742,8 @@ impl State {
             color,
             profile,
             icon: Some(icon),
-            agent: Default::default(),
         });
         id
-    }
-
-    /// How a space's agent runs (Settings → Agent). Returns whether it changed.
-    pub fn set_space_agent(&mut self, id: u32, agent: crate::agent::Setup) -> bool {
-        match self.spaces.iter_mut().find(|s| s.id == id) {
-            Some(space) if space.agent != agent => {
-                space.agent = agent;
-                true
-            }
-            _ => false,
-        }
     }
 
     /// Set or clear (`None`, blank) a space's icon. Returns whether anything

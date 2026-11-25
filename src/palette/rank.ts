@@ -18,9 +18,7 @@ export type Action =
   | { type: "menu"; id: string }
   | { type: "terminal"; command: string }
   /** Search with this engine: the query box gets its pill. */
-  | { type: "engine"; id: string }
-  /** Say this to the space's agent, in a new conversation; nothing to say just opens its panel. */
-  | { type: "ask"; text: string };
+  | { type: "engine"; id: string };
 
 export type Item = {
   key: string;
@@ -104,8 +102,6 @@ export interface Context {
   groups: Group[];
   /** The engine whose pill is in the query box: the query goes there. */
   engine?: Engine | null;
-  /** The AI agent is on: Tokidoki is offered among the engines. */
-  agent?: boolean;
 }
 
 /** How well `text` matches the lowercase query `q`: 0 (no match) to 100. */
@@ -140,19 +136,6 @@ export function buildItems(raw: string, ctx: Context): Item[] {
   const spaceName = (id: number) => spaces.find((s) => s.id === id)?.name ?? "";
 
   // A search engine's pill: the query goes to it.
-  if (ctx.engine?.ask) {
-    return [
-      {
-        key: `engine-${ctx.engine.id}`,
-        kind: "engine",
-        label: q ? `Ask ${ctx.engine.name} “${q}”` : `Open ${ctx.engine.name}`,
-        detail: spaceName(activeSpace),
-        engine: ctx.engine,
-        section: "top",
-        action: { type: "ask", text: q },
-      },
-    ];
-  }
   if (ctx.engine) {
     const engine = ctx.engine;
     const url = engineUrl(engine, q);
@@ -309,12 +292,12 @@ export function buildItems(raw: string, ctx: Context): Item[] {
   if (commandHits[0]?.s >= 70) top.push(commandItem(commandHits.shift()!.x, "top"));
   if (spaceHits[0]?.s >= 80) top.push(spaceItem(spaceHits.shift()!.x, "top"));
   // `you` ⇥ searches YouTube.
-  const engine = engineFor(q, ctx.agent);
+  const engine = engineFor(q);
   if (engine) {
     top.push({
       key: `engine-${engine.id}`,
       kind: "engine",
-      label: engine.ask ? `Ask ${engine.name}` : `Search ${engine.name}`,
+      label: `Search ${engine.name}`,
       shortcut: "Tab",
       url: engine.home,
       engine,

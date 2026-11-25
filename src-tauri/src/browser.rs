@@ -143,37 +143,6 @@ pub fn active_space_profile(app: &AppHandle) -> (Option<String>, String) {
 /// Set once the saved session is back (or there was none).
 static RESTORED: AtomicBool = AtomicBool::new(false);
 
-/// A space as the agent panel shows it.
-pub fn space_info(app: &AppHandle, id: u32) -> Option<crate::agent::SpaceInfo> {
-    with(app, |s| {
-        s.space(id).map(|space| crate::agent::SpaceInfo {
-            id: space.id,
-            name: space.name.clone(),
-            color: space.color.clone(),
-            icon: space.icon.clone(),
-        })
-    })
-}
-
-/// How a space's agent runs, if the space exists.
-pub fn space_setup(app: &AppHandle, id: u32) -> Option<crate::agent::Setup> {
-    with(app, |s| s.space(id).map(|space| space.agent.clone()))
-}
-
-/// Settings → Agent changed how a space's agent runs. Returns whether it did.
-pub fn set_space_agent(app: &AppHandle, id: u32, setup: crate::agent::Setup) -> bool {
-    let changed = with(app, |s| s.set_space_agent(id, setup));
-    if changed {
-        emit_state(app);
-    }
-    changed
-}
-
-pub fn active_space_info(app: &AppHandle) -> Option<crate::agent::SpaceInfo> {
-    let id = with(app, |s| s.active_space);
-    space_info(app, id)
-}
-
 pub fn mark_restored() {
     RESTORED.store(true, Ordering::Release);
 }
@@ -1764,20 +1733,7 @@ pub fn select_space_number(app: &AppHandle, number: usize) -> tauri::Result<()> 
 pub fn new_space(app: &AppHandle) -> tauri::Result<u32> {
     // Each new space gets its own logins; it can share another's via the
     // space menu.
-    // On the provider the user has a key for, when that isn't the default one; here, so
-    // that every way of making a space (the sidebar, the menu, its shortcut) gets it.
-    let provider = crate::agent::preferred_provider();
-    let id = with(app, |s| {
-        let id = s.add_space(Some(new_profile_id()));
-        s.set_space_agent(
-            id,
-            crate::agent::Setup {
-                provider,
-                ..Default::default()
-            },
-        );
-        id
-    });
+    let id = with(app, |s| s.add_space(Some(new_profile_id())));
     switch_space(app, id)?;
     emit_state(app);
     Ok(id)
@@ -1803,7 +1759,6 @@ pub fn delete_space(app: &AppHandle, id: u32) -> tauri::Result<()> {
     let Some((removed, space)) = with(app, |s| s.remove_space(id)) else {
         return Ok(());
     };
-    crate::agent::forget(app, id);
     for tab in removed {
         match tab.kind {
             TabKind::Web => close_webview(app, tab.id)?,

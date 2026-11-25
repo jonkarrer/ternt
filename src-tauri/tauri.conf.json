@@ -20,7 +20,6 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
-    "externalBin": ["binaries/ternt-agent"],
     "createUpdaterArtifacts": true,
     "macOS": {
       "signingIdentity": "-",

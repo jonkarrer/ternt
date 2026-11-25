@@ -25,10 +25,3 @@ test("the query goes in the search URL; nothing opens the home page", () => {
   expect(engineUrl(youtube, "  ")).toBe("https://www.youtube.com/");
 });
 
-test("tok picks Tokidoki, only while the agent is on", () => {
-  expect(engineFor("tok")).toBeNull();
-  expect(engineFor("tok", true)?.id).toBe("tokidoki");
-  expect(engineFor("Toki", true)?.ask).toBe(true);
-  expect(engineFor("t", true)).toBeNull();
-  expect(engineFor("you", true)?.name).toBe("YouTube");
-});

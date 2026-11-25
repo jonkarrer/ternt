@@ -14,12 +14,6 @@ edition = "2024"
 name = "ternt_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-# The agent sidecar (agent/) is a workspace member so `cargo build -p ternt-agent`
-# can run before this crate: Tauri's build script checks that the binary named in
-# bundle.externalBin exists (scripts/sidecar.sh puts it in binaries/).
-[workspace]
-members = ["agent"]
-
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -30,12 +24,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["unstable", "macos-private-api", "devtools"] }
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
-# `process` and `io-util` run the agent sidecar (src/agent/sidecar.rs).
-tokio = { version = "1", features = ["sync", "time", "process", "io-util"] }
-# The user's API keys for the agents, in the Keychain (src/agent/keys.rs).
+tokio = { version = "1", features = ["sync", "time"] }
+# Only to delete the keys the removed AI agent kept in the Keychain (src/retired.rs).
 keyring = { version = "3", features = ["apple-native"] }
-# Signals to the agent sidecar (src/agent/sidecar.rs).
-libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 portable-pty = "0.9.0"

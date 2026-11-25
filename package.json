@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "bun run test:unit && bun run test:e2e",
-    "test:unit": "bun test src && bun run check && scripts/sidecar.sh && cd src-tauri && cargo test --lib -q && cargo test -q -p ternt-agent && cargo clippy -q --workspace --all-targets -- -D warnings && cargo check -q --release",
+    "test:unit": "bun test src && bun run check && cd src-tauri && cargo test --lib -q && cargo clippy -q --all-targets -- -D warnings && cargo check -q --release",
     "test:e2e": "e2e/run.sh",
     "test:update": "e2e/update.sh",
     "tauri": "tauri"

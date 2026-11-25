@@ -1,5 +1,5 @@
 // Writes src-tauri/third-party-licenses.txt: the license of every package that ends up in
-// a release (Rust crates linked into Ternt and into the agent sidecar, and the npm packages
+// a release (Rust crates linked into Ternt, and the npm packages
 // bundled into the pages), with the license texts the packages carry. Their licenses ask
 // for these notices to travel with the app; Help → Third-Party Licenses shows the file.
 //
@@ -100,7 +100,6 @@ function npm() {
 }
 
 crates(join(root, "src-tauri/Cargo.toml"), ["ternt"]);
-crates(join(root, "tokidoki/Cargo.toml"), ["tokidoki"]);
 npm();
 
 const all = [...found.values()].sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));

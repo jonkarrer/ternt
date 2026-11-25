@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ClosedTab, HistoryHit, Space, Tab } from "../lib/browser";
-import { ENGINES, TOKIDOKI } from "../lib/engines";
+import { ENGINES } from "../lib/engines";
 import { SEARCH_URL } from "../lib/url";
 import { buildItems, CLOSED_SUGGESTIONS, COMMANDS, score, SECTION_LIMIT, type Context, type Item } from "./rank";
 
@@ -25,9 +25,8 @@ function tab(title: string, url: string, extra: Partial<Tab> = {}): Tab {
   };
 }
 
-const agent = { provider: "fireworks" as const, tools: [] };
-const home: Space = { id: 1, name: "Home", color: "blue", profile: null, icon: null, agent };
-const work: Space = { id: 2, name: "Work", color: "green", profile: "abc", icon: null, agent };
+const home: Space = { id: 1, name: "Home", color: "blue", profile: null, icon: null };
+const work: Space = { id: 2, name: "Work", color: "green", profile: "abc", icon: null };
 
 function ctx(over: Partial<Context> = {}): Context {
   return { mode: "newTab", tabs: [], spaces: [home, work], activeId: null, activeSpace: 1, history: [], closed: [], groups: [], ...over };
@@ -309,19 +308,6 @@ describe("search engines", () => {
     expect(buildItems("", ctx({ engine: youtube }))[0]).toMatchObject({
       label: "Open YouTube",
       action: { type: "open", url: "https://www.youtube.com/" },
-    });
-  });
-
-  test("tok offers Tokidoki while the agent is on, and with its pill what is typed is said to it", () => {
-    expect(buildItems("tok", ctx()).some((i) => i.kind === "engine")).toBe(false);
-    const offered = top(buildItems("tok", ctx({ agent: true })));
-    expect(offered[0]).toMatchObject({ label: "Ask Tokidoki", shortcut: "Tab", action: { type: "engine", id: "tokidoki" } });
-    const items = buildItems(" what is new in rust? ", ctx({ agent: true, engine: TOKIDOKI }));
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ label: "Ask Tokidoki “what is new in rust?”", action: { type: "ask", text: "what is new in rust?" } });
-    expect(buildItems("", ctx({ agent: true, engine: TOKIDOKI }))[0]).toMatchObject({
-      label: "Open Tokidoki",
-      action: { type: "ask", text: "" },
     });
   });
 

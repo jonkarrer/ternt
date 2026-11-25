@@ -4,7 +4,7 @@ Copyright (c) 2026 Jon Karrer. All rights reserved.
 
 This repository is public so that its source code can be read. It is not open
 source. "The Software" means everything in this repository and every release
-built from it, including the tokidoki agent in the tokidoki/ directory.
+built from it.
 
 1. What you may do
 
@@ -23,7 +23,7 @@ built from it, including the tokidoki agent in the tokidoki/ directory.
    c. Use the Software's source code to build, train or improve a competing
       product or service.
    d. Remove or alter this license or any copyright notice.
-   e. Use the names "Ternt" and "Tokidoki" or the Software's icons to name or
+   e. Use the name "Ternt" or the Software's icons to name or
       promote anything else.
 
 3. Contributions

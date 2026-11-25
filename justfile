@@ -6,39 +6,29 @@ default:
 
 # ─── Core ────────────────────────────────────────────────
 
-# Run the app with hot reload (the agent sidecar first: tauri dev only builds Ternt). `just dev tokidoki` runs the real agent
-dev flavor="": (sidecar flavor)
+# Run the app with hot reload
+dev:
     bun tauri dev
-
-# Build the agent sidecar into src-tauri/binaries; Ternt needs it to compile. `stub` (default) or `tokidoki` (from tokidoki/)
-sidecar *args:
-    scripts/sidecar.sh {{args}}
-
-# Copy tokidoki's protocol (Rust and TypeScript) from tokidoki/ into the host code after it changes
-sync-protocol:
-    scripts/sync-protocol.sh
 
 # Rewrite src-tauri/third-party-licenses.txt (Help → Third-Party Licenses) after dependencies change
 licenses:
     bun scripts/licenses.ts
 
-# Typecheck + lint — must be clean before commit (Ternt, then the agent in tokidoki/)
-check: sidecar
+# Typecheck + lint — must be clean before commit
+check:
     bun scripts/licenses.ts --check
-    bun run check && cd src-tauri && cargo clippy -q --workspace --all-targets -- -D warnings
-    cd tokidoki && just check
+    bun run check && cd src-tauri && cargo clippy -q --all-targets -- -D warnings
 
-# Unit tests (Ternt's, then the agent's); `just test-e2e` for the rest
+# Unit tests; `just test-e2e` for the rest
 test:
     bun run test:unit
-    cd tokidoki && just test
 
 # Format the tree (Rust; the Svelte/TS side has no formatter configured yet)
 fmt:
     cd src-tauri && cargo fmt
 
-# Release bundle for this machine's architecture (judge performance here, not in dev); the sidecar in release too
-build: (sidecar "--release")
+# Release bundle for this machine's architecture (judge performance here, not in dev)
+build:
     bun tauri build
 
 # ─── Tests that need a desktop session ───────────────────

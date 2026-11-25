@@ -1,4 +1,3 @@
-mod agent;
 mod browser;
 #[cfg(all(debug_assertions, target_os = "macos"))]
 mod debug;
@@ -11,12 +10,12 @@ mod menu;
 mod model;
 #[cfg(target_os = "macos")]
 mod native;
-mod onboarding;
 mod palette;
 mod panes;
 mod persist;
 mod prefs;
 mod pty;
+mod retired;
 mod routing;
 mod session;
 mod settings;
@@ -39,7 +38,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Browser::default())
-        .manage(agent::Host::default())
         .manage(palette::Palette::default())
         .manage(pty::Terminals::default())
         .manage(history::Store::default())
@@ -57,7 +55,7 @@ pub fn run() {
             prefs::load(app.handle());
             downloads::load(app.handle());
             updater::start(app.handle());
-            agent::start(app.handle());
+            retired::clean(app.handle());
             unload::start(app.handle());
 
             // Restore the last session, then open any `ternt <url>...` args.
@@ -87,10 +85,6 @@ pub fn run() {
                 // Welcome first, so a URL given on the command line ends up active.
                 if first_launch && let Err(err) = welcome::open(&handle) {
                     eprintln!("failed to open the welcome page: {err}");
-                }
-                // And over it, the setup window: the agent on or off, and its keys.
-                if first_launch && let Err(err) = onboarding::open(&handle) {
-                    eprintln!("failed to open the setup window: {err}");
                 }
                 for url in urls {
                     if let Err(err) = browser::open_tab(&handle, url) {
@@ -151,24 +145,6 @@ pub fn run() {
             palette::palette_request,
             palette::open_palette,
             palette::close_palette,
-            agent::agent_request,
-            agent::open_agent,
-            agent::agent_ask,
-            agent::close_agent,
-            agent::agent_send,
-            agent::agent_threads,
-            agent::agent_history,
-            agent::agent_abort,
-            agent::agent_space_status,
-            agent::agent_set_space,
-            agent::agent_memories,
-            agent::agent_revise,
-            agent::agent_forget,
-            agent::agent_wipe,
-            agent::agent_status,
-            agent::agent_restart,
-            agent::agent_keys,
-            agent::agent_set_keys,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,
@@ -184,8 +160,6 @@ pub fn run() {
             downloads::reveal_download,
             downloads::cancel_download,
             downloads::clear_downloads,
-            onboarding::close_onboarding,
-            welcome::open_license,
             settings::reveal_data_dir,
             settings::default_browser,
             settings::make_default_browser,
@@ -258,7 +232,6 @@ pub fn run() {
                 tauri::RunEvent::Exit => {
                     session::save_now(app);
                     history::save_now(app);
-                    agent::shutdown(app);
                     updater::install_on_exit(app);
                 }
                 // Links from other apps (Ternt as the default browser).

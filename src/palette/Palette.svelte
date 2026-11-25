@@ -5,15 +5,13 @@
   import TabIcon from "../lib/TabIcon.svelte";
   import HelpSheet from "./HelpSheet.svelte";
   import { browser, type ClosedTab, type HistoryHit, type Group, type PaletteRequest, type Space, type Tab } from "../lib/browser";
-  import { ENGINES, TOKIDOKI, engineFor, type Engine } from "../lib/engines";
+  import { ENGINES, engineFor, type Engine } from "../lib/engines";
   import { buildItems, type Action, type Item } from "./rank";
 
   let request = $state<PaletteRequest | null>(null);
   let query = $state("");
   /** The search engine in a pill before the query (`you` ⇥ YouTube). */
   let engine = $state<Engine | null>(null);
-  /** The AI agent is on (Settings → Agent): `tok` ⇥ asks it. */
-  let agent = $state(false);
   let selected = $state(0);
   let tabs = $state<Tab[]>([]);
   let spaces = $state<Space[]>([]);
@@ -31,7 +29,7 @@
 
   const help = $derived(request?.mode === "help");
   const items = $derived(
-    request && !help ? buildItems(query, { mode: request.mode, tabs, spaces, activeId, activeSpace, history, closed, groups, engine, agent }) : [],
+    request && !help ? buildItems(query, { mode: request.mode, tabs, spaces, activeId, activeSpace, history, closed, groups, engine }) : [],
   );
 
   $effect(() => {
@@ -68,10 +66,9 @@
     await tick();
     input?.focus();
     input?.select();
-    const [state, prefs] = await Promise.all([browser.getState(), browser.getPrefs()]);
+    const state = await browser.getState();
     // Opened again meanwhile: that one's state is newer.
     if (seq !== showSeq) return;
-    agent = prefs.agentEnabled;
     tabs = state.tabs;
     spaces = state.spaces;
     activeId = state.active;
@@ -110,8 +107,6 @@
         return browser.menuAction(action.id);
       case "terminal":
         return browser.newTerminal(action.command);
-      case "ask":
-        return browser.agentAsk(action.text);
     }
   }
 
@@ -126,7 +121,7 @@
     if (!item) return;
     if (item.action.type === "engine") {
       const id = item.action.id;
-      const next = [TOKIDOKI, ...ENGINES].find((e) => e.id === id);
+      const next = ENGINES.find((e) => e.id === id);
       if (next) pick(next);
       return;
     }
@@ -146,7 +141,7 @@
     } else if (event.key === "Tab" && !event.shiftKey && !event.metaKey && !event.altKey && !event.ctrlKey) {
       // The typed word names an engine: it becomes the pill.
       event.preventDefault();
-      const next = engine ? null : engineFor(query, agent);
+      const next = engine ? null : engineFor(query);
       if (next) pick(next);
     } else if (event.key === "Backspace" && engine && !query && input?.selectionStart === 0) {
       event.preventDefault();
@@ -185,11 +180,7 @@
       <div class="field">
       {#if engine}
         <span class="engine" style:--engine={engine.color} data-engine={engine.id}>
-          {#if engine.ask}
-            <svg class="spark" viewBox="0 0 18 18"><path d="M9 2.5 10.6 7 15 8.6 10.6 10.2 9 14.7 7.4 10.2 3 8.6 7.4 7z" /></svg>
-          {:else}
-            <Favicon url={engine.home} />
-          {/if}
+          <Favicon url={engine.home} />
           {engine.name}
         </span>
       {/if}
@@ -199,8 +190,6 @@
         {onkeydown}
         placeholder={help
           ? "Search shortcuts and how-tos…"
-          : engine?.ask
-            ? "Ask this space's agent…"
             : engine
             ? `Search ${engine.name}…`
             : request.mode === "newTab"
@@ -235,8 +224,6 @@
               <span class="icon">
                 {#if item.kind === "search"}
                   <svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
-                {:else if item.engine?.ask}
-                  <svg class="spark" viewBox="0 0 18 18"><path d="M9 2.5 10.6 7 15 8.6 10.6 10.2 9 14.7 7.4 10.2 3 8.6 7.4 7z" /></svg>
                 {:else if item.engine}
                   <Favicon url={item.engine.home} />
                 {:else if item.kind === "run"}
@@ -307,13 +294,6 @@
     align-items: center;
     gap: 10px;
     padding: 0 20px;
-  }
-  /* Tokidoki's mark, where a site would show its icon. */
-  .spark {
-    width: 14px;
-    height: 14px;
-    fill: currentColor;
-    stroke: none;
   }
   /* The engine the query goes to. */
   .engine {

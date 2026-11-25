@@ -1,7 +1,8 @@
 # Ternt: a case study
 
-How a macOS browser and terminal built around a sidebar of spaces, with an AI agent in every space, went from an
-empty folder to 28 signed releases in 27 days. This covers what was intended, what was chosen
+How a macOS browser and terminal built around a sidebar of spaces went from an empty folder to
+28 signed releases in 27 days, gained an AI agent in every space, and then had it taken out
+again. This covers what was intended, what was chosen
 and why, what went wrong, and what is still unproven. The sources are the commit history, the
 docs in this repo, and the working sessions between the owner and Claude.
 
@@ -9,8 +10,8 @@ docs in this repo, and the working sessions between the owner and Claude.
 
 | | |
 |---|---|
-| What | A browser and terminal in one window: spaces in a sidebar, real terminals as tabs, one AI agent per space |
-| Stack | Tauri v2 (Rust), Svelte 5, WebKit, xterm.js; the agent (tokidoki) is a separate Rust workspace run as a sidecar process |
+| What | A browser and terminal in one window: spaces in a sidebar, real terminals as tabs; for three releases, one AI agent per space |
+| Stack | Tauri v2 (Rust), Svelte 5, WebKit, xterm.js; the agent (tokidoki), while it shipped, was a separate Rust workspace run as a sidecar process |
 | Platform | macOS 14 or later, universal (Apple silicon and Intel) |
 | Period | 2026-10-28 to 2026-11-23: 164 commits on 16 working days |
 | Releases | 28, v0.1.0 to v0.22.0, each signed, notarized and self-updating |
@@ -94,6 +95,10 @@ A profile is a WebKit data store (cookies, logins, history). New spaces get thei
 several spaces can share one. The sidebar only ever shows spaces.
 
 ## The agent
+
+This section describes the agent as it shipped in v0.21.0 to v0.23.0. It was removed on Nov 25
+(see [The agent, removed](#the-agent-removed)); the design is kept here because the decisions
+and their reasons still stand as a record.
 
 ### Tokidoki, built apart and then forked in
 
@@ -249,6 +254,25 @@ tools not on offer are retold as plain text.
 The real-agent suite's restart check passed whether or not a restart happened. The status now
 carries a generation number so a new process can be told from the old.
 
+## The agent, removed
+
+On Nov 25, two days after the agent's last feature shipped, the owner decided Ternt would have
+no AI in it. The whole of it came out in one change: the tokidoki workspace, the sidecar and
+its supervisor, the panel, the Settings page, the setup window, ⌃A and `tok` ⇥.
+
+- **What it took.** Roughly two thirds of the repository's Rust was the agent. Because it ran
+  in its own process behind a written protocol, the host's side was one module, one webview
+  and a field on each space; taking it out touched the rest of the browser in about a dozen
+  places.
+- **What it left on people's Macs.** API keys in the Keychain and each space's conversations
+  and memories on disk, with no screen left to manage either. The owner chose to delete both;
+  a small module does it at launch.
+- **What stays.** The code is in history at tag `v0.23.0`. The license pages, third-party
+  notices and link rules that shipped alongside it are unaffected.
+
+The isolation that let an unfinished agent ship inside a browser is the same thing that made
+it cheap to remove.
+
 ## How the work was done
 
 - **Step by step.** One piece built, verified and reported; then the next. Commits only when
@@ -272,6 +296,8 @@ carries a generation number so a new process can be told from the old.
   agent work could be resumed from a cold start.
 
 ## What is not proven
+
+As of v0.22.0, before the agent was removed; the agent items no longer apply.
 
 - macOS will not let tests send real input. Physical key presses (⌃A among them), trackpad
   gestures and native context menus opening are untested; their actions are tested.
@@ -305,6 +331,5 @@ carries a generation number so a new process can be told from the old.
 
 ## Next
 
-Offered and not yet decided: a per-space model picker, a cheaper model for memory work, and
-letting the agent read and act on its space, which waits on the owner lifting the decision
-that the sidecar makes no requests of Ternt.
+The agent's open questions (a model picker, a cheaper model for memory work, letting it read
+its space) closed with its removal. Ternt goes on as a browser and a terminal.

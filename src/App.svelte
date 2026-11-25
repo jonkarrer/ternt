@@ -721,7 +721,7 @@
       onpointerleave={leavePeek}
     >
       <header class="titlebar" data-tauri-drag-region>
-        <!-- Room to drag the window by. The agent has no button here: ⌃A, or `tok` ⇥ in the command bar. -->
+        <!-- Room to drag the window by. -->
         <div class="grip" data-tauri-drag-region></div>
         <div class="nav">
           <button
@@ -1163,8 +1163,6 @@
     justify-content: space-between;
     gap: 6px;
   }
-  /* Ask Tokidoki: fills the title bar between the traffic lights and the
-     navigation buttons, tinted with the space's color. */
   /* The top of the sidebar beside the navigation buttons: room to drag the window by. */
   .grip {
     flex: 1;

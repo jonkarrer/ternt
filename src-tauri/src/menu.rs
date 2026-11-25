@@ -7,7 +7,6 @@ use tauri::{
 };
 
 use crate::{
-    agent,
     browser::{self, TabKind, Zone},
     model::SPACE_COLORS,
     palette,
@@ -203,8 +202,6 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             )
         })
         .collect::<tauri::Result<Vec<_>>>()?;
-    let ask = MenuItem::with_id(app, "agent", "Ask Tokidoki", true, Some("Ctrl+A"))?;
-    let ask_separator = PredefinedMenuItem::separator(app)?;
     let new_space = MenuItem::with_id(app, "new-space", "New Space", true, None::<&str>)?;
     let new_folder = MenuItem::with_id(app, "new-folder", "New Folder", true, None::<&str>)?;
     let next_space = MenuItem::with_id(
@@ -223,8 +220,6 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     )?;
     let space_separator = PredefinedMenuItem::separator(app)?;
     let mut space_items: Vec<&dyn IsMenuItem<Wry>> = vec![
-        &ask,
-        &ask_separator,
         &new_space,
         &new_folder,
         &space_separator,
@@ -246,7 +241,6 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         &[
             &MenuItem::with_id(app, "help", "Shortcuts and How-Tos", true, Some("Ctrl+H"))?,
             &MenuItem::with_id(app, "welcome", "Welcome to Ternt", true, None::<&str>)?,
-            &MenuItem::with_id(app, "onboarding", "Set Up Ternt…", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "license", "License", true, None::<&str>)?,
             &MenuItem::with_id(
@@ -346,13 +340,11 @@ pub fn run_action(app: &AppHandle, id: String) {
                 Ok(())
             }
             "toggle-sidebar" => browser::toggle_sidebar(&app),
-            "agent" => agent::toggle(&app),
             "split-terminal" => browser::split_with_new_terminal(&app),
             "unsplit" => browser::end_group_of_active(&app),
             "welcome" => welcome::open(&app),
             "license" => welcome::open_page(&app, welcome::LICENSE_URL),
             "third-party" => welcome::open_page(&app, welcome::THIRD_PARTY_URL),
-            "onboarding" => crate::onboarding::open(&app),
             // ⌃F typed in a terminal (see `handle`).
             "terminal-explore" => browser::type_in_terminal(&app, "\x06"),
             "terminal-help" => browser::type_in_terminal(&app, "\x08"),

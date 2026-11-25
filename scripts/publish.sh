@@ -125,10 +125,6 @@ build() {
     echo "signing as: $identity (team $APPLE_TEAM_ID)"
   fi
 
-  # The real agent ships unless told otherwise (TERNT_SIDECAR=stub).
-  step "building the agent sidecar (${TERNT_SIDECAR:-tokidoki}, both Apple targets)"
-  TERNT_SIDECAR=${TERNT_SIDECAR:-tokidoki} $ROOT/scripts/sidecar.sh --release
-
   step "building ($TARGET; signing and notarizing take a few minutes)"
   rm -rf $OUT
   bun install --frozen-lockfile
@@ -215,10 +211,6 @@ git push origin HEAD:main $tag
 # A draft first, published once every file is up: installed copies never
 # see a latest.json whose update archive isn't there yet.
 notes="Download **Ternt_${version}_universal.dmg**, open it and drag Ternt to Applications. Installed copies update themselves: they download it in the background and install it when they quit."
-sidecar=$(cat $ROOT/src-tauri/binaries/SIDECAR 2>/dev/null)
-[[ $sidecar == tokidoki ]] && notes="$notes
-
-Agent: tokidoki, bring your own key (Settings → Agent)."
 release=$(TAG=$tag NAME="Ternt $version" NOTES=$notes bun -e \
   'const e = process.env; console.log(JSON.stringify({ tag_name: e.TAG, name: e.NAME, body: e.NOTES, draft: true }))' |
   github POST /repos/$REPO/releases --data-binary @-) || fail "couldn't create the release (does the token have Contents: read and write?); fix it and run just upload-resume"

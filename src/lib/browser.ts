@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { EventCallback, UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import type { Event as AgentEvent, Memory, Sent, ThreadSummary } from "../agent/protocol";
 
 /** Events sent to this webview. (The global `listen` also gets every event
  *  sent to any other webview: each state update arrived once per target.) */
@@ -56,16 +55,6 @@ export interface Space {
   /** An emoji or a `sym:` line symbol (src/lib/spaceIcons.ts); `null`
    *  shows the space's initial. */
   icon: string | null;
-  /** How its agent runs (Settings → Agent). */
-  agent: AgentSetup;
-}
-
-/** Who answers for a space; the key for it is the user's own (Settings → Agent → Keys). */
-export type AgentProvider = "fireworks" | "anthropic";
-export interface AgentSetup {
-  provider: AgentProvider;
-  /** Tools switched on for the space's agent, by the name the agent process knows: `web_search`. */
-  tools: string[];
 }
 
 export interface Folder {
@@ -184,8 +173,6 @@ export interface Prefs {
   /** Link rules: links from other apps matching a rule open in its
       space (first match wins; src-tauri/src/routing.rs). */
   linkRules: LinkRule[];
-  /** Use the AI agent (⌃A, `tok` ⇥ in the command bar). Off: nothing of it shows and its process doesn't run. */
-  agentEnabled: boolean;
   /** Sites allowed the camera and microphone (origins); the rest ask. */
   mediaSites: string[];
 }
@@ -205,57 +192,6 @@ export interface PaletteRequest {
   url: string | null;
   /** Left edge of the content pane (logical px). */
   contentLeft: number;
-}
-
-/** The agent panel (⌃A): src-tauri/src/agent. */
-export interface AgentSpace {
-  id: number;
-  name: string;
-  color: string;
-  icon: string | null;
-}
-
-export interface AgentRequest {
-  space: AgentSpace;
-  /** Left edge of the content pane (logical px). */
-  contentLeft: number;
-  /** `stub` until tokidoki is embedded. */
-  /** The agent's data folder under the app data dir. */
-  folder: string;
-  /** Something to say at once, in a new conversation; `id` tells one asking from the next. */
-  ask: { id: number; text: string } | null;
-}
-
-/** An agent event with the space it came from. */
-export interface AgentTagged {
-  space: number;
-  event: AgentEvent;
-}
-
-/** The agent process (src-tauri/src/agent/sidecar.rs): a crash there restarts it, not Ternt. */
-/** Which keys are set (never their values). Fireworks or Anthropic answers; Exa is web search's. */
-/** Where a key is: nowhere, the Keychain, or Ternt's own environment (development; Settings can't remove it). */
-export type KeySource = "none" | "keychain" | "environment";
-export type AgentKeys = { fireworks: KeySource; anthropic: KeySource; exa: KeySource; typesafe: KeySource };
-/** A key change: a missing field leaves that key as it is, "" removes it. */
-export type AgentKeyChange = Partial<Record<keyof AgentKeys, string>>;
-
-export type AgentStatus =
-  | { state: "starting" }
-  /** `generation` counts processes started; how each space's agent runs is `AgentSpaceStatus`. */
-  | { state: "running"; backend: string; restarted: boolean; generation: number }
-  /** `asked`: restarted on purpose (Restart, a key change), not a crash. */
-  | { state: "restarting"; attempt: number; asked: boolean }
-  | { state: "down"; reason: string };
-
-/** How one space's agent runs now, as the process says: on which provider and model,
- *  with which tools, and whether it has that provider's key (`asleep` says why not). */
-export interface AgentSpaceStatus {
-  provider: string;
-  model: string | null;
-  tools: string[];
-  hasKey: boolean;
-  asleep: string | null;
 }
 
 /** Mirror the sidebar constants in src-tauri/src/browser.rs. */
@@ -364,51 +300,6 @@ export const browser = {
   onPrefsChanged: (cb: (prefs: Prefs) => void): Promise<UnlistenFn> =>
     listen<Prefs>("prefs:changed", (e) => cb(e.payload)),
 
-  // The agent panel; `space` scopes every call to one space's agent.
-  agentRequest: () => invoke<AgentRequest | null>("agent_request"),
-  openAgent: () => invoke("open_agent"),
-  /** Open the panel on a new conversation that starts with `text` (the command bar's `tok` ⇥); empty just opens it. */
-  agentAsk: (text: string) => invoke("agent_ask", { text }),
-  closeAgent: () => invoke("close_agent"),
-  /** Send `text`; `thread` continues a conversation, `null` starts one. */
-  agentSend: (space: number, text: string, thread: string | null) => invoke<Sent>("agent_send", { space, text, thread }),
-  agentThreads: (space: number) => invoke<ThreadSummary[]>("agent_threads", { space }),
-  /** A thread's checkpoints from `since` on. */
-  agentHistory: (space: number, thread: string, since: number) => invoke<AgentEvent[]>("agent_history", { space, thread, since }),
-  agentAbort: (space: number, thread: string) => invoke<boolean>("agent_abort", { space, thread }),
-  /** How a space's agent runs now (provider, model, key). */
-  agentSpaceStatus: (space: number) => invoke<AgentSpaceStatus>("agent_space_status", { space }),
-  /** Change how a space's agent runs; it does so at once, no restart. */
-  agentSetSpace: (space: number, setup: AgentSetup) => invoke<AgentSpaceStatus>("agent_set_space", { space, setup }),
-  /** `agent:space`: a space's agent was (re)configured; every window hears. */
-  onAgentSpace: (cb: (change: { space: number; status: AgentSpaceStatus }) => void): Promise<UnlistenFn> =>
-    listen<{ space: number; status: AgentSpaceStatus }>("agent:space", (e) => cb(e.payload)),
-  /** What a space's agent remembers, newest first (Settings → Agent → Memory). */
-  agentMemories: (space: number) => invoke<Memory[]>("agent_memories", { space }),
-  /** Correct a memory; the one that replaces it comes back (a new id). */
-  agentRevise: (space: number, id: number, text: string) => invoke<Memory>("agent_revise", { space, id, text }),
-  agentForget: (space: number, id: number) => invoke("agent_forget", { space, id }),
-  /** Everything the space's agent has learned, gone; its conversations stay. */
-  agentWipe: (space: number) => invoke("agent_wipe", { space }),
-  onAgentOpen: (cb: (request: AgentRequest) => void): Promise<UnlistenFn> =>
-    listen<AgentRequest>("agent:open", (e) => cb(e.payload)),
-  /** The panel was hidden (Esc, ⌃A, the command bar opening). */
-  onAgentClose: (cb: () => void): Promise<UnlistenFn> => listen("agent:close", () => cb()),
-  onAgentEvent: (cb: (tagged: AgentTagged) => void): Promise<UnlistenFn> =>
-    listen<AgentTagged>("agent:event", (e) => cb(e.payload)),
-  agentStatus: () => invoke<AgentStatus>("agent_status"),
-  /** Start the agent process over (after it was left down, or to recover it). */
-  agentRestart: () => invoke("agent_restart"),
-  onAgentStatus: (cb: (status: AgentStatus) => void): Promise<UnlistenFn> =>
-    listen<AgentStatus>("agent:status", (e) => cb(e.payload)),
-  /** Which API keys the agents have (never the values); they live in the Keychain. */
-  agentKeys: () => invoke<AgentKeys>("agent_keys"),
-  /** Show Ternt's license (or the notices of the software it includes) in a tab. */
-  openLicense: (thirdParty = false) => invoke("open_license", { thirdParty }),
-  /** The setup window is done with: close it. */
-  closeOnboarding: () => invoke("close_onboarding"),
-  /** Store keys and restart the agent with them. */
-  agentSetKeys: (change: AgentKeyChange) => invoke("agent_set_keys", change),
   updateStatus: () => invoke<UpdateStatus>("update_status"),
   /** Install the update (downloading it first if needed) and relaunch. */
   installUpdate: () => invoke("install_update"),

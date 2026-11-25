@@ -4,12 +4,11 @@
 
 use std::sync::LazyLock;
 
-use tauri::{AppHandle, Manager, UriSchemeContext, UriSchemeResponder, http::Request};
+use tauri::{AppHandle, UriSchemeContext, UriSchemeResponder, http::Request};
 
 pub const SCHEME: &str = "ternt";
 pub const URL: &str = "ternt://welcome/";
-/// Ternt's license, and the notices of the software it includes (Help menu, the setup
-/// window, Settings → Agent).
+/// Ternt's license, and the notices of the software it includes (Help menu).
 pub const LICENSE_URL: &str = "ternt://license/";
 pub const THIRD_PARTY_URL: &str = "ternt://third-party/";
 
@@ -98,25 +97,6 @@ pub fn open(app: &AppHandle) -> tauri::Result<()> {
 /// Open one of this scheme's pages in a new tab. Not from the main thread.
 pub fn open_page(app: &AppHandle, url: &str) -> tauri::Result<()> {
     crate::browser::open_tab(app, url.parse().expect("constant url")).map(|_| ())
-}
-
-/// Show the license (or, with `third_party`, the notices of the software Ternt includes)
-/// in a tab, and bring the main window forward: the setup and Settings windows ask for it,
-/// and the tab opens behind them.
-#[tauri::command]
-pub async fn open_license(app: AppHandle, third_party: bool) -> Result<(), String> {
-    let url = if third_party {
-        THIRD_PARTY_URL
-    } else {
-        LICENSE_URL
-    };
-    open_page(&app, url).map_err(|e| e.to_string())?;
-    // Focusing a window activates the app; test runs stay in the background (see `lib.rs`).
-    let testing = cfg!(debug_assertions) && std::env::var_os("TERNT_TEST").is_some();
-    if !testing && let Some(window) = app.get_window(crate::browser::MAIN_WINDOW) {
-        window.set_focus().map_err(|e| e.to_string())?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

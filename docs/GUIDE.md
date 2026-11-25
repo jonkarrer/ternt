@@ -8,10 +8,7 @@ Everything the app does, for the person using it. For how it is built, see
 Download the `.dmg` from the [latest release](https://github.com/jonkarrer/ternt/releases/latest),
 open it and drag Ternt to Applications. Needs macOS 14 or later.
 
-The first launch opens a welcome page with the shortcuts (later: *Help → Welcome to Ternt*), and
-over it a short setup window (later: *Help → Set Up Ternt…*): whether to use the AI agent and, if
-so, your API keys for it. A Fireworks AI or Anthropic key is required to go on with the agent on;
-a Jev key is highly recommended; with the agent off, Ternt is a browser and a terminal.
+The first launch opens a welcome page with the shortcuts (later: *Help → Welcome to Ternt*).
 No tabs are created for you: press ⌘T to open the first one.
 
 After that Ternt updates itself. It checks at launch, every 15 minutes, and when you come back to it
@@ -42,7 +39,6 @@ click needed. *Ternt → Check for Updates…* checks right away and answers on 
 | ⌘, | Settings (⌘1–⌘6 switch its pages, ⌘W closes it) |
 | ⌃H | Shortcuts and how-tos, searchable (also in the Help menu). In a terminal, ⌃H goes to the shell (backspace) |
 | ⌘H | Hide Ternt |
-| ⌃A | Ask Tokidoki: this space's AI agent in a panel over the page. In the command bar (⌘T), `tok` ⇥ and what you type starts a conversation with it. One agent per space, each with its own memory (see [The agent](#the-agent)) |
 
 ## Sidebar
 
@@ -155,43 +151,8 @@ name and email, kept on this Mac, and a summary of your profiles), **General** (
 (data folder).
 
 
-## The agent
-
-Every space gets its own AI agent, Tokidoki: an assistant with long-term memory. Press ⌃A, or
-type `tok` ⇥ and your question in the command bar (⌘T): a panel opens over the page with that
-space's conversations. Agents share nothing, so what the dev space's agent learns never reaches
-the marketing space's.
-
-**Bring your own key.** *Settings → Agent → Keys* takes your Fireworks AI and Anthropic keys and
-keeps them in the macOS Keychain. They reach the agent's own process and nothing else.
-
-**Each space picks its provider** (Fireworks AI by default) on the same page. The change reaches
-the running agent at once and its conversations go on.
-
-**Tools** are switched on or off per space there too: web search for now, through Exa, with your
-Exa key under Keys.
-
-**Jev** (an optional TypeSafe key) makes the agent's small decisions, fast and for very little:
-which conversation a message belongs to, which memories are worth recalling for it, and whether
-it says something worth remembering.
-
-**Memory** on that page shows what the space's agent has learned, fact by fact, to correct or
-forget, and a Wipe that forgets all of it (the conversations stay).
-
-**Switching it off** (the switch at the top of *Settings → Agent*, or in the setup window): ⌃A
-does nothing, the command bar stops offering Tokidoki and no agent process runs.
-
-**What leaves your Mac.** What you ask, and what the agent remembers that bears on it, goes to
-the provider the space uses; to TypeSafe too when Jev's key is set; and the agent's searches to
-Exa when web search is on. Nowhere else. Each bills your own key. Answers can be wrong: check
-what matters.
-
-If the agent's process crashes, Ternt carries on and restarts it; the panel says so, and shows a
-Restart button if it keeps failing.
-
 ## License and notices
 
 *Help → License* shows Ternt's terms: the code may be read and the published releases run, and
 it comes as it is, without warranty. *Help → Third-Party Licenses* lists the open-source software
-Ternt includes, with its license texts. The setup window and *Settings → Agent* link to the
-license too.
+Ternt includes, with its license texts. The welcome page links to both.
