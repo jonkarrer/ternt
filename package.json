@@ -2,7 +2,7 @@
   "name": "ternt",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
